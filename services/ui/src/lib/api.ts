@@ -25,6 +25,29 @@ export interface Repo {
   error_message?: string
 }
 
+export interface RepoSearchResult {
+  repo_name: string
+  file_path: string
+  chunk_type: string
+  content: string
+  metadata?: Record<string, unknown> | null
+  score: number
+}
+
+export interface RepoRelationship {
+  repo_a: string
+  repo_b: string
+  similarity: number
+  chunks_a: number
+  chunks_b: number
+}
+
+export interface RepoStats {
+  repo: Repo
+  chunk_types: { chunk_type: string; count: number }[]
+  by_extension: { extension: string; count: number }[]
+}
+
 export interface Memory {
   id: string
   memory: string
@@ -50,9 +73,19 @@ export interface Job {
 export const api = {
   repos: {
     list: () => request<Repo[]>('/api/repos'),
+    search: (query: string, repos?: string[], limit = 20) =>
+      request<{ results: RepoSearchResult[]; count: number }>('/api/repos/search', {
+        method: 'POST',
+        body: JSON.stringify({ query, repos, limit }),
+      }),
+    relationships: (repo?: string) =>
+      request<{ relationships: RepoRelationship[]; count: number }>(
+        `/api/repos/relationships${repo ? `?repo=${encodeURIComponent(repo)}` : ''}`
+      ),
     index: (name: string) => request(`/api/repos/${encodeURIComponent(name)}/index`, { method: 'POST' }),
     indexAll: () => request('/api/repos/index-all', { method: 'POST' }),
     syncConfig: () => request('/api/repos/sync-config', { method: 'POST' }),
+    stats: (name: string) => request<RepoStats>(`/api/repos/${encodeURIComponent(name)}/stats`),
     files: (name: string, path = '') =>
       request<{ path: string; entries: { name: string; type: string; size?: number; path: string }[] }>(
         `/api/repos/${encodeURIComponent(name)}/files?path=${encodeURIComponent(path)}`

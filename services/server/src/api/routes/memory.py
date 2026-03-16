@@ -14,10 +14,30 @@ def _get_memory():
     return _m()
 
 
+class MemoryAddRequest(BaseModel):
+    content: str
+    metadata: Optional[dict] = None
+    user_id: Optional[str] = None
+    infer: bool = True
+
+
 class MemorySearchRequest(BaseModel):
     query: str
     limit: int = 20
     user_id: Optional[str] = None
+
+
+@router.post("")
+async def add_memory(req: MemoryAddRequest):
+    """Add a memory. Set infer=false to store the text directly without LLM extraction."""
+    from ...config import get_forge_config
+    uid = req.user_id or get_forge_config().memory.user_id
+    try:
+        mem = _get_memory()
+        result = mem.add(req.content, user_id=uid, metadata=req.metadata or {}, infer=req.infer)
+        return {"status": "ok", "memory": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("")

@@ -227,7 +227,7 @@ EMBEDDINGS_DIMS=384
 ```python
 # In your agent:
 job = job_submit(
-    url="http://my-sql-agent:8000/api/v1/query",
+    url="http://my-sql-agent:8005/api/v1/query",
     payload={"question": "How many users signed up today?"}
 )
 # job["job_id"] = "abc-123..."

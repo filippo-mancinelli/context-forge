@@ -46,7 +46,11 @@ def _get_memory():
         }
         embedder_config: dict[str, Any] = {
             "provider": emb_provider_map.get(settings.embeddings_provider, "openai"),
-            "config": {"model": settings.embeddings_model, "api_key": emb_api_key},
+            "config": {
+                "model": settings.embeddings_model,
+                "api_key": emb_api_key,
+                "embedding_dims": settings.embeddings_dims,
+            },
         }
         base_url = settings.embeddings_base_url
         if not base_url and settings.embeddings_provider == "jina":
