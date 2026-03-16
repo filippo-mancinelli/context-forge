@@ -1,0 +1,57 @@
+# ─────────────────────────────────────────────────────────────────
+# context-forge configuration
+# Copy this file to context-forge.yml and customize
+# ─────────────────────────────────────────────────────────────────
+
+# ─── Repositories ─────────────────────────────────────────────────
+repos:
+  # Local repository (mounted as a Docker volume via docker-compose.override.yml)
+  - name: my-backend
+    type: local
+    path: /repos/my-backend       # path inside the container
+    language: python               # python | typescript | javascript | go | java | auto
+
+  # Remote GitHub repository (cloned automatically)
+  - name: my-frontend
+    type: github
+    url: https://github.com/myorg/my-frontend
+    branch: main
+    # token: optional, overrides GITHUB_TOKEN from .env
+
+  # Remote GitLab self-hosted repository
+  - name: platform
+    type: gitlab
+    url: https://gitlab.mycompany.com/team/platform
+    branch: develop
+    # token: optional, overrides GITLAB_TOKEN from .env
+    # For self-hosted GitLab, any URL is supported
+
+# ─── Memory ───────────────────────────────────────────────────────
+memory:
+  # Default user_id for memories. Use per-colleague IDs for multi-user setups.
+  user_id: default
+
+# ─── Indexing ─────────────────────────────────────────────────────
+indexing:
+  # Automatically index repos on startup and on schedule
+  auto: true
+  # Cron schedule for re-indexing and git pull (default: every 6 hours)
+  schedule: "0 */6 * * *"
+  # File patterns to exclude from indexing
+  exclude:
+    - "**/.git/**"
+    - "**/node_modules/**"
+    - "**/__pycache__/**"
+    - "**/*.pyc"
+    - "**/dist/**"
+    - "**/build/**"
+    - "**/.next/**"
+    - "**/coverage/**"
+    - "**/*.min.js"
+    - "**/*.lock"
+    - "**/package-lock.json"
+  # Maximum file size to index (in KB)
+  max_file_size_kb: 500
+  # Maximum chunk size in tokens (approximate)
+  chunk_size: 400
+  chunk_overlap: 50
