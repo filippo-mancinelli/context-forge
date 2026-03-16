@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 async def main() -> None:
     from .config import get_settings
     from .db import init_db, close_db
+    from .runtime_state import load_runtime_state
     from .scheduler import start_scheduler, stop_scheduler, initial_index
 
     # Import tool modules so they register on the mcp instance
@@ -35,6 +36,7 @@ async def main() -> None:
     # Initialize DB
     logger.info("Initializing database...")
     await init_db()
+    await load_runtime_state()
 
     # Initial indexing (background)
     logger.info("Starting initial repo sync...")
