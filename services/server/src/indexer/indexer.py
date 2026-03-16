@@ -5,7 +5,9 @@ import asyncio
 import fnmatch
 import json
 import logging
+import os
 import re
+import time
 from pathlib import Path
 from typing import Iterator
 
@@ -28,6 +30,11 @@ BINARY_EXTENSIONS = {
     ".ttf", ".eot", ".pdf", ".zip", ".tar", ".gz", ".mp4", ".mp3",
     ".exe", ".dll", ".so", ".dylib", ".class", ".jar",
 }
+
+
+def _vector_to_pg(embedding: list[float]) -> str:
+    """Convert embedding values to pgvector literal string."""
+    return "[" + ",".join(f"{float(v):.10f}" for v in embedding) + "]"
 
 
 def _get_parser(language: str):
@@ -148,8 +155,11 @@ def _collect_chunks_sync(
     """Collect and parse all chunks from a repo synchronously (run in thread pool)."""
     all_chunks: list[dict] = []
     root = Path(local_path)
+    files_processed = 0
+    started_at = time.monotonic()
 
     for file_path, rel_path in _iter_repo_files(local_path, indexing_cfg):
+        files_processed += 1
         try:
             content = file_path.read_text(encoding="utf-8", errors="replace")
         except Exception:
@@ -183,6 +193,23 @@ def _collect_chunks_sync(
                 "metadata": json.dumps({"start_line": c.get("start_line", 0)}),
             })
 
+        if files_processed % 200 == 0:
+            logger.info(
+                "Chunking progress for %s: files=%d chunks=%d elapsed=%.1fs",
+                repo_name,
+                files_processed,
+                len(all_chunks),
+                time.monotonic() - started_at,
+            )
+
+    logger.info(
+        "Chunking complete for %s: files=%d chunks=%d elapsed=%.1fs",
+        repo_name,
+        files_processed,
+        len(all_chunks),
+        time.monotonic() - started_at,
+    )
+
     return all_chunks
 
 
@@ -202,20 +229,55 @@ def _iter_repo_files(repo_path: str, config: IndexingConfig) -> Iterator[tuple[P
     """Yield (absolute_path, relative_path) for all indexable files in a repo."""
     root = Path(repo_path)
     max_size = config.max_file_size_kb * 1024
-    for file_path in root.rglob("*"):
-        if not file_path.is_file():
-            continue
-        rel = str(file_path.relative_to(root))
-        if _should_exclude(rel, config.exclude):
-            continue
-        suffix = file_path.suffix.lower()
-        if suffix in BINARY_EXTENSIONS:
-            continue
-        if file_path.stat().st_size > max_size:
-            continue
-        if suffix not in PARSEABLE_EXTENSIONS and suffix not in TEXT_EXTENSIONS:
-            continue
-        yield file_path, rel
+    scanned = 0
+    yielded = 0
+
+    for current_root, dirnames, filenames in os.walk(root):
+        current_path = Path(current_root)
+        rel_dir = current_path.relative_to(root).as_posix()
+        rel_dir = "" if rel_dir == "." else rel_dir
+
+        # Prune excluded directories early to avoid traversing huge trees.
+        kept_dirs: list[str] = []
+        for d in dirnames:
+            rel = f"{rel_dir}/{d}" if rel_dir else d
+            if _should_exclude(rel, config.exclude):
+                continue
+            kept_dirs.append(d)
+        dirnames[:] = kept_dirs
+
+        for filename in filenames:
+            scanned += 1
+            file_path = current_path / filename
+            rel = file_path.relative_to(root).as_posix()
+
+            if _should_exclude(rel, config.exclude):
+                continue
+
+            suffix = file_path.suffix.lower()
+            if suffix in BINARY_EXTENSIONS:
+                continue
+
+            try:
+                if file_path.stat().st_size > max_size:
+                    continue
+            except OSError:
+                continue
+
+            if suffix not in PARSEABLE_EXTENSIONS and suffix not in TEXT_EXTENSIONS:
+                continue
+
+            yielded += 1
+            if scanned % 5000 == 0:
+                logger.info(
+                    "File scan progress for %s: scanned=%d indexable=%d",
+                    root.name,
+                    scanned,
+                    yielded,
+                )
+            yield file_path, rel
+
+    logger.info("File scan complete for %s: scanned=%d indexable=%d", root.name, scanned, yielded)
 
 
 async def index_repo(repo: RepoConfig) -> None:
@@ -262,33 +324,58 @@ async def index_repo(repo: RepoConfig) -> None:
         # Embed in batches
         logger.info("Embedding %d chunks for %s", len(all_chunks), repo.name)
         texts = [c["content"] for c in all_chunks]
-        batch_size = 50
+        batch_size = 20
         embeddings = []
+        embed_started_at = time.monotonic()
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
+            current_batch = (i // batch_size) + 1
+            total_batches = (len(texts) + batch_size - 1) // batch_size
+            logger.info(
+                "Embedding progress for %s: batch=%d/%d size=%d",
+                repo.name,
+                current_batch,
+                total_batches,
+                len(batch),
+            )
             batch_embeddings = await embed_batch(batch)
             embeddings.extend(batch_embeddings)
+        logger.info(
+            "Embedding complete for %s: vectors=%d elapsed=%.1fs",
+            repo.name,
+            len(embeddings),
+            time.monotonic() - embed_started_at,
+        )
 
         # Upsert into DB (delete old chunks for this repo first)
         async with pool.acquire() as conn:
             await conn.execute("DELETE FROM repo_chunks WHERE repo_name=$1", repo.name)
-            await conn.executemany(
-                """
-                INSERT INTO repo_chunks (repo_name, file_path, chunk_index, chunk_type, content, metadata, embedding)
-                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::vector)
-                ON CONFLICT (repo_name, file_path, chunk_index) DO UPDATE
-                SET content=EXCLUDED.content, metadata=EXCLUDED.metadata,
-                    embedding=EXCLUDED.embedding, indexed_at=NOW()
-                """,
-                [
-                    (
-                        c["repo_name"], c["file_path"], c["chunk_index"],
-                        c["chunk_type"], c["content"], c["metadata"],
-                        str(embeddings[i]),
-                    )
-                    for i, c in enumerate(all_chunks)
-                ],
-            )
+            insert_batch_size = 500
+            for start in range(0, len(all_chunks), insert_batch_size):
+                end = min(start + insert_batch_size, len(all_chunks))
+                await conn.executemany(
+                    """
+                    INSERT INTO repo_chunks (repo_name, file_path, chunk_index, chunk_type, content, metadata, embedding)
+                    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::vector)
+                    ON CONFLICT (repo_name, file_path, chunk_index) DO UPDATE
+                    SET content=EXCLUDED.content, metadata=EXCLUDED.metadata,
+                        embedding=EXCLUDED.embedding, indexed_at=NOW()
+                    """,
+                    [
+                        (
+                            c["repo_name"], c["file_path"], c["chunk_index"],
+                            c["chunk_type"], c["content"], c["metadata"],
+                            _vector_to_pg(embeddings[idx]),
+                        )
+                        for idx, c in enumerate(all_chunks[start:end], start=start)
+                    ],
+                )
+                logger.info(
+                    "DB write progress for %s: inserted=%d/%d",
+                    repo.name,
+                    end,
+                    len(all_chunks),
+                )
             await conn.execute(
                 """
                 UPDATE repos

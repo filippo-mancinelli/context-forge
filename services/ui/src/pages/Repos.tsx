@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { RefreshCw, GitBranch, Github, GitlabIcon, HardDrive, AlertCircle, CheckCircle, Clock, Loader2, RotateCcw } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { api, type Repo } from '../lib/api'
 
 function StatusBadge({ status }: { status: Repo['status'] }) {
@@ -174,7 +175,9 @@ export default function Repos() {
                     <div className="flex items-center gap-2.5">
                       <TypeIcon type={repo.type} />
                       <div>
-                        <div className="font-medium text-white">{repo.name}</div>
+                        <Link to={`/repos/${encodeURIComponent(repo.name)}`} className="font-medium text-white hover:text-indigo-300">
+                          {repo.name}
+                        </Link>
                         <div className="text-xs text-gray-500 font-mono mt-0.5">
                           {repo.url || repo.path || '—'}
                         </div>
@@ -203,14 +206,22 @@ export default function Repos() {
                     {formatDate(repo.last_indexed_at)}
                   </td>
                   <td className="px-4 py-3.5 text-right">
-                    <button
-                      onClick={() => handleIndex(repo.name)}
-                      disabled={indexingRepo === repo.name || repo.status === 'indexing'}
-                      className="flex items-center gap-1.5 px-3 py-1 text-xs text-gray-300 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-40 ml-auto"
-                    >
-                      <RefreshCw className={`w-3 h-3 ${indexingRepo === repo.name ? 'animate-spin' : ''}`} />
-                      Index
-                    </button>
+                    <div className="inline-flex items-center gap-2">
+                      <button
+                        onClick={() => handleIndex(repo.name)}
+                        disabled={indexingRepo === repo.name || repo.status === 'indexing'}
+                        className="flex items-center gap-1.5 px-3 py-1 text-xs text-gray-300 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-40"
+                      >
+                        <RefreshCw className={`w-3 h-3 ${indexingRepo === repo.name ? 'animate-spin' : ''}`} />
+                        Index
+                      </button>
+                      <Link
+                        to={`/repos/${encodeURIComponent(repo.name)}`}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 text-xs text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 rounded-lg transition-colors"
+                      >
+                        Open
+                      </Link>
+                    </div>
                   </td>
                 </tr>
               ))}

@@ -12,6 +12,11 @@ from ..db import get_pool
 logger = logging.getLogger(__name__)
 
 
+def _vector_to_pg(embedding: list[float]) -> str:
+    """Convert an embedding list to pgvector literal string format."""
+    return "[" + ",".join(f"{float(v):.10f}" for v in embedding) + "]"
+
+
 @mcp.tool()
 async def repo_list() -> dict:
     """List all configured repositories and their indexing status.
@@ -59,6 +64,9 @@ async def repo_search(
     except Exception as e:
         return {"status": "error", "error": f"Embedding failed: {e}"}
 
+    # asyncpg does not natively encode Python lists as pgvector; pass as a vector literal string
+    embedding_str = _vector_to_pg(embedding)
+
     pool = await get_pool()
     async with pool.acquire() as conn:
         if repos:
@@ -71,7 +79,7 @@ async def repo_search(
                 ORDER BY embedding <=> $1::vector
                 LIMIT $3
                 """,
-                embedding,
+                embedding_str,
                 repos,
                 limit,
             )
@@ -84,7 +92,7 @@ async def repo_search(
                 ORDER BY embedding <=> $1::vector
                 LIMIT $2
                 """,
-                embedding,
+                embedding_str,
                 limit,
             )
 

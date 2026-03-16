@@ -95,13 +95,53 @@ async def embed_batch(texts: Sequence[str]) -> list[list[float]]:
 async def _embed_api(texts: Sequence[str], model: str) -> list[list[float]]:
     """Call any OpenAI-compatible embeddings API."""
     client = _get_api_client()
-    batch_size = 100
+    batch_size = 20
     all_embeddings = []
     for i in range(0, len(texts), batch_size):
         batch = [t[:8000] for t in texts[i:i + batch_size]]
-        resp = await client.embeddings.create(model=model, input=batch)
-        all_embeddings.extend([item.embedding for item in resp.data])
+        batch_embeddings = await _embed_api_batch_with_retry(client, model, batch)
+        all_embeddings.extend(batch_embeddings)
     return all_embeddings
+
+
+async def _embed_api_batch_with_retry(client, model: str, batch: list[str]) -> list[list[float]]:
+    """Embed a batch with retry/backoff and adaptive split on 429 rate limits."""
+    max_retries = 4
+    for attempt in range(max_retries + 1):
+        try:
+            resp = await client.embeddings.create(model=model, input=batch)
+            return [item.embedding for item in resp.data]
+        except Exception as e:
+            msg = str(e)
+            is_rate_limited = (
+                "429" in msg
+                or "rate limit" in msg.lower()
+                or "RATE_TOKEN_LIMIT_EXCEEDED" in msg
+            )
+            if not is_rate_limited:
+                raise
+
+            # If provider enforces token/minute, split the batch and retry recursively.
+            if len(batch) > 1:
+                mid = max(1, len(batch) // 2)
+                left = await _embed_api_batch_with_retry(client, model, batch[:mid])
+                right = await _embed_api_batch_with_retry(client, model, batch[mid:])
+                return left + right
+
+            if attempt >= max_retries:
+                raise
+
+            wait_seconds = min(2 ** attempt, 30)
+            logger.warning(
+                "Embeddings 429 for single input. Retrying in %ss (attempt %d/%d)",
+                wait_seconds,
+                attempt + 1,
+                max_retries + 1,
+            )
+            await asyncio.sleep(wait_seconds)
+
+    # Defensive fallback, should be unreachable.
+    raise RuntimeError("Embeddings retry loop exhausted unexpectedly")
 
 
 async def _embed_local(texts: Sequence[str]) -> list[list[float]]:

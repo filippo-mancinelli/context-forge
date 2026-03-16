@@ -47,24 +47,75 @@ function ToolCard({ tool }: { tool: Tool }) {
 }
 
 function MCPConfigSnippet() {
-  const [copied, setCopied] = useState(false)
-  const snippet = `claude mcp add --transport http context-forge http://localhost:4000/mcp`
+  const [copiedKey, setCopiedKey] = useState<string | null>(null)
+  const snippets = [
+    {
+      key: 'claude',
+      title: 'Claude Code',
+      value: 'claude mcp add --transport http context-forge http://localhost:4000/mcp',
+    },
+    {
+      key: 'codex',
+      title: 'Codex CLI',
+      value: 'codex mcp add --transport http context-forge http://localhost:4000/mcp',
+    },
+    {
+      key: 'opencode',
+      title: 'OpenCode (opencode.json)',
+      value: `{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "context-forge": {
+      "type": "remote",
+      "url": "http://localhost:4000/mcp",
+      "enabled": true
+    }
+  }
+}`,
+    },
+    {
+      key: 'cursor',
+      title: 'Cursor (.cursor/mcp.json)',
+      value: `{
+  "mcpServers": {
+    "context-forge": {
+      "url": "http://localhost:4000/mcp"
+    }
+  }
+}`,
+    },
+  ]
 
   return (
     <div className="mb-8 p-4 bg-gray-900 border border-gray-800 rounded-xl">
       <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wider">Quick Connect</p>
-      <div className="flex items-center gap-2">
-        <code className="flex-1 text-xs font-mono text-indigo-300 bg-gray-800 px-3 py-2 rounded-lg overflow-x-auto">
-          {snippet}
-        </code>
-        <button
-          onClick={() => { navigator.clipboard.writeText(snippet); setCopied(true); setTimeout(() => setCopied(false), 1500) }}
-          className="flex-shrink-0 p-2 text-gray-500 hover:text-gray-300 bg-gray-800 rounded-lg transition-colors"
-        >
-          {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-        </button>
+      <div className="space-y-3">
+        {snippets.map((snippet) => (
+          <div key={snippet.key} className="space-y-1">
+            <p className="text-xs text-gray-400">{snippet.title}</p>
+            <div className="flex items-start gap-2">
+              <code className="flex-1 text-xs font-mono text-indigo-300 bg-gray-800 px-3 py-2 rounded-lg overflow-x-auto whitespace-pre">
+                {snippet.value}
+              </code>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(snippet.value)
+                  setCopiedKey(snippet.key)
+                  setTimeout(() => setCopiedKey(null), 1500)
+                }}
+                className="flex-shrink-0 p-2 text-gray-500 hover:text-gray-300 bg-gray-800 rounded-lg transition-colors"
+                title={`Copy ${snippet.title} config`}
+              >
+                {copiedKey === snippet.key ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+              </button>
+            </div>
+          </div>
+        ))}
       </div>
-      <p className="text-xs text-gray-600 mt-2">Or add to Cursor's <code className="font-mono">.cursor/mcp.json</code> with <code className="font-mono">"url": "http://localhost:4000/mcp"</code></p>
     </div>
   )
 }

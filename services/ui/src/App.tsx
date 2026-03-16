@@ -1,12 +1,17 @@
-import { BrowserRouter, NavLink, Route, Routes, Navigate } from 'react-router-dom'
-import { Database, Brain, Wrench, Activity, GitBranch } from 'lucide-react'
+import { BrowserRouter, NavLink, Route, Routes } from 'react-router-dom'
+import { Database, Brain, Wrench, Activity, GitBranch, Home, Sparkles } from 'lucide-react'
 import Repos from './pages/Repos'
 import Memory from './pages/Memory'
 import Tools from './pages/Tools'
 import Jobs from './pages/Jobs'
+import Dashboard from './pages/Dashboard'
+import Search from './pages/Search'
+import RepoDetail from './pages/RepoDetail'
 
 function Sidebar() {
   const links = [
+    { to: '/', icon: Home, label: 'Dashboard', end: true },
+    { to: '/search', icon: Sparkles, label: 'Cross Search' },
     { to: '/repos', icon: GitBranch, label: 'Repositories' },
     { to: '/memory', icon: Brain, label: 'Memory' },
     { to: '/tools', icon: Wrench, label: 'MCP Tools' },
@@ -23,10 +28,11 @@ function Sidebar() {
         <p className="text-xs text-gray-500 mt-0.5 ml-7">agent platform</p>
       </div>
       <nav className="flex-1 px-3 py-4 space-y-0.5">
-        {links.map(({ to, icon: Icon, label }) => (
+        {links.map(({ to, icon: Icon, label, end }) => (
           <NavLink
             key={to}
             to={to}
+            end={end}
             className={({ isActive }) =>
               `flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
                 isActive
@@ -55,8 +61,10 @@ export default function App() {
         <Sidebar />
         <main className="flex-1 overflow-auto">
           <Routes>
-            <Route path="/" element={<Navigate to="/repos" replace />} />
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/search" element={<Search />} />
             <Route path="/repos" element={<Repos />} />
+            <Route path="/repos/:repoName" element={<RepoDetail />} />
             <Route path="/memory" element={<Memory />} />
             <Route path="/tools" element={<Tools />} />
             <Route path="/jobs" element={<Jobs />} />

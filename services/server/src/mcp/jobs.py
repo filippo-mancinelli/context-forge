@@ -85,7 +85,7 @@ async def job_submit(
         dict with job_id to use with job_status() and job_result()
 
     Example:
-        job = job_submit(url="http://askmechat:8000/api/v1/query",
+        job = job_submit(url="http://askmechat:8005/api/v1/query",
                          payload={"question": "How many users today?"})
         # later:
         status = job_status(job["job_id"])
