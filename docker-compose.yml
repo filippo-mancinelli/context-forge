@@ -1,0 +1,62 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: context_forge
+      POSTGRES_USER: context_forge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U context_forge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  context-forge:
+    build:
+      context: ./services/server
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000"
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://context_forge:${POSTGRES_PASSWORD}@postgres:5432/context_forge
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - EMBEDDINGS_PROVIDER=${EMBEDDINGS_PROVIDER:-openai}
+      - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-text-embedding-3-small}
+      - EMBEDDINGS_DIMS=${EMBEDDINGS_DIMS:-1536}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - GITLAB_TOKEN=${GITLAB_TOKEN:-}
+      - MCP_PORT=4000
+      - API_PORT=8000
+      - REPOS_CACHE_DIR=/data/repos-cache
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - repos_cache:/data/repos-cache
+      - ./context-forge.yml:/app/context-forge.yml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: ./services/ui
+      dockerfile: Dockerfile
+      args:
+        - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
+    ports:
+      - "3000:80"
+    depends_on:
+      - context-forge
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  repos_cache:

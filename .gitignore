@@ -1,0 +1,15 @@
+.env
+context-forge.yml
+docker-compose.override.yml
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+node_modules/
+dist/
+build/
+.next/
+*.egg-info/
+.venv/
+venv/

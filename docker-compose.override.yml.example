@@ -1,0 +1,20 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# docker-compose.override.yml.example
+#
+# Use this file to mount your LOCAL repositories into the container.
+# Copy it to docker-compose.override.yml and adjust the paths.
+#
+# Only needed for repos with type: local in context-forge.yml.
+# Remote repos (github/gitlab) are cloned automatically — no volume needed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  context-forge:
+    volumes:
+      # Format: /your/local/path:/repos/name-in-config:ro
+      # The container path must match the `path:` field in context-forge.yml
+      - /home/yourname/projects/my-backend:/repos/my-backend:ro
+      - /home/yourname/projects/my-frontend:/repos/my-frontend:ro
+
+      # Windows paths (use forward slashes):
+      # - C:/Users/yourname/projects/my-backend:/repos/my-backend:ro
