@@ -71,12 +71,15 @@ class Settings(BaseSettings):
     repos_cache_dir: str = "/data/repos-cache"
     log_level: str = "INFO"
     config_path: str = "/app/context-forge.yml"
+    setup_bootstrap_token: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
 
 _settings: Optional[Settings] = None
 _forge_config: Optional[ForgeConfig] = None
+_runtime_forge_config: Optional[ForgeConfig] = None
+_runtime_settings_overrides: dict = {}
 
 
 def get_settings() -> Settings:
@@ -87,11 +90,19 @@ def get_settings() -> Settings:
         dims_env = os.getenv("EMBEDDINGS_DIMS")
         if dims_env:
             _settings.embeddings_dims = int(dims_env)
+    # Apply runtime overrides loaded from DB (if configured).
+    for key, value in _runtime_settings_overrides.items():
+        if value is None:
+            continue
+        if hasattr(_settings, key):
+            setattr(_settings, key, value)
     return _settings
 
 
 def get_forge_config() -> ForgeConfig:
-    global _forge_config
+    global _forge_config, _runtime_forge_config
+    if _runtime_forge_config is not None:
+        return _runtime_forge_config
     if _forge_config is None:
         _forge_config = _load_forge_config()
     return _forge_config
@@ -102,6 +113,20 @@ def reload_forge_config() -> ForgeConfig:
     global _forge_config
     _forge_config = _load_forge_config()
     return _forge_config
+
+
+def set_runtime_config(forge_config: ForgeConfig, settings_overrides: Optional[dict] = None) -> None:
+    """Apply runtime configuration loaded from DB."""
+    global _runtime_forge_config, _runtime_settings_overrides
+    _runtime_forge_config = forge_config
+    _runtime_settings_overrides = settings_overrides or {}
+
+
+def clear_runtime_config() -> None:
+    """Clear DB-backed runtime overrides and use file/env config."""
+    global _runtime_forge_config, _runtime_settings_overrides
+    _runtime_forge_config = None
+    _runtime_settings_overrides = {}
 
 
 def _load_forge_config() -> ForgeConfig:

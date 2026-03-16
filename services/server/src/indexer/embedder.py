@@ -65,6 +65,13 @@ def _get_api_client():
     return _openai_client
 
 
+def reset_embedder_clients() -> None:
+    """Reset provider clients so runtime settings changes are applied."""
+    global _openai_client, _local_model
+    _openai_client = None
+    _local_model = None
+
+
 def _get_local_model():
     global _local_model
     if _local_model is None:

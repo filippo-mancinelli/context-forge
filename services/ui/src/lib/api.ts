@@ -1,8 +1,26 @@
 const BASE = import.meta.env.VITE_API_URL || ''
+const AUTH_TOKEN_KEY = 'cf_admin_token'
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+export function getAuthToken() {
+  return localStorage.getItem(AUTH_TOKEN_KEY)
+}
+
+export function setAuthToken(token: string) {
+  localStorage.setItem(AUTH_TOKEN_KEY, token)
+}
+
+export function clearAuthToken() {
+  localStorage.removeItem(AUTH_TOKEN_KEY)
+}
+
+async function request<T>(path: string, options?: RequestInit, includeAuth = true): Promise<T> {
+  const token = includeAuth ? getAuthToken() : null
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...options?.headers,
+    },
     ...options,
   })
   if (!res.ok) {
@@ -71,6 +89,35 @@ export interface Job {
 }
 
 export const api = {
+  setup: {
+    status: () =>
+      request<{ is_configured: boolean; legacy_mode: boolean; has_admin: boolean; has_runtime_config: boolean }>(
+        '/api/setup/status',
+        undefined,
+        false
+      ),
+    init: (payload: {
+      bootstrap_token: string
+      admin_username: string
+      admin_password: string
+      forge_config: Record<string, unknown>
+      settings_overrides: Record<string, unknown>
+    }) =>
+      request('/api/setup/init', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }, false),
+  },
+  auth: {
+    login: (username: string, password: string) =>
+      request<{ token: string; token_type: string }>(
+        '/api/auth/login',
+        { method: 'POST', body: JSON.stringify({ username, password }) },
+        false
+      ),
+    session: () => request<{ status: string }>('/api/auth/session'),
+    logout: () => request('/api/auth/logout', { method: 'POST' }),
+  },
   repos: {
     list: () => request<Repo[]>('/api/repos'),
     search: (query: string, repos?: string[], limit = 20) =>
@@ -106,6 +153,11 @@ export const api = {
   jobs: {
     list: (limit = 50) => request<{ jobs: Job[]; count: number }>(`/api/jobs?limit=${limit}`),
     get: (id: string) => request<Job>(`/api/jobs/${encodeURIComponent(id)}`),
+  },
+  settings: {
+    get: () => request<{ forge_config: Record<string, unknown>; settings_overrides: Record<string, unknown> }>('/api/settings'),
+    update: (payload: { forge_config: Record<string, unknown>; settings_overrides: Record<string, unknown> }) =>
+      request('/api/settings', { method: 'PUT', body: JSON.stringify(payload) }),
   },
   health: () => request<{ status: string }>('/api/health'),
 }

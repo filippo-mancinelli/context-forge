@@ -88,6 +88,12 @@ def _get_memory():
     return _memory_client
 
 
+def reset_memory_client() -> None:
+    """Reset Mem0 client to apply runtime settings changes."""
+    global _memory_client
+    _memory_client = None
+
+
 @mcp.tool()
 async def memory_add(content: str, metadata: Optional[dict] = None, user_id: Optional[str] = None) -> dict:
     """Save a memory, fact, or note that should persist across sessions.

@@ -66,6 +66,31 @@ CREATE TABLE IF NOT EXISTS index_requests (
     requested_at  TIMESTAMPTZ DEFAULT NOW(),
     processed_at  TIMESTAMPTZ
 );
+
+CREATE TABLE IF NOT EXISTS app_runtime_config (
+    id                 SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    forge_config       JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    settings_overrides JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    updated_at         TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS admin_users (
+    id            BIGSERIAL PRIMARY KEY,
+    username      TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    salt          TEXT NOT NULL,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    token_hash    TEXT PRIMARY KEY,
+    user_id       BIGINT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+    expires_at    TIMESTAMPTZ NOT NULL,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS auth_sessions_user_idx ON auth_sessions (user_id);
+CREATE INDEX IF NOT EXISTS auth_sessions_expires_idx ON auth_sessions (expires_at);
 """
 
 
