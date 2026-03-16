@@ -167,10 +167,20 @@ services:
 | `EMBEDDINGS_PROVIDER` | `openai` or `local` | `openai` |
 | `EMBEDDINGS_MODEL` | Embedding model name | `text-embedding-3-small` |
 | `EMBEDDINGS_DIMS` | Embedding dimensions | `1536` |
-| `LLM_PROVIDER` | LLM for Mem0 extraction | `openai` |
-| `LLM_MODEL` | LLM model | `gpt-4o-mini` |
+| `LLM_PROVIDER` | LLM for Mem0 extraction: `openai` \| `anthropic` \| `deepseek` | `openai` |
+| `LLM_MODEL` | LLM model name | `gpt-4o-mini` |
+| `DEEPSEEK_API_KEY` | DeepSeek API key (if `LLM_PROVIDER=deepseek`) | (optional) |
 | `GITHUB_TOKEN` | GitHub personal access token | (optional) |
 | `GITLAB_TOKEN` | GitLab token | (optional) |
+
+#### DeepSeek as LLM (fast and cheap for memory extraction)
+
+```env
+LLM_PROVIDER=deepseek
+LLM_MODEL=deepseek-chat
+DEEPSEEK_API_KEY=sk-...
+# Keep OPENAI_API_KEY for embeddings (or switch to local)
+```
 
 #### Local embeddings (no API key needed)
 

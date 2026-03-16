@@ -2,8 +2,13 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm ci
+# Force public registry — overrides any .npmrc or inherited token
+ENV npm_config_registry=https://registry.npmjs.org/
+ENV npm_config__auth=
+ENV npm_config__authtoken=
+
+COPY package.json ./
+RUN npm install --legacy-peer-deps
 
 COPY . .
 

@@ -1,4 +1,11 @@
-"""Embedding generation — supports OpenAI and local sentence-transformers."""
+"""Embedding generation.
+
+Supported providers (via EMBEDDINGS_PROVIDER):
+  - openai          : OpenAI text-embedding-* models
+  - jina            : Jina AI embeddings (1M tokens/month free)
+  - openai-compatible: Any OpenAI-compatible endpoint (set EMBEDDINGS_BASE_URL)
+  - local           : sentence-transformers (requires EMBEDDINGS_PROVIDER=local at build time)
+"""
 from __future__ import annotations
 
 import asyncio
@@ -7,16 +14,54 @@ from typing import Sequence
 
 logger = logging.getLogger(__name__)
 
-_local_model = None
 _openai_client = None
+_local_model = None
+
+# Known provider defaults
+_PROVIDER_DEFAULTS = {
+    "openai": {
+        "base_url": None,
+        "dims": 1536,
+        "model": "text-embedding-3-small",
+    },
+    "jina": {
+        "base_url": "https://api.jina.ai/v1",
+        "dims": 1024,
+        "model": "jina-embeddings-v3",
+    },
+}
 
 
-def _get_openai():
+def _get_api_client():
+    """Get (or create) the AsyncOpenAI client for the configured embeddings provider."""
     global _openai_client
     if _openai_client is None:
         from openai import AsyncOpenAI
         from ..config import get_settings
-        _openai_client = AsyncOpenAI(api_key=get_settings().openai_api_key)
+        s = get_settings()
+
+        provider = s.embeddings_provider
+        defaults = _PROVIDER_DEFAULTS.get(provider, {})
+
+        # Resolve API key: EMBEDDINGS_API_KEY > provider-specific key > OPENAI_API_KEY
+        api_key = (
+            s.embeddings_api_key
+            or (s.openai_api_key if provider == "openai" else "")
+            or s.openai_api_key  # final fallback
+        )
+
+        # Resolve base URL: EMBEDDINGS_BASE_URL > provider default
+        base_url = s.embeddings_base_url or defaults.get("base_url")
+
+        kwargs = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+
+        _openai_client = AsyncOpenAI(**kwargs)
+        logger.info(
+            "Embeddings client: provider=%s base_url=%s model=%s",
+            provider, base_url or "openai-default", s.embeddings_model,
+        )
     return _openai_client
 
 
@@ -42,21 +87,18 @@ async def embed_batch(texts: Sequence[str]) -> list[list[float]]:
     from ..config import get_settings
     settings = get_settings()
 
-    if settings.embeddings_provider == "openai":
-        return await _embed_openai(texts, settings.embeddings_model)
-    else:
+    if settings.embeddings_provider == "local":
         return await _embed_local(texts)
+    return await _embed_api(texts, settings.embeddings_model)
 
 
-async def _embed_openai(texts: Sequence[str], model: str) -> list[list[float]]:
-    client = _get_openai()
-    # OpenAI API: max 2048 inputs per request, max 8192 tokens per text
+async def _embed_api(texts: Sequence[str], model: str) -> list[list[float]]:
+    """Call any OpenAI-compatible embeddings API."""
+    client = _get_api_client()
     batch_size = 100
     all_embeddings = []
     for i in range(0, len(texts), batch_size):
-        batch = list(texts[i:i + batch_size])
-        # Truncate very long texts (openai limit)
-        batch = [t[:8000] for t in batch]
+        batch = [t[:8000] for t in texts[i:i + batch_size]]
         resp = await client.embeddings.create(model=model, input=batch)
         all_embeddings.extend([item.embedding for item in resp.data])
     return all_embeddings

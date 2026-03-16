@@ -3,15 +3,15 @@
 # ─────────────────────────────────────────────────────────
 param()
 
-function Write-Header($msg) { Write-Host "`n▶ $msg" -ForegroundColor Blue }
-function Write-Ok($msg)     { Write-Host "  ✓ $msg" -ForegroundColor Green }
-function Write-Warn($msg)   { Write-Host "  ! $msg" -ForegroundColor Yellow }
-function Write-Err($msg)    { Write-Host "  ✗ $msg" -ForegroundColor Red }
+function Write-Header($msg) { Write-Host "`n> $msg" -ForegroundColor Blue }
+function Write-Ok($msg)     { Write-Host "  [OK] $msg" -ForegroundColor Green }
+function Write-Warn($msg)   { Write-Host "  [!] $msg" -ForegroundColor Yellow }
+function Write-Err($msg)    { Write-Host "  [X] $msg" -ForegroundColor Red }
 
 Write-Host ""
-Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║       context-forge setup            ║" -ForegroundColor Cyan
-Write-Host "╚══════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "       context-forge setup            " -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
 
 # ─── Prerequisites ────────────────────────────────────────
 Write-Header "Checking prerequisites"
@@ -99,17 +99,17 @@ if ($startNow -eq "" -or $startNow -match "^[Yy]") {
         $resp = Invoke-WebRequest -Uri "http://localhost:8000/api/health" -UseBasicParsing -TimeoutSec 5
         Write-Ok "API is healthy"
     } catch {
-        Write-Warn "API not yet ready — may still be initializing (check: docker compose logs context-forge)"
+        Write-Warn "API not yet ready - may still be initializing (check: docker compose logs context-forge)"
     }
 
     Write-Host ""
     Write-Host "  context-forge is running!" -ForegroundColor Green
     Write-Host ""
-    Write-Host "  ┌─ Endpoints ──────────────────────────────────┐" -ForegroundColor Cyan
-    Write-Host "  │  MCP server:  http://localhost:4000/mcp      │" -ForegroundColor Cyan
-    Write-Host "  │  REST API:    http://localhost:8000/api       │" -ForegroundColor Cyan
-    Write-Host "  │  Web UI:      http://localhost:3000           │" -ForegroundColor Cyan
-    Write-Host "  └──────────────────────────────────────────────┘" -ForegroundColor Cyan
+    Write-Host "  --- Endpoints -----------------------------------" -ForegroundColor Cyan
+    Write-Host "  |  MCP server:  http://localhost:4000/mcp       |" -ForegroundColor Cyan
+    Write-Host "  |  REST API:    http://localhost:8000/api       |" -ForegroundColor Cyan
+    Write-Host "  |  Web UI:      http://localhost:3000            |" -ForegroundColor Cyan
+    Write-Host "  ------------------------------------------------" -ForegroundColor Cyan
 } else {
     Write-Host ""
     Write-Host "  Run manually with: docker compose up -d"
@@ -122,7 +122,7 @@ Write-Host ""
 Write-Host "  Claude Code:" -ForegroundColor White
 Write-Host "  claude mcp add --transport http context-forge http://localhost:4000/mcp" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "  Cursor — add to .cursor\mcp.json:" -ForegroundColor White
+Write-Host "  Cursor - add to .cursor\mcp.json:" -ForegroundColor White
 Write-Host '  {"mcpServers": {"context-forge": {"url": "http://localhost:4000/mcp"}}}' -ForegroundColor Yellow
 Write-Host ""
 Write-Host "  Copy system prompt to your project:" -ForegroundColor White

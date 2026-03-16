@@ -20,20 +20,39 @@ def _get_memory():
         settings = get_settings()
 
         llm_config: dict[str, Any] = {
-            "provider": settings.llm_provider,
+            "provider": settings.llm_provider if settings.llm_provider != "deepseek" else "openai",
             "config": {"model": settings.llm_model},
         }
         if settings.llm_provider == "openai":
             llm_config["config"]["api_key"] = settings.openai_api_key
         elif settings.llm_provider == "anthropic":
             llm_config["config"]["api_key"] = settings.anthropic_api_key
+        elif settings.llm_provider == "deepseek":
+            # DeepSeek is OpenAI-compatible — use openai provider with custom base URL
+            llm_config["config"]["api_key"] = settings.deepseek_api_key
+            llm_config["config"]["openai_base_url"] = "https://api.deepseek.com"
 
-        embedder_config: dict[str, Any] = {
-            "provider": settings.embeddings_provider if settings.embeddings_provider != "local" else "huggingface",
-            "config": {"model": settings.embeddings_model},
+        # Resolve embeddings API key: EMBEDDINGS_API_KEY > OPENAI_API_KEY
+        emb_api_key = settings.embeddings_api_key or settings.openai_api_key
+
+        # Jina and other OpenAI-compatible providers use the "openai" Mem0 embedder
+        # with a custom base_url
+        _JINA_BASE = "https://api.jina.ai/v1"
+        emb_provider_map = {
+            "openai": "openai",
+            "jina": "openai",
+            "openai-compatible": "openai",
+            "local": "huggingface",
         }
-        if settings.embeddings_provider == "openai":
-            embedder_config["config"]["api_key"] = settings.openai_api_key
+        embedder_config: dict[str, Any] = {
+            "provider": emb_provider_map.get(settings.embeddings_provider, "openai"),
+            "config": {"model": settings.embeddings_model, "api_key": emb_api_key},
+        }
+        base_url = settings.embeddings_base_url
+        if not base_url and settings.embeddings_provider == "jina":
+            base_url = _JINA_BASE
+        if base_url:
+            embedder_config["config"]["openai_base_url"] = base_url
 
         # Parse DB URL for Mem0 pgvector config
         import re

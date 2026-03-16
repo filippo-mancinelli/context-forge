@@ -20,15 +20,21 @@ services:
     build:
       context: ./services/server
       dockerfile: Dockerfile
+      args:
+        - EMBEDDINGS_PROVIDER=${EMBEDDINGS_PROVIDER:-openai}
     ports:
       - "4000:4000"
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql://context_forge:${POSTGRES_PASSWORD}@postgres:5432/context_forge
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
       - EMBEDDINGS_PROVIDER=${EMBEDDINGS_PROVIDER:-openai}
       - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-text-embedding-3-small}
       - EMBEDDINGS_DIMS=${EMBEDDINGS_DIMS:-1536}
+      - EMBEDDINGS_API_KEY=${EMBEDDINGS_API_KEY:-}
+      - EMBEDDINGS_BASE_URL=${EMBEDDINGS_BASE_URL:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
       - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}

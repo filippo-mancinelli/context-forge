@@ -50,6 +50,20 @@ indexing:
     - "**/*.min.js"
     - "**/*.lock"
     - "**/package-lock.json"
+    # Java
+    - "**/target/**"
+    - "**/*.class"
+    - "**/*.jar"
+    - "**/*.war"
+    - "**/.gradle/**"
+    - "**/*.iml"
+    - "**/.idea/**"
+    - "**/.settings/**"
+    - "**/.project"
+    - "**/.classpath"
+    # Angular
+    - "**/.angular/**"
+    - "**/*.map"
   # Maximum file size to index (in KB)
   max_file_size_kb: 500
   # Maximum chunk size in tokens (approximate)
