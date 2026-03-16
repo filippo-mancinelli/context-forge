@@ -56,9 +56,12 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://context_forge:changeme@postgres:5432/context_forge"
     openai_api_key: str = ""
     anthropic_api_key: str = ""
+    deepseek_api_key: str = ""
     embeddings_provider: str = "openai"
     embeddings_model: str = "text-embedding-3-small"
     embeddings_dims: int = 1536
+    embeddings_api_key: str = ""        # overrides provider key for embeddings
+    embeddings_base_url: str = ""       # custom OpenAI-compatible endpoint
     llm_provider: str = "openai"
     llm_model: str = "gpt-4o-mini"
     github_token: str = ""

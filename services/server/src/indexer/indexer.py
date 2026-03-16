@@ -1,6 +1,7 @@
 """Repository indexer — tree-sitter parsing + pgvector storage."""
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import json
 import logging
@@ -138,6 +139,53 @@ def _sliding_window_chunks(content: str, chunk_size: int, overlap: int) -> list[
     return chunks
 
 
+def _collect_chunks_sync(
+    repo_name: str,
+    local_path: str,
+    indexing_cfg: "IndexingConfig",
+    language: str | None,
+) -> list[dict]:
+    """Collect and parse all chunks from a repo synchronously (run in thread pool)."""
+    all_chunks: list[dict] = []
+    root = Path(local_path)
+
+    for file_path, rel_path in _iter_repo_files(local_path, indexing_cfg):
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+
+        detected_lang = language or _detect_language(file_path)
+        suffix = file_path.suffix.lower()
+
+        if suffix in PARSEABLE_EXTENSIONS:
+            ts_chunks = _extract_chunks_treesitter(content, detected_lang, indexing_cfg)
+            if ts_chunks:
+                for i, c in enumerate(ts_chunks):
+                    all_chunks.append({
+                        "repo_name": repo_name,
+                        "file_path": rel_path,
+                        "chunk_index": i,
+                        "chunk_type": c["type"],
+                        "content": c["content"],
+                        "metadata": json.dumps({"name": c.get("name"), "start_line": c.get("start_line")}),
+                    })
+                continue
+
+        sw_chunks = _sliding_window_chunks(content, indexing_cfg.chunk_size, indexing_cfg.chunk_overlap)
+        for i, c in enumerate(sw_chunks):
+            all_chunks.append({
+                "repo_name": repo_name,
+                "file_path": rel_path,
+                "chunk_index": i,
+                "chunk_type": c["type"],
+                "content": c["content"],
+                "metadata": json.dumps({"start_line": c.get("start_line", 0)}),
+            })
+
+    return all_chunks
+
+
 def _should_exclude(rel_path: str, patterns: list[str]) -> bool:
     for pattern in patterns:
         if fnmatch.fnmatch(rel_path, pattern) or fnmatch.fnmatch(f"/{rel_path}", pattern):
@@ -194,44 +242,13 @@ async def index_repo(repo: RepoConfig) -> None:
         if not Path(local_path).exists():
             raise FileNotFoundError(f"Repo path does not exist: {local_path}")
 
-        # Collect files and their chunks
-        all_chunks: list[dict] = []
+        # Collect files and their chunks in a thread pool to keep event loop free
         language = repo.language if repo.language != "auto" else None
-
-        for file_path, rel_path in _iter_repo_files(local_path, indexing_cfg):
-            try:
-                content = file_path.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                continue
-
-            detected_lang = language or _detect_language(file_path)
-            suffix = file_path.suffix.lower()
-
-            if suffix in PARSEABLE_EXTENSIONS:
-                ts_chunks = _extract_chunks_treesitter(content, detected_lang, indexing_cfg)
-                if ts_chunks:
-                    for i, c in enumerate(ts_chunks):
-                        all_chunks.append({
-                            "repo_name": repo.name,
-                            "file_path": rel_path,
-                            "chunk_index": i,
-                            "chunk_type": c["type"],
-                            "content": c["content"],
-                            "metadata": json.dumps({"name": c.get("name"), "start_line": c.get("start_line")}),
-                        })
-                    continue
-
-            # Fallback: sliding window chunking
-            sw_chunks = _sliding_window_chunks(content, indexing_cfg.chunk_size, indexing_cfg.chunk_overlap)
-            for i, c in enumerate(sw_chunks):
-                all_chunks.append({
-                    "repo_name": repo.name,
-                    "file_path": rel_path,
-                    "chunk_index": i,
-                    "chunk_type": c["type"],
-                    "content": c["content"],
-                    "metadata": json.dumps({"start_line": c.get("start_line", 0)}),
-                })
+        loop = asyncio.get_running_loop()
+        logger.info("Scanning and parsing files for %s ...", repo.name)
+        all_chunks = await loop.run_in_executor(
+            None, _collect_chunks_sync, repo.name, local_path, indexing_cfg, language
+        )
 
         if not all_chunks:
             logger.warning("No chunks found for repo %s", repo.name)
