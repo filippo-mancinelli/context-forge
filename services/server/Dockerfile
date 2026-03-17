@@ -1,4 +1,8 @@
-FROM python:3.11-slim
+# Try alternative registries if Docker Hub is unreachable
+# FROM python:3.11-slim
+# FROM ghcr.io/astral-sh/python:3.11-slim
+# FROM mcr.microsoft.com/devcontainers/python:3.11
+FROM public.ecr.aws/docker/library/python:3.11-slim
 
 WORKDIR /app
 

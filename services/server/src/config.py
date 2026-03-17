@@ -115,6 +115,18 @@ def reload_forge_config() -> ForgeConfig:
     return _forge_config
 
 
+def set_forge_config(config: ForgeConfig) -> None:
+    """Save forge config to disk and update runtime config."""
+    global _forge_config, _runtime_forge_config
+    _forge_config = config
+    _runtime_forge_config = config
+    settings = get_settings()
+    path = Path(settings.config_path)
+    # Write to YAML file
+    with path.open("w") as f:
+        yaml.dump(config.model_dump(), f, default_flow_style=False, sort_keys=False)
+
+
 def set_runtime_config(forge_config: ForgeConfig, settings_overrides: Optional[dict] = None) -> None:
     """Apply runtime configuration loaded from DB."""
     global _runtime_forge_config, _runtime_settings_overrides
