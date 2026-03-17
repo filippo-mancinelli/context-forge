@@ -11,6 +11,7 @@ from .routes import jobs as jobs_routes
 from .routes import setup as setup_routes
 from .routes import auth as auth_routes
 from .routes import settings as settings_routes
+from .routes import github as github_routes
 
 api = FastAPI(
     title="context-forge API",
@@ -32,6 +33,7 @@ api.include_router(jobs_routes.router, prefix="/api")
 api.include_router(setup_routes.router, prefix="/api")
 api.include_router(auth_routes.router, prefix="/api")
 api.include_router(settings_routes.router, prefix="/api")
+api.include_router(github_routes.router, prefix="/api")
 
 
 @api.middleware("http")

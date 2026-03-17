@@ -43,6 +43,29 @@ export interface Repo {
   error_message?: string
 }
 
+export interface GitHubRepo {
+  id: number
+  name: string
+  full_name: string
+  description?: string
+  url: string
+  clone_url: string
+  default_branch: string
+  private: boolean
+  language?: string
+  stargazers_count: number
+  fork: boolean
+}
+
+export interface RepoCreateRequest {
+  name: string
+  type: 'local' | 'github' | 'gitlab'
+  url?: string
+  path?: string
+  branch: string
+  language?: string
+}
+
 export interface RepoSearchResult {
   repo_name: string
   file_path: string
@@ -120,6 +143,18 @@ export const api = {
   },
   repos: {
     list: () => request<Repo[]>('/api/repos'),
+    create: (req: RepoCreateRequest) =>
+      request<{ status: string; repo: { name: string; type: string } }>('/api/repos', {
+        method: 'POST',
+        body: JSON.stringify(req),
+      }),
+    update: (name: string, req: RepoCreateRequest) =>
+      request<{ status: string; repo: { name: string; type: string } }>(`/api/repos/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        body: JSON.stringify(req),
+      }),
+    delete: (name: string) =>
+      request<{ status: string; message: string }>(`/api/repos/${encodeURIComponent(name)}`, { method: 'DELETE' }),
     search: (query: string, repos?: string[], limit = 20) =>
       request<{ results: RepoSearchResult[]; count: number }>('/api/repos/search', {
         method: 'POST',
@@ -137,6 +172,16 @@ export const api = {
       request<{ path: string; entries: { name: string; type: string; size?: number; path: string }[] }>(
         `/api/repos/${encodeURIComponent(name)}/files?path=${encodeURIComponent(path)}`
       ),
+  },
+  github: {
+    listRepos: () => request<GitHubRepo[]>('/api/github/repos'),
+    searchRepos: (q: string) =>
+      request<{ repos: GitHubRepo[]; total_count: number }>(`/api/github/search?q=${encodeURIComponent(q)}`),
+    addRepo: (fullName: string, branch?: string) =>
+      request<{ status: string; message: string; repo: unknown }>('/api/github/repos/add', {
+        method: 'POST',
+        body: JSON.stringify({ full_name: fullName, branch }),
+      }),
   },
   memory: {
     list: (limit = 50) => request<{ memories: Memory[]; count: number }>(`/api/memory?limit=${limit}`),

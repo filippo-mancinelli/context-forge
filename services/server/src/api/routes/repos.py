@@ -263,3 +263,119 @@ async def repo_stats(repo_name: str):
         "chunk_types": chunk_types,
         "by_extension": by_extension,
     }
+
+
+class CreateRepoRequest(BaseModel):
+    name: str
+    type: str  # 'local', 'github', 'gitlab'
+    url: Optional[str] = None
+    path: Optional[str] = None
+    branch: str = "main"
+    language: Optional[str] = None
+
+
+@router.post("")
+async def create_repo(req: CreateRepoRequest):
+    """Add a new repository to the configuration."""
+    from ...config import get_forge_config, set_forge_config
+    from pydantic import BaseModel as PydanticBaseModel
+    
+    cfg = get_forge_config()
+    
+    # Check if repo name already exists
+    if any(r.name == req.name for r in cfg.repos):
+        raise HTTPException(status_code=400, detail=f"Repository '{req.name}' already exists")
+    
+    # Get the RepoConfig class from config
+    repo_config_class = type(cfg.repos[0]) if cfg.repos else None
+    if not repo_config_class:
+        raise HTTPException(status_code=500, detail="No repo configuration class available")
+    
+    # Create new repo config
+    new_repo = repo_config_class(
+        name=req.name,
+        type=req.type,
+        url=req.url,
+        path=req.path,
+        branch=req.branch,
+        language=req.language or "auto",
+    )
+    
+    cfg.repos.append(new_repo)
+    set_forge_config(cfg)
+    await sync_repos_config()
+    
+    return {"status": "ok", "repo": {"name": req.name, "type": req.type}}
+
+
+@router.put("/{repo_name}")
+async def update_repo(repo_name: str, req: CreateRepoRequest):
+    """Update an existing repository configuration."""
+    from ...config import get_forge_config, set_forge_config
+    
+    cfg = get_forge_config()
+    
+    # Find the repo
+    repo_idx = next((i for i, r in enumerate(cfg.repos) if r.name == repo_name), None)
+    if repo_idx is None:
+        raise HTTPException(status_code=404, detail=f"Repository '{repo_name}' not found")
+    
+    # Can't rename to another existing repo
+    if req.name != repo_name and any(r.name == req.name for r in cfg.repos):
+        raise HTTPException(status_code=400, detail=f"Repository '{req.name}' already exists")
+    
+    # Update repo config
+    repo_config_class = type(cfg.repos[repo_idx])
+    cfg.repos[repo_idx] = repo_config_class(
+        name=req.name,
+        type=req.type,
+        url=req.url,
+        path=req.path,
+        branch=req.branch,
+        language=req.language or cfg.repos[repo_idx].language,
+    )
+    
+    set_forge_config(cfg)
+    await sync_repos_config()
+    
+    return {"status": "ok", "repo": {"name": req.name, "type": req.type}}
+
+
+@router.delete("/{repo_name}")
+async def delete_repo(repo_name: str):
+    """Remove a repository from the configuration."""
+    from ...config import get_forge_config, set_forge_config
+    import shutil
+    from pathlib import Path
+    
+    cfg = get_forge_config()
+    
+    # Find and remove the repo
+    repo_idx = next((i for i, r in enumerate(cfg.repos) if r.name == repo_name), None)
+    if repo_idx is None:
+        raise HTTPException(status_code=404, detail=f"Repository '{repo_name}' not found")
+    
+    repo = cfg.repos[repo_idx]
+    
+    # Remove from config
+    cfg.repos.pop(repo_idx)
+    set_forge_config(cfg)
+    
+    # Clean up cached repo data
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM repo_chunks WHERE repo_name=$1", repo_name)
+        await conn.execute("DELETE FROM repos WHERE name=$1", repo_name)
+    
+    # Try to remove cloned repo directory if it exists
+    if repo.type in ('github', 'gitlab') and repo.url:
+        cache_dir = Path("/data/repos-cache") / repo_name
+        if cache_dir.exists():
+            try:
+                shutil.rmtree(cache_dir)
+            except Exception:
+                pass  # Ignore cleanup errors
+    
+    await sync_repos_config()
+    
+    return {"status": "ok", "message": f"Repository '{repo_name}' removed"}
