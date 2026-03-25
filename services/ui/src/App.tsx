@@ -1,23 +1,21 @@
 import { useEffect, useState } from 'react'
-import { BrowserRouter, NavLink, Route, Routes } from 'react-router-dom'
-import { Database, Brain, Wrench, Activity, GitBranch, Home, Sparkles, SlidersHorizontal, LogOut, Loader2 } from 'lucide-react'
+import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom'
+import { Database, Brain, Wrench, Activity, GitBranch, Sparkles, SlidersHorizontal, LogOut, Loader2 } from 'lucide-react'
 import Repos from './pages/Repos'
 import Memory from './pages/Memory'
 import Tools from './pages/Tools'
 import Jobs from './pages/Jobs'
-import Dashboard from './pages/Dashboard'
 import Search from './pages/Search'
 import RepoDetail from './pages/RepoDetail'
 import Settings from './pages/Settings'
-import Setup from './pages/Setup'
+import Setup, { type SetupMode } from './pages/Setup'
 import Login from './pages/Login'
 import { api, clearAuthToken, getAuthToken } from './lib/api'
 
 function Sidebar({ onLogout }: { onLogout: () => void }) {
-  const links = [
-    { to: '/', icon: Home, label: 'Dashboard', end: true },
-    { to: '/search', icon: Sparkles, label: 'Cross Search' },
+  const links: Array<{ to: string; icon: typeof GitBranch; label: string; end?: boolean }> = [
     { to: '/repos', icon: GitBranch, label: 'Repositories' },
+    { to: '/search', icon: Sparkles, label: 'Cross Search' },
     { to: '/memory', icon: Brain, label: 'Memory' },
     { to: '/settings', icon: SlidersHorizontal, label: 'Settings' },
     { to: '/tools', icon: Wrench, label: 'MCP Tools' },
@@ -69,6 +67,7 @@ function Sidebar({ onLogout }: { onLogout: () => void }) {
 
 export default function App() {
   const [state, setState] = useState<'loading' | 'setup' | 'login' | 'ready'>('loading')
+  const [setupMode, setSetupMode] = useState<SetupMode>('full')
 
   useEffect(() => {
     let mounted = true
@@ -77,10 +76,7 @@ export default function App() {
         const setup = await api.setup.status()
         if (!mounted) return
         if (!setup.is_configured) {
-          if (setup.legacy_mode) {
-            setState('ready')
-            return
-          }
+          setSetupMode(setup.mode === 'admin' ? 'admin' : 'full')
           setState('setup')
           return
         }
@@ -122,7 +118,7 @@ export default function App() {
   }
 
   if (state === 'setup') {
-    return <Setup onCompleted={() => setState('login')} />
+    return <Setup mode={setupMode} onCompleted={() => setState('login')} />
   }
 
   if (state === 'login') {
@@ -135,7 +131,7 @@ export default function App() {
         <Sidebar onLogout={handleLogout} />
         <main className="flex-1 overflow-auto">
           <Routes>
-            <Route path="/" element={<Dashboard />} />
+            <Route path="/" element={<Navigate to="/repos" replace />} />
             <Route path="/search" element={<Search />} />
             <Route path="/repos" element={<Repos />} />
             <Route path="/repos/:repoName" element={<RepoDetail />} />

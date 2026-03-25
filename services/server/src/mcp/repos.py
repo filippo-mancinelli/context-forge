@@ -117,7 +117,7 @@ async def repo_get_file(repo: str, path: str) -> dict:
     """Read the full content of a file from an indexed repository.
 
     Args:
-        repo: Repository name (as configured in context-forge.yml)
+        repo: Repository name (as configured in runtime settings)
         path: File path relative to the repo root (e.g. "src/main.py")
 
     Returns:
@@ -129,7 +129,7 @@ async def repo_get_file(repo: str, path: str) -> dict:
     cfg = get_forge_config()
     repo_cfg = next((r for r in cfg.repos if r.name == repo), None)
     if not repo_cfg:
-        return {"status": "error", "error": f"Repository '{repo}' not found in config"}
+        return {"status": "error", "error": f"Repository '{repo}' not found in runtime settings"}
 
     repo_path = get_repo_local_path(repo_cfg)
     file_path = Path(repo_path) / path.lstrip("/")

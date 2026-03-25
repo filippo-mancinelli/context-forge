@@ -9,7 +9,6 @@ from typing import Optional
 
 from fastapi import HTTPException
 
-from ..config import get_forge_config
 from ..db import get_pool
 
 PBKDF2_ITERATIONS = 240_000
@@ -41,14 +40,6 @@ async def has_runtime_config() -> bool:
 
 async def is_configured() -> bool:
     return await has_admin_user() and await has_runtime_config()
-
-
-async def is_legacy_mode_available() -> bool:
-    """Allow existing file-based installs to run without forced setup reset."""
-    if await has_runtime_config():
-        return False
-    cfg = get_forge_config()
-    return len(cfg.repos) > 0
 
 
 async def create_admin_user(username: str, password: str) -> None:
@@ -125,4 +116,3 @@ async def require_valid_token_or_raise(auth_header: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="Missing bearer token")
     if not await validate_session_token(token):
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-

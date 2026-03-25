@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from ...db import get_pool
 from ...indexer.indexer import index_repo, sync_repos_config
+from ...runtime_state import persist_runtime_config
 
 router = APIRouter(prefix="/repos", tags=["repos"])
 
@@ -168,15 +169,6 @@ async def trigger_index_all():
     return {"status": "queued", "message": "All repos queued for indexing"}
 
 
-@router.post("/sync-config")
-async def sync_config():
-    """Reload context-forge.yml and sync repos to DB."""
-    from ...config import reload_forge_config
-    reload_forge_config()
-    await sync_repos_config()
-    return {"status": "ok", "message": "Config synced"}
-
-
 @router.get("/{repo_name}/files")
 async def list_files(repo_name: str, path: str = ""):
     """List files in a repo directory."""
@@ -277,8 +269,7 @@ class CreateRepoRequest(BaseModel):
 @router.post("")
 async def create_repo(req: CreateRepoRequest):
     """Add a new repository to the configuration."""
-    from ...config import get_forge_config, set_forge_config
-    from pydantic import BaseModel as PydanticBaseModel
+    from ...config import RepoConfig, get_forge_config
     
     cfg = get_forge_config()
     
@@ -287,12 +278,8 @@ async def create_repo(req: CreateRepoRequest):
         raise HTTPException(status_code=400, detail=f"Repository '{req.name}' already exists")
     
     # Get the RepoConfig class from config
-    repo_config_class = type(cfg.repos[0]) if cfg.repos else None
-    if not repo_config_class:
-        raise HTTPException(status_code=500, detail="No repo configuration class available")
-    
     # Create new repo config
-    new_repo = repo_config_class(
+    new_repo = RepoConfig(
         name=req.name,
         type=req.type,
         url=req.url,
@@ -302,7 +289,7 @@ async def create_repo(req: CreateRepoRequest):
     )
     
     cfg.repos.append(new_repo)
-    set_forge_config(cfg)
+    await persist_runtime_config(cfg)
     await sync_repos_config()
     
     return {"status": "ok", "repo": {"name": req.name, "type": req.type}}
@@ -311,7 +298,7 @@ async def create_repo(req: CreateRepoRequest):
 @router.put("/{repo_name}")
 async def update_repo(repo_name: str, req: CreateRepoRequest):
     """Update an existing repository configuration."""
-    from ...config import get_forge_config, set_forge_config
+    from ...config import RepoConfig, get_forge_config
     
     cfg = get_forge_config()
     
@@ -325,8 +312,7 @@ async def update_repo(repo_name: str, req: CreateRepoRequest):
         raise HTTPException(status_code=400, detail=f"Repository '{req.name}' already exists")
     
     # Update repo config
-    repo_config_class = type(cfg.repos[repo_idx])
-    cfg.repos[repo_idx] = repo_config_class(
+    cfg.repos[repo_idx] = RepoConfig(
         name=req.name,
         type=req.type,
         url=req.url,
@@ -335,7 +321,7 @@ async def update_repo(repo_name: str, req: CreateRepoRequest):
         language=req.language or cfg.repos[repo_idx].language,
     )
     
-    set_forge_config(cfg)
+    await persist_runtime_config(cfg)
     await sync_repos_config()
     
     return {"status": "ok", "repo": {"name": req.name, "type": req.type}}
@@ -344,7 +330,7 @@ async def update_repo(repo_name: str, req: CreateRepoRequest):
 @router.delete("/{repo_name}")
 async def delete_repo(repo_name: str):
     """Remove a repository from the configuration."""
-    from ...config import get_forge_config, set_forge_config
+    from ...config import get_forge_config, get_settings
     import shutil
     from pathlib import Path
     
@@ -359,7 +345,7 @@ async def delete_repo(repo_name: str):
     
     # Remove from config
     cfg.repos.pop(repo_idx)
-    set_forge_config(cfg)
+    await persist_runtime_config(cfg)
     
     # Clean up cached repo data
     pool = await get_pool()
@@ -369,7 +355,7 @@ async def delete_repo(repo_name: str):
     
     # Try to remove cloned repo directory if it exists
     if repo.type in ('github', 'gitlab') and repo.url:
-        cache_dir = Path("/data/repos-cache") / repo_name
+        cache_dir = Path(get_settings().repos_cache_dir) / repo_name
         if cache_dir.exists():
             try:
                 shutil.rmtree(cache_dir)

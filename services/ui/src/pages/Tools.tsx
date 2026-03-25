@@ -48,20 +48,24 @@ function ToolCard({ tool }: { tool: Tool }) {
 
 function MCPConfigSnippet() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
+  const [selectedKey, setSelectedKey] = useState('codex')
   const snippets = [
     {
       key: 'claude',
       title: 'Claude Code',
+      summary: 'CLI add command for a local MCP HTTP endpoint.',
       value: 'claude mcp add --transport http context-forge http://localhost:4000/mcp',
     },
     {
       key: 'codex',
       title: 'Codex CLI',
-      value: 'codex mcp add --transport http context-forge http://localhost:4000/mcp',
+      summary: 'Current Codex syntax for streamable HTTP MCP servers.',
+      value: 'codex mcp add context-forge --url http://localhost:4000/mcp',
     },
     {
       key: 'opencode',
       title: 'OpenCode (opencode.json)',
+      summary: 'Drop this into your OpenCode config file.',
       value: `{
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
@@ -76,6 +80,7 @@ function MCPConfigSnippet() {
     {
       key: 'cursor',
       title: 'Cursor (.cursor/mcp.json)',
+      summary: 'Workspace-level MCP config for Cursor.',
       value: `{
   "mcpServers": {
     "context-forge": {
@@ -85,36 +90,75 @@ function MCPConfigSnippet() {
 }`,
     },
   ]
+  const selectedSnippet = snippets.find((snippet) => snippet.key === selectedKey) ?? snippets[0]
 
   return (
-    <div className="mb-8 p-4 bg-gray-900 border border-gray-800 rounded-xl">
-      <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wider">Quick Connect</p>
-      <div className="space-y-3">
-        {snippets.map((snippet) => (
-          <div key={snippet.key} className="space-y-1">
-            <p className="text-xs text-gray-400">{snippet.title}</p>
-            <div className="flex items-start gap-2">
-              <code className="flex-1 text-xs font-mono text-indigo-300 bg-gray-800 px-3 py-2 rounded-lg overflow-x-auto whitespace-pre">
-                {snippet.value}
-              </code>
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(snippet.value)
-                  setCopiedKey(snippet.key)
-                  setTimeout(() => setCopiedKey(null), 1500)
-                }}
-                className="flex-shrink-0 p-2 text-gray-500 hover:text-gray-300 bg-gray-800 rounded-lg transition-colors"
-                title={`Copy ${snippet.title} config`}
-              >
-                {copiedKey === snippet.key ? (
-                  <Check className="w-3.5 h-3.5 text-emerald-400" />
-                ) : (
-                  <Copy className="w-3.5 h-3.5" />
-                )}
-              </button>
-            </div>
-          </div>
-        ))}
+    <div className="mb-8 rounded-2xl border border-gray-800 bg-gradient-to-br from-gray-900 via-gray-900 to-gray-950 p-5">
+      <div className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-400">Quick Connect</p>
+          <h2 className="mt-1 text-lg font-semibold text-white">Connect your MCP client in one step</h2>
+          <p className="mt-1 text-sm text-gray-400">
+            Pick a client, copy the snippet, then point it to your local or remote `context-forge` MCP URL.
+          </p>
+        </div>
+        <div className="w-full lg:w-72">
+          <label className="mb-1 block text-xs font-medium uppercase tracking-wider text-gray-500">
+            Client
+          </label>
+          <select
+            value={selectedKey}
+            onChange={(e) => setSelectedKey(e.target.value)}
+            className="w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 outline-none transition-colors focus:border-cyan-500"
+          >
+            {snippets.map((snippet) => (
+              <option key={snippet.key} value={snippet.key}>
+                {snippet.title}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="mb-3 rounded-xl border border-gray-800 bg-gray-950/70 p-3">
+        <p className="text-sm font-medium text-white">{selectedSnippet.title}</p>
+        <p className="mt-1 text-xs leading-relaxed text-gray-400">{selectedSnippet.summary}</p>
+      </div>
+
+      <div className="flex items-start gap-2">
+        <code className="flex-1 overflow-x-auto whitespace-pre rounded-xl bg-gray-950 px-4 py-3 text-xs font-mono text-cyan-300">
+          {selectedSnippet.value}
+        </code>
+        <button
+          onClick={() => {
+            navigator.clipboard.writeText(selectedSnippet.value)
+            setCopiedKey(selectedSnippet.key)
+            setTimeout(() => setCopiedKey(null), 1500)
+          }}
+          className="flex-shrink-0 rounded-xl bg-gray-800 p-2.5 text-gray-500 transition-colors hover:text-gray-300"
+          title={`Copy ${selectedSnippet.title} config`}
+        >
+          {copiedKey === selectedSnippet.key ? (
+            <Check className="h-3.5 w-3.5 text-emerald-400" />
+          ) : (
+            <Copy className="h-3.5 w-3.5" />
+          )}
+        </button>
+      </div>
+
+      <div className="mt-4 grid gap-3 text-xs text-gray-400 lg:grid-cols-3">
+        <div className="rounded-xl border border-gray-800 bg-gray-950/60 p-3">
+          <p className="font-medium text-gray-200">Local default</p>
+          <p className="mt-1">Use `http://localhost:4000/mcp` when the stack runs on the same machine as the client.</p>
+        </div>
+        <div className="rounded-xl border border-gray-800 bg-gray-950/60 p-3">
+          <p className="font-medium text-gray-200">Remote server</p>
+          <p className="mt-1">Replace `localhost` with your server hostname or reverse proxy URL.</p>
+        </div>
+        <div className="rounded-xl border border-gray-800 bg-gray-950/60 p-3">
+          <p className="font-medium text-gray-200">Need auth?</p>
+          <p className="mt-1">If you later protect the MCP endpoint, keep the same client entry and add auth at the proxy layer.</p>
+        </div>
       </div>
     </div>
   )

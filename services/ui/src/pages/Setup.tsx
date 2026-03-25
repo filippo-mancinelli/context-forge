@@ -1,8 +1,13 @@
 import { useState } from 'react'
-import { ShieldCheck, Loader2, Plus, Trash2 } from 'lucide-react'
+import { Loader2, Plus, ShieldCheck, Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
 
-type SetupProps = { onCompleted: () => void }
+export type SetupMode = 'full' | 'admin'
+
+type SetupProps = {
+  mode: SetupMode
+  onCompleted: () => void
+}
 
 type RepoDraft = {
   name: string
@@ -13,7 +18,47 @@ type RepoDraft = {
   language: string
 }
 
-export default function Setup({ onCompleted }: SetupProps) {
+function Section({
+  title,
+  description,
+  children,
+}: {
+  title: string
+  description: string
+  children: React.ReactNode
+}) {
+  return (
+    <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+      <h2 className="text-sm font-medium text-white">{title}</h2>
+      <p className="mt-1 text-sm text-gray-400">{description}</p>
+      <div className="mt-4">{children}</div>
+    </section>
+  )
+}
+
+function TextInput({
+  value,
+  onChange,
+  placeholder,
+  type = 'text',
+}: {
+  value: string
+  onChange: (value: string) => void
+  placeholder: string
+  type?: string
+}) {
+  return (
+    <input
+      type={type}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-100 placeholder-gray-500"
+    />
+  )
+}
+
+export default function Setup({ mode, onCompleted }: SetupProps) {
   const [bootstrapToken, setBootstrapToken] = useState('')
   const [adminUsername, setAdminUsername] = useState('admin')
   const [adminPassword, setAdminPassword] = useState('')
@@ -43,7 +88,7 @@ export default function Setup({ onCompleted }: SetupProps) {
   const [error, setError] = useState<string | null>(null)
 
   const addRepo = () =>
-    setRepos(prev => [
+    setRepos((prev) => [
       ...prev,
       { name: '', type: 'local', path: '', url: '', branch: 'main', language: 'auto' },
     ])
@@ -52,49 +97,54 @@ export default function Setup({ onCompleted }: SetupProps) {
     setSaving(true)
     setError(null)
     try {
-      const forgeConfig = {
-        repos: repos
-          .filter(r => r.name.trim())
-          .map(r => ({
-            name: r.name.trim(),
-            type: r.type,
-            ...(r.type === 'local' ? { path: r.path.trim() } : { url: r.url.trim() }),
-            branch: r.branch.trim() || 'main',
-            language: r.language.trim() || 'auto',
-          })),
-        memory: { user_id: memoryUserId.trim() || 'default' },
-        indexing: {
-          auto: indexingAuto,
-          schedule: indexingSchedule.trim() || '0 */6 * * *',
-          exclude: indexingExclude
-            .split('\n')
-            .map(s => s.trim())
-            .filter(Boolean),
-          max_file_size_kb: indexingMaxSize,
-          chunk_size: indexingChunkSize,
-          chunk_overlap: indexingChunkOverlap,
-        },
-      }
-      const settingsOverrides = {
-        llm_provider: llmProvider,
-        llm_model: llmModel,
-        embeddings_provider: embeddingsProvider,
-        embeddings_model: embeddingsModel,
-        embeddings_dims: embeddingsDims,
-        openai_api_key: openAiKey.trim(),
-        anthropic_api_key: anthropicKey.trim(),
-        deepseek_api_key: deepseekKey.trim(),
-        embeddings_api_key: embeddingsApiKey.trim(),
-        embeddings_base_url: embeddingsBaseUrl.trim(),
-        github_token: githubToken.trim(),
-        gitlab_token: gitlabToken.trim(),
-      }
+      const payload =
+        mode === 'full'
+          ? {
+              forge_config: {
+                repos: repos
+                  .filter((repo) => repo.name.trim())
+                  .map((repo) => ({
+                    name: repo.name.trim(),
+                    type: repo.type,
+                    ...(repo.type === 'local' ? { path: repo.path.trim() } : { url: repo.url.trim() }),
+                    branch: repo.branch.trim() || 'main',
+                    language: repo.language.trim() || 'auto',
+                  })),
+                memory: { user_id: memoryUserId.trim() || 'default' },
+                indexing: {
+                  auto: indexingAuto,
+                  schedule: indexingSchedule.trim() || '0 */6 * * *',
+                  exclude: indexingExclude
+                    .split('\n')
+                    .map((entry) => entry.trim())
+                    .filter(Boolean),
+                  max_file_size_kb: indexingMaxSize,
+                  chunk_size: indexingChunkSize,
+                  chunk_overlap: indexingChunkOverlap,
+                },
+              },
+              settings_overrides: {
+                llm_provider: llmProvider,
+                llm_model: llmModel,
+                embeddings_provider: embeddingsProvider,
+                embeddings_model: embeddingsModel,
+                embeddings_dims: embeddingsDims,
+                openai_api_key: openAiKey.trim(),
+                anthropic_api_key: anthropicKey.trim(),
+                deepseek_api_key: deepseekKey.trim(),
+                embeddings_api_key: embeddingsApiKey.trim(),
+                embeddings_base_url: embeddingsBaseUrl.trim(),
+                github_token: githubToken.trim(),
+                gitlab_token: gitlabToken.trim(),
+              },
+            }
+          : {}
+
       await api.setup.init({
         bootstrap_token: bootstrapToken.trim(),
         admin_username: adminUsername.trim(),
         admin_password: adminPassword,
-        forge_config: forgeConfig,
-        settings_overrides: settingsOverrides,
+        ...payload,
       })
       onCompleted()
     } catch (e) {
@@ -105,111 +155,203 @@ export default function Setup({ onCompleted }: SetupProps) {
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 p-8">
-      <div className="max-w-4xl mx-auto bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-5">
-        <div>
-          <h1 className="text-xl font-semibold text-white inline-flex items-center gap-2">
-            <ShieldCheck className="w-5 h-5 text-indigo-400" />
-            First-time Setup
-          </h1>
-          <p className="text-sm text-gray-500 mt-1">Configure admin access, providers, tokens and repositories with guided fields.</p>
-        </div>
-
-        {error && <div className="p-3 text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg">{error}</div>}
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <input
-            value={bootstrapToken}
-            onChange={e => setBootstrapToken(e.target.value)}
-            placeholder="SETUP_BOOTSTRAP_TOKEN"
-            className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg"
-          />
-          <input
-            value={adminUsername}
-            onChange={e => setAdminUsername(e.target.value)}
-            placeholder="Admin username"
-            className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg"
-          />
-          <input
-            type="password"
-            value={adminPassword}
-            onChange={e => setAdminPassword(e.target.value)}
-            placeholder="Admin password"
-            className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg"
-          />
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <input value={memoryUserId} onChange={e => setMemoryUserId(e.target.value)} placeholder="Memory user id" className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg" />
-          <input value={indexingSchedule} onChange={e => setIndexingSchedule(e.target.value)} placeholder="Indexing schedule (cron)" className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg" />
-          <label className="inline-flex items-center gap-2 text-sm text-gray-300">
-            <input type="checkbox" checked={indexingAuto} onChange={e => setIndexingAuto(e.target.checked)} />
-            Auto indexing
-          </label>
-          <input type="number" value={indexingMaxSize} onChange={e => setIndexingMaxSize(Number(e.target.value))} placeholder="Max file size KB" className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg" />
-          <input type="number" value={indexingChunkSize} onChange={e => setIndexingChunkSize(Number(e.target.value))} placeholder="Chunk size" className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg" />
-          <input type="number" value={indexingChunkOverlap} onChange={e => setIndexingChunkOverlap(Number(e.target.value))} placeholder="Chunk overlap" className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg" />
-        </div>
-
-        <div>
-          <p className="text-xs text-gray-500 mb-1">Exclude patterns (one per line)</p>
-          <textarea value={indexingExclude} onChange={e => setIndexingExclude(e.target.value)} rows={5} className="w-full px-3 py-2 text-xs font-mono bg-gray-950 border border-gray-700 rounded-lg" />
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <input value={llmProvider} onChange={e => setLlmProvider(e.target.value)} placeholder="LLM provider" className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg" />
-          <input value={llmModel} onChange={e => setLlmModel(e.target.value)} placeholder="LLM model" className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg" />
-          <input value={embeddingsProvider} onChange={e => setEmbeddingsProvider(e.target.value)} placeholder="Embeddings provider" className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg" />
-          <input value={embeddingsModel} onChange={e => setEmbeddingsModel(e.target.value)} placeholder="Embeddings model" className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg" />
-          <input type="number" value={embeddingsDims} onChange={e => setEmbeddingsDims(Number(e.target.value))} placeholder="Embeddings dims" className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg" />
-          <input value={embeddingsBaseUrl} onChange={e => setEmbeddingsBaseUrl(e.target.value)} placeholder="Embeddings base URL (optional)" className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg" />
-          <input value={openAiKey} onChange={e => setOpenAiKey(e.target.value)} placeholder="OPENAI_API_KEY" className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg" />
-          <input value={anthropicKey} onChange={e => setAnthropicKey(e.target.value)} placeholder="ANTHROPIC_API_KEY" className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg" />
-          <input value={deepseekKey} onChange={e => setDeepseekKey(e.target.value)} placeholder="DEEPSEEK_API_KEY" className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg" />
-          <input value={embeddingsApiKey} onChange={e => setEmbeddingsApiKey(e.target.value)} placeholder="EMBEDDINGS_API_KEY" className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg" />
-          <input value={githubToken} onChange={e => setGithubToken(e.target.value)} placeholder="GITHUB_TOKEN" className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg" />
-          <input value={gitlabToken} onChange={e => setGitlabToken(e.target.value)} placeholder="GITLAB_TOKEN" className="px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg" />
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-sm text-gray-300">Repositories</p>
-            <button onClick={addRepo} type="button" className="inline-flex items-center gap-1 text-xs text-indigo-300 hover:text-indigo-200">
-              <Plus className="w-3.5 h-3.5" />
-              Add repo
-            </button>
+    <div className="min-h-screen bg-gray-950 px-6 py-8 text-gray-100">
+      <div className="mx-auto max-w-5xl space-y-6">
+        <div className="rounded-2xl border border-gray-800 bg-gradient-to-br from-gray-900 via-gray-900 to-gray-950 p-6">
+          <div className="flex items-center gap-3">
+            <ShieldCheck className="h-6 w-6 text-cyan-400" />
+            <div>
+              <h1 className="text-xl font-semibold text-white">
+                {mode === 'full' ? 'First-time Runtime Setup' : 'Finish Admin Setup'}
+              </h1>
+              <p className="mt-1 text-sm text-gray-400">
+                {mode === 'full'
+                  ? 'Bootstrap context-forge once, then manage runtime configuration from the web UI.'
+                  : 'Bootstrap configuration is already available. Create the admin account to activate the runtime-first control plane.'}
+              </p>
+            </div>
           </div>
-          <div className="space-y-2">
-            {repos.map((repo, index) => (
-              <div key={index} className="grid grid-cols-1 md:grid-cols-7 gap-2 p-2 border border-gray-800 rounded-lg">
-                <input value={repo.name} onChange={e => setRepos(prev => prev.map((r, i) => (i === index ? { ...r, name: e.target.value } : r)))} placeholder="name" className="px-2 py-1.5 text-xs bg-gray-950 border border-gray-700 rounded" />
-                <select value={repo.type} onChange={e => setRepos(prev => prev.map((r, i) => (i === index ? { ...r, type: e.target.value as RepoDraft['type'] } : r)))} className="px-2 py-1.5 text-xs bg-gray-950 border border-gray-700 rounded">
-                  <option value="local">local</option>
-                  <option value="github">github</option>
-                  <option value="gitlab">gitlab</option>
-                </select>
-                <input value={repo.type === 'local' ? repo.path : repo.url} onChange={e => setRepos(prev => prev.map((r, i) => (i === index ? (r.type === 'local' ? { ...r, path: e.target.value } : { ...r, url: e.target.value }) : r)))} placeholder={repo.type === 'local' ? 'path' : 'url'} className="px-2 py-1.5 text-xs bg-gray-950 border border-gray-700 rounded md:col-span-2" />
-                <input value={repo.branch} onChange={e => setRepos(prev => prev.map((r, i) => (i === index ? { ...r, branch: e.target.value } : r)))} placeholder="branch" className="px-2 py-1.5 text-xs bg-gray-950 border border-gray-700 rounded" />
-                <input value={repo.language} onChange={e => setRepos(prev => prev.map((r, i) => (i === index ? { ...r, language: e.target.value } : r)))} placeholder="language" className="px-2 py-1.5 text-xs bg-gray-950 border border-gray-700 rounded" />
-                <button onClick={() => setRepos(prev => prev.filter((_, i) => i !== index))} type="button" className="inline-flex items-center justify-center text-red-300 hover:text-red-200">
-                  <Trash2 className="w-4 h-4" />
+        </div>
+
+        {error && (
+          <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-300">
+            {error}
+          </div>
+        )}
+
+        <Section
+          title="Admin Access"
+          description="The bootstrap token authorizes setup on remote servers. The admin account is used for the web UI."
+        >
+          <div className="grid gap-3 md:grid-cols-3">
+            <TextInput value={bootstrapToken} onChange={setBootstrapToken} placeholder="SETUP_BOOTSTRAP_TOKEN" />
+            <TextInput value={adminUsername} onChange={setAdminUsername} placeholder="Admin username" />
+            <TextInput value={adminPassword} onChange={setAdminPassword} placeholder="Admin password" type="password" />
+          </div>
+        </Section>
+
+        {mode === 'full' && (
+          <>
+            <Section
+              title="Runtime Defaults"
+              description="These values seed the initial runtime configuration. After setup they can be changed from Settings."
+            >
+              <div className="grid gap-3 md:grid-cols-2">
+                <TextInput value={memoryUserId} onChange={setMemoryUserId} placeholder="Memory user id" />
+                <TextInput value={indexingSchedule} onChange={setIndexingSchedule} placeholder="Indexing schedule (cron)" />
+                <label className="inline-flex items-center gap-2 rounded-lg border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-gray-300">
+                  <input type="checkbox" checked={indexingAuto} onChange={(e) => setIndexingAuto(e.target.checked)} />
+                  Auto indexing
+                </label>
+                <div className="grid gap-3 md:grid-cols-3 md:col-span-2">
+                  <input
+                    type="number"
+                    value={indexingMaxSize}
+                    onChange={(e) => setIndexingMaxSize(Number(e.target.value))}
+                    placeholder="Max file size KB"
+                    className="rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-100"
+                  />
+                  <input
+                    type="number"
+                    value={indexingChunkSize}
+                    onChange={(e) => setIndexingChunkSize(Number(e.target.value))}
+                    placeholder="Chunk size"
+                    className="rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-100"
+                  />
+                  <input
+                    type="number"
+                    value={indexingChunkOverlap}
+                    onChange={(e) => setIndexingChunkOverlap(Number(e.target.value))}
+                    placeholder="Chunk overlap"
+                    className="rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-100"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-4">
+                <p className="mb-2 text-xs text-gray-500">Exclude patterns (one glob per line)</p>
+                <textarea
+                  value={indexingExclude}
+                  onChange={(e) => setIndexingExclude(e.target.value)}
+                  rows={6}
+                  className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 font-mono text-xs text-gray-200"
+                />
+              </div>
+            </Section>
+
+            <Section
+              title="Providers and Tokens"
+              description="Configure runtime providers now, or leave fields empty and update them later from Settings."
+            >
+              <div className="grid gap-3 md:grid-cols-3">
+                <TextInput value={llmProvider} onChange={setLlmProvider} placeholder="LLM provider" />
+                <TextInput value={llmModel} onChange={setLlmModel} placeholder="LLM model" />
+                <TextInput value={embeddingsProvider} onChange={setEmbeddingsProvider} placeholder="Embeddings provider" />
+                <TextInput value={embeddingsModel} onChange={setEmbeddingsModel} placeholder="Embeddings model" />
+                <input
+                  type="number"
+                  value={embeddingsDims}
+                  onChange={(e) => setEmbeddingsDims(Number(e.target.value))}
+                  placeholder="Embeddings dims"
+                  className="rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-100"
+                />
+                <TextInput value={embeddingsBaseUrl} onChange={setEmbeddingsBaseUrl} placeholder="Embeddings base URL (optional)" />
+                <TextInput value={openAiKey} onChange={setOpenAiKey} placeholder="OPENAI_API_KEY" />
+                <TextInput value={anthropicKey} onChange={setAnthropicKey} placeholder="ANTHROPIC_API_KEY" />
+                <TextInput value={deepseekKey} onChange={setDeepseekKey} placeholder="DEEPSEEK_API_KEY" />
+                <TextInput value={embeddingsApiKey} onChange={setEmbeddingsApiKey} placeholder="EMBEDDINGS_API_KEY" />
+                <TextInput value={githubToken} onChange={setGithubToken} placeholder="GITHUB_TOKEN" />
+                <TextInput value={gitlabToken} onChange={setGitlabToken} placeholder="GITLAB_TOKEN" />
+              </div>
+            </Section>
+
+            <Section
+              title="Initial Repositories"
+              description="Optional. Add repositories now, or manage them later from the Repositories page after login."
+            >
+              <div className="mb-3 flex items-center justify-between">
+                <p className="text-sm text-gray-400">Repositories are stored in runtime config after setup.</p>
+                <button
+                  type="button"
+                  onClick={addRepo}
+                  className="inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-3 py-2 text-sm font-medium text-white"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add repo
                 </button>
               </div>
-            ))}
-            {repos.length === 0 && <p className="text-xs text-gray-500">No repositories added yet.</p>}
-          </div>
-        </div>
 
-        <button
-          onClick={handleSubmit}
-          disabled={saving || !bootstrapToken || !adminUsername || !adminPassword}
-          className="px-4 py-2 text-sm text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg disabled:opacity-50 inline-flex items-center gap-2"
-        >
-          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-          Complete setup
-        </button>
+              <div className="space-y-3">
+                {repos.map((repo, index) => (
+                  <div key={index} className="grid gap-3 rounded-xl border border-gray-800 bg-gray-950/80 p-3 md:grid-cols-7">
+                    <TextInput
+                      value={repo.name}
+                      onChange={(value) => setRepos((prev) => prev.map((entry, i) => (i === index ? { ...entry, name: value } : entry)))}
+                      placeholder="name"
+                    />
+                    <select
+                      value={repo.type}
+                      onChange={(e) =>
+                        setRepos((prev) => prev.map((entry, i) => (i === index ? { ...entry, type: e.target.value as RepoDraft['type'] } : entry)))
+                      }
+                      className="rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-100"
+                    >
+                      <option value="local">local</option>
+                      <option value="github">github</option>
+                      <option value="gitlab">gitlab</option>
+                    </select>
+                    <input
+                      value={repo.type === 'local' ? repo.path : repo.url}
+                      onChange={(e) =>
+                        setRepos((prev) =>
+                          prev.map((entry, i) =>
+                            i === index
+                              ? entry.type === 'local'
+                                ? { ...entry, path: e.target.value }
+                                : { ...entry, url: e.target.value }
+                              : entry
+                          )
+                        )
+                      }
+                      placeholder={repo.type === 'local' ? '/repos/project' : 'https://provider/owner/repo'}
+                      className="rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-100 md:col-span-2"
+                    />
+                    <TextInput
+                      value={repo.branch}
+                      onChange={(value) => setRepos((prev) => prev.map((entry, i) => (i === index ? { ...entry, branch: value } : entry)))}
+                      placeholder="branch"
+                    />
+                    <TextInput
+                      value={repo.language}
+                      onChange={(value) => setRepos((prev) => prev.map((entry, i) => (i === index ? { ...entry, language: value } : entry)))}
+                      placeholder="language"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setRepos((prev) => prev.filter((_, i) => i !== index))}
+                      className="inline-flex items-center justify-center rounded-lg border border-rose-500/20 bg-rose-500/10 text-rose-300"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+                {repos.length === 0 && <p className="text-sm text-gray-500">No repositories queued for setup.</p>}
+              </div>
+            </Section>
+          </>
+        )}
+
+        <div className="flex justify-end">
+          <button
+            onClick={handleSubmit}
+            disabled={saving || !bootstrapToken || !adminUsername || !adminPassword}
+            className="inline-flex items-center gap-2 rounded-xl bg-cyan-600 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
+          >
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            {mode === 'full' ? 'Complete setup' : 'Create admin account'}
+          </button>
+        </div>
       </div>
     </div>
   )
 }
-

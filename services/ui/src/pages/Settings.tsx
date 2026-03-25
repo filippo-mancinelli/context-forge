@@ -1,12 +1,26 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Loader2, Save, SlidersHorizontal, Key, Database, GitBranch, Settings2,
-  Plus, Trash2, Edit2, X, Check, Github, AlertCircle, RefreshCw,
-  ExternalLink, HardDrive, GitlabIcon
+  AlertCircle,
+  Check,
+  Database,
+  GitBranch,
+  Github,
+  GitlabIcon,
+  HardDrive,
+  Key,
+  Loader2,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Save,
+  Settings2,
+  SlidersHorizontal,
+  Trash2,
 } from 'lucide-react'
-import { api, type Repo, type GitHubRepo, type RepoCreateRequest } from '../lib/api'
+import { Link } from 'react-router-dom'
+import { api, type Repo, type RepoCreateRequest } from '../lib/api'
 
-type Tab = 'repos' | 'api-keys' | 'embeddings' | 'advanced'
+type Tab = 'repositories' | 'access' | 'models' | 'runtime'
 
 interface SettingsData {
   forge_config: {
@@ -37,839 +51,619 @@ interface SettingsData {
   }
 }
 
-// --- Components ---
-
-function Input({
+function Field({
   label,
-  value,
-  onChange,
-  type = 'text',
-  placeholder = '',
-  disabled = false,
+  children,
 }: {
   label: string
-  value: string
-  onChange: (v: string) => void
-  type?: string
-  placeholder?: string
-  disabled?: boolean
+  children: React.ReactNode
 }) {
   return (
-    <div className="mb-4">
-      <label className="block text-xs font-medium text-gray-400 mb-1.5">{label}</label>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        disabled={disabled}
-        className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 
-                   placeholder-gray-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500
-                   disabled:opacity-50 disabled:cursor-not-allowed"
-      />
-    </div>
+    <label className="block">
+      <span className="mb-1.5 block text-xs font-medium uppercase tracking-wider text-gray-500">{label}</span>
+      {children}
+    </label>
+  )
+}
+
+function Input({
+  value,
+  onChange,
+  placeholder,
+  type = 'text',
+}: {
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+  type?: string
+}) {
+  return (
+    <input
+      type={type}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className="w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-2.5 text-sm text-gray-100 placeholder-gray-500 outline-none transition-colors focus:border-cyan-500"
+    />
   )
 }
 
 function Select({
-  label,
   value,
   onChange,
   options,
 }: {
-  label: string
   value: string
-  onChange: (v: string) => void
+  onChange: (value: string) => void
   options: { value: string; label: string }[]
 }) {
   return (
-    <div className="mb-4">
-      <label className="block text-xs font-medium text-gray-400 mb-1.5">{label}</label>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 
-                   focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-      >
-        {options.map((opt) => (
-          <option key={opt.value} value={opt.value}>
-            {opt.label}
-          </option>
-        ))}
-      </select>
-    </div>
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-2.5 text-sm text-gray-100 outline-none transition-colors focus:border-cyan-500"
+    >
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
   )
 }
 
 function Toggle({
-  label,
   checked,
   onChange,
 }: {
-  label: string
   checked: boolean
-  onChange: (v: boolean) => void
+  onChange: (value: boolean) => void
 }) {
   return (
-    <div className="flex items-center justify-between mb-4">
-      <span className="text-sm text-gray-300">{label}</span>
-      <button
-        onClick={() => onChange(!checked)}
-        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-          checked ? 'bg-indigo-600' : 'bg-gray-700'
-        }`}
-      >
-        <span
-          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-            checked ? 'translate-x-5' : 'translate-x-1'
-          }`}
-        />
-      </button>
-    </div>
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${checked ? 'bg-cyan-600' : 'bg-gray-700'}`}
+    >
+      <span
+        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${checked ? 'translate-x-6' : 'translate-x-1'}`}
+      />
+    </button>
   )
 }
 
-// --- Repo Editor Modal ---
+function SecretInput({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string
+  value?: string
+  onChange: (value: string) => void
+  placeholder: string
+}) {
+  const [visible, setVisible] = useState(false)
+  return (
+    <Field label={label}>
+      <div className="relative">
+        <Input
+          value={value || ''}
+          onChange={onChange}
+          placeholder={placeholder}
+          type={visible ? 'text' : 'password'}
+        />
+        <button
+          type="button"
+          onClick={() => setVisible((current) => !current)}
+          className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-300"
+        >
+          {visible ? 'Hide' : 'Show'}
+        </button>
+      </div>
+    </Field>
+  )
+}
+
+function RepoTypeIcon({ type }: { type: Repo['type'] }) {
+  if (type === 'github') return <Github className="h-4 w-4 text-gray-400" />
+  if (type === 'gitlab') return <GitlabIcon className="h-4 w-4 text-orange-400" />
+  return <HardDrive className="h-4 w-4 text-gray-500" />
+}
 
 function RepoModal({
   repo,
-  onSave,
   onClose,
+  onSave,
 }: {
   repo?: Repo
-  onSave: (r: RepoCreateRequest) => void
   onClose: () => void
+  onSave: (value: RepoCreateRequest) => void
 }) {
   const [name, setName] = useState(repo?.name || '')
-  const [type, setType] = useState<'local' | 'github' | 'gitlab'>(repo?.type || 'github')
+  const [type, setType] = useState<Repo['type']>(repo?.type || 'local')
   const [url, setUrl] = useState(repo?.url || '')
   const [path, setPath] = useState(repo?.path || '')
   const [branch, setBranch] = useState(repo?.branch || 'main')
   const [language, setLanguage] = useState(repo?.language || 'auto')
 
-  const handleSave = () => {
-    onSave({
-      name,
-      type,
-      url: url || undefined,
-      path: path || undefined,
-      branch,
-      language,
-    })
-  }
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="w-full max-w-md bg-gray-900 border border-gray-800 rounded-xl shadow-2xl p-6">
-        <div className="flex items-center justify-between mb-5">
-          <h3 className="text-lg font-semibold text-white">
-            {repo ? 'Edit Repository' : 'Add Repository'}
-          </h3>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300">
-            <X className="w-5 h-5" />
-          </button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-xl rounded-2xl border border-gray-800 bg-gray-950 p-6 shadow-2xl">
+        <h3 className="text-lg font-semibold text-white">{repo ? 'Edit repository' : 'Add repository'}</h3>
+        <p className="mt-1 text-sm text-gray-400">Manual repository entries are saved directly to runtime config.</p>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          <Field label="Name">
+            <Input value={name} onChange={setName} placeholder="my-repo" />
+          </Field>
+          <Field label="Type">
+            <Select
+              value={type}
+              onChange={(value) => setType(value as Repo['type'])}
+              options={[
+                { value: 'local', label: 'Local' },
+                { value: 'github', label: 'GitHub' },
+                { value: 'gitlab', label: 'GitLab' },
+              ]}
+            />
+          </Field>
+          {type === 'local' ? (
+            <div className="md:col-span-2">
+              <Field label="Local path">
+                <Input value={path} onChange={setPath} placeholder="/repos/project" />
+              </Field>
+            </div>
+          ) : (
+            <div className="md:col-span-2">
+              <Field label="Repository URL">
+                <Input value={url} onChange={setUrl} placeholder={`https://${type}.com/owner/repo`} />
+              </Field>
+            </div>
+          )}
+          <Field label="Branch">
+            <Input value={branch} onChange={setBranch} placeholder="main" />
+          </Field>
+          <Field label="Language">
+            <Input value={language} onChange={setLanguage} placeholder="auto" />
+          </Field>
         </div>
 
-        <Input label="Name" value={name} onChange={setName} placeholder="my-repo" />
-
-        <div className="mb-4">
-          <label className="block text-xs font-medium text-gray-400 mb-1.5">Type</label>
-          <div className="flex gap-2">
-            {(['github', 'gitlab', 'local'] as const).map((t) => (
-              <button
-                key={t}
-                onClick={() => setType(t)}
-                className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm capitalize transition-colors ${
-                  type === t
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                }`}
-              >
-                {t === 'github' && <Github className="w-4 h-4" />}
-                {t === 'gitlab' && <GitlabIcon className="w-4 h-4" />}
-                {t === 'local' && <HardDrive className="w-4 h-4" />}
-                {t}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {type !== 'local' ? (
-          <Input
-            label="Repository URL"
-            value={url}
-            onChange={setUrl}
-            placeholder={type === 'github' ? 'https://github.com/owner/repo' : 'https://gitlab.com/owner/repo'}
-          />
-        ) : (
-          <Input
-            label="Local Path (container path)"
-            value={path}
-            onChange={setPath}
-            placeholder="/repos/my-project"
-          />
-        )}
-
-        <div className="grid grid-cols-2 gap-4">
-          <Input label="Branch" value={branch} onChange={setBranch} placeholder="main" />
-          <Input label="Language" value={language} onChange={setLanguage} placeholder="auto" />
-        </div>
-
-        <div className="flex gap-3 mt-6">
+        <div className="mt-6 flex justify-end gap-3">
           <button
+            type="button"
             onClick={onClose}
-            className="flex-1 px-4 py-2 text-sm text-gray-300 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
+            className="rounded-xl border border-gray-700 bg-gray-900 px-4 py-2 text-sm text-gray-300"
           >
             Cancel
           </button>
           <button
-            onClick={handleSave}
-            disabled={!name || (!url && !path)}
-            className="flex-1 px-4 py-2 text-sm text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors disabled:opacity-50"
+            type="button"
+            onClick={() =>
+              onSave({
+                name,
+                type,
+                url: url || undefined,
+                path: path || undefined,
+                branch,
+                language,
+              })
+            }
+            disabled={!name || (type === 'local' ? !path : !url)}
+            className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
           >
-            {repo ? 'Update' : 'Add'}
+            {repo ? 'Save changes' : 'Add repository'}
           </button>
         </div>
       </div>
     </div>
   )
 }
-
-// --- GitHub Browser Modal ---
-
-function GitHubBrowserModal({
-  onAdd,
-  onClose,
-}: {
-  onAdd: (repo: GitHubRepo) => void
-  onClose: () => void
-}) {
-  const [repos, setRepos] = useState<GitHubRepo[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [adding, setAdding] = useState<number | null>(null)
-
-  useEffect(() => {
-    loadRepos()
-  }, [])
-
-  const loadRepos = async () => {
-    try {
-      setLoading(true)
-      const data = await api.github.listRepos()
-      setRepos(data)
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleSearch = async () => {
-    if (!searchQuery.trim()) {
-      loadRepos()
-      return
-    }
-    try {
-      setLoading(true)
-      const data = await api.github.searchRepos(searchQuery)
-      setRepos(data.repos)
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleAdd = async (repo: GitHubRepo) => {
-    setAdding(repo.id)
-    try {
-      await api.github.addRepo(repo.full_name, repo.default_branch)
-      onAdd(repo)
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setAdding(null)
-    }
-  }
-
-  const filteredRepos = repos.filter(
-    (r) =>
-      r.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      r.full_name.toLowerCase().includes(searchQuery.toLowerCase())
-  )
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="w-full max-w-2xl bg-gray-900 border border-gray-800 rounded-xl shadow-2xl flex flex-col max-h-[80vh]">
-        <div className="flex items-center justify-between p-5 border-b border-gray-800">
-          <div>
-            <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-              <Github className="w-5 h-5" />
-              Import from GitHub
-            </h3>
-            <p className="text-xs text-gray-500 mt-0.5">Select repositories to add to context-forge</p>
-          </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-300">
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        <div className="p-4 border-b border-gray-800">
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search repositories..."
-              className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-200 
-                       placeholder-gray-500 focus:outline-none focus:border-indigo-500"
-              onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-            />
-            <button
-              onClick={handleSearch}
-              disabled={loading}
-              className="px-4 py-2 text-sm text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors disabled:opacity-50"
-            >
-              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Search'}
-            </button>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-auto p-2">
-          {loading ? (
-            <div className="flex items-center justify-center py-12 text-gray-500">
-              <Loader2 className="w-5 h-5 animate-spin mr-2" />
-              Loading repositories...
-            </div>
-          ) : error ? (
-            <div className="flex items-center gap-2 p-4 text-sm text-red-400 bg-red-500/10 rounded-lg m-2">
-              <AlertCircle className="w-4 h-4" />
-              {error}
-            </div>
-          ) : filteredRepos.length === 0 ? (
-            <div className="text-center py-12 text-gray-500">
-              <Github className="w-10 h-10 mx-auto mb-3 opacity-40" />
-              <p className="text-sm">No repositories found</p>
-            </div>
-          ) : (
-            <div className="space-y-1">
-              {filteredRepos.map((repo) => (
-                <div
-                  key={repo.id}
-                  className="flex items-center gap-4 p-3 hover:bg-gray-800/50 rounded-lg group"
-                >
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-white truncate">{repo.full_name}</span>
-                      {repo.private && (
-                        <span className="px-1.5 py-0.5 text-[10px] bg-yellow-500/20 text-yellow-400 rounded">
-                          Private
-                        </span>
-                      )}
-                      {repo.fork && (
-                        <span className="px-1.5 py-0.5 text-[10px] bg-gray-700 text-gray-400 rounded">
-                          Fork
-                        </span>
-                      )}
-                    </div>
-                    {repo.description && (
-                      <p className="text-xs text-gray-500 truncate mt-0.5">{repo.description}</p>
-                    )}
-                    <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-500">
-                      {repo.language && <span>{repo.language}</span>}
-                      <span>★ {repo.stargazers_count.toLocaleString()}</span>
-                      <span className="text-gray-600">default: {repo.default_branch}</span>
-                    </div>
-                  </div>
-                  <a
-                    href={repo.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="p-2 text-gray-500 hover:text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity"
-                    title="View on GitHub"
-                  >
-                    <ExternalLink className="w-4 h-4" />
-                  </a>
-                  <button
-                    onClick={() => handleAdd(repo)}
-                    disabled={adding === repo.id}
-                    className="px-3 py-1.5 text-xs text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors disabled:opacity-50"
-                  >
-                    {adding === repo.id ? (
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <Plus className="w-3.5 h-3.5" />
-                    )}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// --- Repositories Tab ---
 
 function RepositoriesTab({
   repos,
-  onReposChange,
+  onReload,
 }: {
   repos: Repo[]
-  onReposChange: () => void
+  onReload: () => void
 }) {
   const [editingRepo, setEditingRepo] = useState<Repo | undefined>()
   const [showAddModal, setShowAddModal] = useState(false)
-  const [showGitHubModal, setShowGitHubModal] = useState(false)
-  const [deleting, setDeleting] = useState<string | null>(null)
-  const [indexing, setIndexing] = useState<string | null>(null)
+  const [deletingRepo, setDeletingRepo] = useState<string | null>(null)
+  const [indexingRepo, setIndexingRepo] = useState<string | null>(null)
 
-  const handleSave = async (data: RepoCreateRequest) => {
+  const handleSave = async (payload: RepoCreateRequest) => {
     try {
       if (editingRepo) {
-        await api.repos.update(editingRepo.name, data)
+        await api.repos.update(editingRepo.name, payload)
       } else {
-        await api.repos.create(data)
+        await api.repos.create(payload)
       }
       setEditingRepo(undefined)
       setShowAddModal(false)
-      onReposChange()
+      onReload()
     } catch (e) {
-      alert(String(e))
+      window.alert(String(e))
     }
   }
 
-  const handleDelete = async (name: string) => {
-    if (!confirm(`Delete repository "${name}"?`)) return
-    setDeleting(name)
+  const handleDelete = async (repoName: string) => {
+    if (!window.confirm(`Remove repository "${repoName}" from runtime config?`)) return
+    setDeletingRepo(repoName)
     try {
-      await api.repos.delete(name)
-      onReposChange()
+      await api.repos.delete(repoName)
+      onReload()
     } catch (e) {
-      alert(String(e))
+      window.alert(String(e))
     } finally {
-      setDeleting(null)
+      setDeletingRepo(null)
     }
   }
 
-  const handleIndex = async (name: string) => {
-    setIndexing(name)
+  const handleIndex = async (repoName: string) => {
+    setIndexingRepo(repoName)
     try {
-      await api.repos.index(name)
-      onReposChange()
+      await api.repos.index(repoName)
+      onReload()
     } catch (e) {
-      alert(String(e))
+      window.alert(String(e))
     } finally {
-      setIndexing(null)
+      setIndexingRepo(null)
     }
-  }
-
-  const handleGitHubAdd = (repo: GitHubRepo) => {
-    onReposChange()
-    setShowGitHubModal(false)
   }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-5">
-        <h3 className="text-sm font-medium text-gray-400">Configured Repositories</h3>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setShowGitHubModal(true)}
-            className="inline-flex items-center gap-2 px-3 py-1.5 text-sm text-white bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
-          >
-            <Github className="w-4 h-4" />
-            Import from GitHub
-          </button>
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="inline-flex items-center gap-2 px-3 py-1.5 text-sm text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            Add Repository
-          </button>
+    <div className="space-y-5">
+      <div className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-400">Runtime Repositories</p>
+            <h2 className="mt-1 text-lg font-semibold text-white">Edit manual entries, import remotes from Repositories</h2>
+            <p className="mt-1 text-sm text-gray-400">
+              Local paths and manual URLs can be managed here. GitHub and GitLab browsing lives on the main Repositories page.
+            </p>
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <Link
+              to="/repos"
+              className="inline-flex items-center justify-center rounded-xl border border-gray-700 bg-gray-950 px-4 py-2.5 text-sm text-gray-300 transition-colors hover:bg-gray-900"
+            >
+              Open Repositories home
+            </Link>
+            <button
+              type="button"
+              onClick={() => setShowAddModal(true)}
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-600 px-4 py-2.5 text-sm font-medium text-white"
+            >
+              <Plus className="h-4 w-4" />
+              Add manual repository
+            </button>
+          </div>
         </div>
       </div>
 
       {repos.length === 0 ? (
-        <div className="text-center py-12 bg-gray-900/50 rounded-xl border border-gray-800 border-dashed">
-          <GitBranch className="w-10 h-10 mx-auto mb-3 text-gray-600" />
-          <p className="text-sm text-gray-500">No repositories configured</p>
-          <p className="text-xs text-gray-600 mt-1">Add a repository to get started</p>
+        <div className="rounded-2xl border border-dashed border-gray-800 bg-gray-900/40 p-12 text-center text-gray-500">
+          No repositories configured yet.
         </div>
       ) : (
-        <div className="space-y-2">
-          {repos.map((repo) => (
-            <div
-              key={repo.name}
-              className="flex items-center gap-4 p-4 bg-gray-900 rounded-lg border border-gray-800"
-            >
-              <div className="flex-shrink-0">
-                {repo.type === 'github' && <Github className="w-5 h-5 text-gray-400" />}
-                {repo.type === 'gitlab' && <GitlabIcon className="w-5 h-5 text-orange-400" />}
-                {repo.type === 'local' && <HardDrive className="w-5 h-5 text-gray-500" />}
-              </div>
-
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium text-white">{repo.name}</span>
-                  <span className="px-1.5 py-0.5 text-[10px] bg-gray-800 text-gray-400 rounded">
-                    {repo.type}
-                  </span>
-                  <span
-                    className={`px-1.5 py-0.5 text-[10px] rounded ${
-                      repo.status === 'indexed'
-                        ? 'bg-emerald-500/20 text-emerald-400'
-                        : repo.status === 'indexing'
-                        ? 'bg-indigo-500/20 text-indigo-400'
-                        : repo.status === 'error'
-                        ? 'bg-red-500/20 text-red-400'
-                        : 'bg-yellow-500/20 text-yellow-400'
-                    }`}
-                  >
+        <div className="overflow-hidden rounded-2xl border border-gray-800 bg-gray-900/60">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-800 text-left text-xs uppercase tracking-wider text-gray-500">
+                <th className="px-5 py-3 font-medium">Repository</th>
+                <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium">Source</th>
+                <th className="px-4 py-3"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-800">
+              {repos.map((repo) => (
+                <tr key={repo.name} className="hover:bg-gray-800/30">
+                  <td className="px-5 py-4">
+                    <div className="flex items-center gap-3">
+                      <RepoTypeIcon type={repo.type} />
+                      <div>
+                        <p className="font-medium text-white">{repo.name}</p>
+                        <p className="font-mono text-xs text-gray-500">{repo.url || repo.path || '-'}</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="px-4 py-4 text-xs text-gray-400">
                     {repo.status}
-                  </span>
-                </div>
-                <div className="text-xs text-gray-500 mt-0.5 truncate">
-                  {repo.url || repo.path}
-                  {repo.branch && ` • ${repo.branch}`}
-                  {repo.total_chunks > 0 && ` • ${repo.total_chunks.toLocaleString()} chunks`}
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => handleIndex(repo.name)}
-                  disabled={indexing === repo.name || repo.status === 'indexing'}
-                  className="p-2 text-gray-500 hover:text-indigo-400 hover:bg-indigo-500/10 rounded-lg transition-colors disabled:opacity-50"
-                  title="Re-index"
-                >
-                  <RefreshCw className={`w-4 h-4 ${indexing === repo.name ? 'animate-spin' : ''}`} />
-                </button>
-                <button
-                  onClick={() => setEditingRepo(repo)}
-                  className="p-2 text-gray-500 hover:text-gray-300 hover:bg-gray-800 rounded-lg transition-colors"
-                  title="Edit"
-                >
-                  <Edit2 className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => handleDelete(repo.name)}
-                  disabled={deleting === repo.name}
-                  className="p-2 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors disabled:opacity-50"
-                  title="Delete"
-                >
-                  {deleting === repo.name ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Trash2 className="w-4 h-4" />
-                  )}
-                </button>
-              </div>
-            </div>
-          ))}
+                    {repo.total_chunks > 0 ? ` - ${repo.total_chunks.toLocaleString()} chunks` : ''}
+                  </td>
+                  <td className="px-4 py-4 text-xs text-gray-500">{repo.branch}</td>
+                  <td className="px-4 py-4 text-right">
+                    <div className="inline-flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleIndex(repo.name)}
+                        disabled={indexingRepo === repo.name || repo.status === 'indexing'}
+                        className="rounded-lg border border-gray-700 bg-gray-950 px-3 py-1.5 text-xs text-gray-300 disabled:opacity-50"
+                      >
+                        {indexingRepo === repo.name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingRepo(repo)}
+                        className="rounded-lg border border-gray-700 bg-gray-950 px-3 py-1.5 text-xs text-gray-300"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(repo.name)}
+                        disabled={deletingRepo === repo.name}
+                        className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-xs text-rose-300 disabled:opacity-50"
+                      >
+                        {deletingRepo === repo.name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
       {(showAddModal || editingRepo) && (
-        <RepoModal repo={editingRepo} onSave={handleSave} onClose={() => {
-          setShowAddModal(false)
-          setEditingRepo(undefined)
-        }} />
-      )}
-
-      {showGitHubModal && (
-        <GitHubBrowserModal onAdd={handleGitHubAdd} onClose={() => setShowGitHubModal(false)} />
+        <RepoModal
+          repo={editingRepo}
+          onClose={() => {
+            setShowAddModal(false)
+            setEditingRepo(undefined)
+          }}
+          onSave={handleSave}
+        />
       )}
     </div>
   )
 }
 
-// --- API Keys Tab ---
-
-function ApiKeysTab({
+function AccessTab({
   settings,
   onChange,
 }: {
   settings: SettingsData['settings_overrides']
-  onChange: (k: keyof SettingsData['settings_overrides'], v: string) => void
+  onChange: (key: keyof SettingsData['settings_overrides'], value: string) => void
 }) {
-  const [showKeys, setShowKeys] = useState<Record<string, boolean>>({})
-
-  const toggleKey = (key: string) => {
-    setShowKeys((prev) => ({ ...prev, [key]: !prev[key] }))
-  }
-
-  const maskValue = (value?: string) => {
-    if (!value) return ''
-    if (value.length <= 8) return '••••••••'
-    return value.slice(0, 4) + '••••••••••••' + value.slice(-4)
-  }
-
-  const KeyInput = ({
-    label,
-    value,
-    onChange,
-    placeholder,
-  }: {
-    label: string
-    value?: string
-    onChange: (v: string) => void
-    placeholder?: string
-  }) => {
-    const keyName = label.toLowerCase().replace(/\s+/g, '_')
-    return (
-      <div className="mb-4">
-        <label className="block text-xs font-medium text-gray-400 mb-1.5">{label}</label>
-        <div className="relative">
-          <input
-            type={showKeys[keyName] ? 'text' : 'password'}
-            value={value || ''}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder={placeholder}
-            className="w-full px-3 py-2 pr-10 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-200 
-                     placeholder-gray-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-          />
-          <button
-            onClick={() => toggleKey(keyName)}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-300"
-          >
-            {showKeys[keyName] ? 'Hide' : 'Show'}
-          </button>
-        </div>
-      </div>
-    )
-  }
-
   return (
-    <div>
-      <h3 className="text-sm font-medium text-gray-400 mb-5">API Keys & Tokens</h3>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="p-4 bg-gray-900 rounded-lg border border-gray-800">
-          <h4 className="text-sm font-medium text-white mb-4 flex items-center gap-2">
-            <Database className="w-4 h-4 text-indigo-400" />
-            LLM Providers
-          </h4>
-          <KeyInput
-            label="OpenAI API Key"
-            value={settings.openai_api_key}
-            onChange={(v) => onChange('openai_api_key', v)}
-            placeholder="sk-..."
-          />
-          <KeyInput
-            label="Anthropic API Key"
-            value={settings.anthropic_api_key}
-            onChange={(v) => onChange('anthropic_api_key', v)}
-            placeholder="sk-ant-..."
-          />
-          <KeyInput
-            label="DeepSeek API Key"
-            value={settings.deepseek_api_key}
-            onChange={(v) => onChange('deepseek_api_key', v)}
-            placeholder="..."
-          />
+    <div className="grid gap-6 lg:grid-cols-2">
+      <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+        <h2 className="text-sm font-medium text-white">LLM providers</h2>
+        <p className="mt-1 text-sm text-gray-400">Used by the memory pipeline and by providers that need their own API keys.</p>
+        <div className="mt-4 space-y-4">
+          <SecretInput label="OpenAI API key" value={settings.openai_api_key} onChange={(value) => onChange('openai_api_key', value)} placeholder="sk-..." />
+          <SecretInput label="Anthropic API key" value={settings.anthropic_api_key} onChange={(value) => onChange('anthropic_api_key', value)} placeholder="sk-ant-..." />
+          <SecretInput label="DeepSeek API key" value={settings.deepseek_api_key} onChange={(value) => onChange('deepseek_api_key', value)} placeholder="..." />
         </div>
+      </section>
 
-        <div className="p-4 bg-gray-900 rounded-lg border border-gray-800">
-          <h4 className="text-sm font-medium text-white mb-4 flex items-center gap-2">
-            <GitBranch className="w-4 h-4 text-indigo-400" />
-            Git Providers
-          </h4>
-          <KeyInput
-            label="GitHub Token"
-            value={settings.github_token}
-            onChange={(v) => onChange('github_token', v)}
-            placeholder="ghp_..."
-          />
-          <KeyInput
-            label="GitLab Token"
-            value={settings.gitlab_token}
-            onChange={(v) => onChange('gitlab_token', v)}
-            placeholder="glpat-..."
-          />
+      <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+        <h2 className="text-sm font-medium text-white">Git provider tokens</h2>
+        <p className="mt-1 text-sm text-gray-400">These tokens power GitHub and GitLab browsing on the Repositories page.</p>
+        <div className="mt-4 space-y-4">
+          <SecretInput label="GitHub token" value={settings.github_token} onChange={(value) => onChange('github_token', value)} placeholder="ghp_..." />
+          <SecretInput label="GitLab token" value={settings.gitlab_token} onChange={(value) => onChange('gitlab_token', value)} placeholder="glpat-..." />
         </div>
-      </div>
+      </section>
     </div>
   )
 }
 
-// --- Embeddings Tab ---
-
-function EmbeddingsTab({
+function ModelsTab({
   settings,
   onChange,
+  embeddingRisk,
 }: {
   settings: SettingsData['settings_overrides']
-  onChange: (k: keyof SettingsData['settings_overrides'], v: string | number) => void
+  onChange: (key: keyof SettingsData['settings_overrides'], value: string | number) => void
+  embeddingRisk: { changed: boolean; dimsChanged: boolean }
 }) {
   return (
-    <div>
-      <h3 className="text-sm font-medium text-gray-400 mb-5">Embeddings Configuration</h3>
+    <div className="space-y-5">
+      <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/10 p-5">
+        <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-300">Runtime-first control plane</p>
+        <p className="mt-2 text-sm text-white">
+          Use this page as the primary place to change providers, models, tokens, indexing behavior, and repositories after bootstrap.
+        </p>
+      </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="p-4 bg-gray-900 rounded-lg border border-gray-800">
-          <Select
-            label="Provider"
-            value={settings.embeddings_provider || 'openai'}
-            onChange={(v) => onChange('embeddings_provider', v)}
-            options={[
-              { value: 'openai', label: 'OpenAI' },
-              { value: 'jina', label: 'Jina' },
-              { value: 'openai-compatible', label: 'OpenAI Compatible' },
-              { value: 'local', label: 'Local (sentence-transformers)' },
-            ]}
-          />
-
-          <Input
-            label="Model"
-            value={settings.embeddings_model || ''}
-            onChange={(v) => onChange('embeddings_model', v)}
-            placeholder="text-embedding-3-small"
-          />
-
-          <Input
-            label="Dimensions"
-            value={String(settings.embeddings_dims || 1536)}
-            onChange={(v) => onChange('embeddings_dims', parseInt(v) || 1536)}
-            type="number"
-          />
+      {embeddingRisk.changed && (
+        <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-5 text-sm text-amber-100">
+          <p className="font-medium text-amber-300">Embedding changes need follow-up work</p>
+          <p className="mt-2">
+            Changing the embeddings provider or model requires re-indexing repositories so semantic search uses the new vectors.
+          </p>
+          {embeddingRisk.dimsChanged && (
+            <p className="mt-2">
+              Changing embedding dimensions is more invasive: reset vector-backed data, restart the stack, and then re-index repositories before relying on search or memory.
+            </p>
+          )}
         </div>
+      )}
 
-        <div className="p-4 bg-gray-900 rounded-lg border border-gray-800">
-          <Input
-            label="API Key (optional)"
-            value={settings.embeddings_api_key || ''}
-            onChange={(v) => onChange('embeddings_api_key', v)}
-            placeholder="Leave empty to use provider key"
-          />
-
-          <Input
-            label="Base URL (optional)"
-            value={settings.embeddings_base_url || ''}
-            onChange={(v) => onChange('embeddings_base_url', v)}
-            placeholder="https://api.openai.com/v1"
-          />
-
-          <div className="mt-4 p-3 bg-gray-800/50 rounded-lg">
-            <p className="text-xs text-gray-500">
-              <strong className="text-gray-400">LLM Provider:</strong>{' '}
-              {settings.llm_provider || 'openai'}
-            </p>
-            <p className="text-xs text-gray-500 mt-1">
-              <strong className="text-gray-400">LLM Model:</strong>{' '}
-              {settings.llm_model || 'gpt-4o-mini'}
-            </p>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+          <h2 className="text-sm font-medium text-white">Memory LLM</h2>
+          <div className="mt-4 space-y-4">
+            <Field label="LLM provider">
+              <Select
+                value={settings.llm_provider || 'openai'}
+                onChange={(value) => onChange('llm_provider', value)}
+                options={[
+                  { value: 'openai', label: 'OpenAI' },
+                  { value: 'anthropic', label: 'Anthropic' },
+                  { value: 'deepseek', label: 'DeepSeek' },
+                ]}
+              />
+            </Field>
+            <Field label="LLM model">
+              <Input value={settings.llm_model || ''} onChange={(value) => onChange('llm_model', value)} placeholder="gpt-4o-mini" />
+            </Field>
           </div>
-        </div>
+        </section>
+
+        <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+          <h2 className="text-sm font-medium text-white">Embeddings</h2>
+          <div className="mt-4 space-y-4">
+            <Field label="Provider">
+              <Select
+                value={settings.embeddings_provider || 'openai'}
+                onChange={(value) => onChange('embeddings_provider', value)}
+                options={[
+                  { value: 'openai', label: 'OpenAI' },
+                  { value: 'jina', label: 'Jina' },
+                  { value: 'openai-compatible', label: 'OpenAI compatible' },
+                  { value: 'local', label: 'Local' },
+                ]}
+              />
+            </Field>
+            <Field label="Model">
+              <Input value={settings.embeddings_model || ''} onChange={(value) => onChange('embeddings_model', value)} placeholder="text-embedding-3-small" />
+            </Field>
+            <Field label="Dimensions">
+              <Input
+                type="number"
+                value={String(settings.embeddings_dims || 1536)}
+                onChange={(value) => onChange('embeddings_dims', parseInt(value, 10) || 1536)}
+              />
+            </Field>
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+          <h2 className="text-sm font-medium text-white">Embedder connection</h2>
+          <div className="mt-4 space-y-4">
+            <SecretInput
+              label="Dedicated embeddings key"
+              value={settings.embeddings_api_key}
+              onChange={(value) => onChange('embeddings_api_key', value)}
+              placeholder="Leave empty to reuse provider key"
+            />
+            <Field label="OpenAI-compatible base URL">
+              <Input
+                value={settings.embeddings_base_url || ''}
+                onChange={(value) => onChange('embeddings_base_url', value)}
+                placeholder="https://api.openai.com/v1"
+              />
+            </Field>
+          </div>
+        </section>
       </div>
     </div>
   )
 }
 
-// --- Advanced Tab ---
-
-function AdvancedTab({
+function RuntimeTab({
   config,
   onChange,
 }: {
   config: SettingsData['forge_config']
   onChange: (path: string, value: unknown) => void
 }) {
-  const [excludes, setExcludes] = useState(config.indexing.exclude.join('\n'))
+  const [excludeText, setExcludeText] = useState(config.indexing.exclude.join('\n'))
 
-  const handleExcludesChange = (value: string) => {
-    setExcludes(value)
-    onChange('indexing.exclude', value.split('\n').filter((s) => s.trim()))
-  }
+  useEffect(() => {
+    setExcludeText(config.indexing.exclude.join('\n'))
+  }, [config.indexing.exclude])
 
   return (
-    <div>
-      <h3 className="text-sm font-medium text-gray-400 mb-5">Advanced Configuration</h3>
-
-      <div className="space-y-6">
-        <div className="p-4 bg-gray-900 rounded-lg border border-gray-800">
-          <h4 className="text-sm font-medium text-white mb-4">Indexing Settings</h4>
-
-          <Toggle
-            label="Auto-indexing"
-            checked={config.indexing.auto}
-            onChange={(v) => onChange('indexing.auto', v)}
-          />
-
-          <Input
-            label="Schedule (cron expression)"
-            value={config.indexing.schedule}
-            onChange={(v) => onChange('indexing.schedule', v)}
-            placeholder="0 */6 * * *"
-          />
-
-          <div className="grid grid-cols-3 gap-4">
+    <div className="space-y-6">
+      <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+        <h2 className="text-sm font-medium text-white">Indexing</h2>
+        <div className="mt-4 grid gap-4 lg:grid-cols-3">
+          <div className="flex items-center justify-between rounded-xl border border-gray-800 bg-gray-950/70 px-4 py-3 lg:col-span-3">
+            <div>
+              <p className="text-sm text-white">Auto indexing</p>
+              <p className="text-xs text-gray-500">Use the configured schedule to re-index automatically.</p>
+            </div>
+            <Toggle checked={config.indexing.auto} onChange={(value) => onChange('indexing.auto', value)} />
+          </div>
+          <Field label="Schedule">
+            <Input value={config.indexing.schedule} onChange={(value) => onChange('indexing.schedule', value)} placeholder="0 */6 * * *" />
+          </Field>
+          <Field label="Max file size (KB)">
             <Input
-              label="Max file size (KB)"
+              type="number"
               value={String(config.indexing.max_file_size_kb)}
-              onChange={(v) => onChange('indexing.max_file_size_kb', parseInt(v) || 500)}
-              type="number"
+              onChange={(value) => onChange('indexing.max_file_size_kb', parseInt(value, 10) || 500)}
             />
+          </Field>
+          <Field label="Chunk size">
             <Input
-              label="Chunk size"
+              type="number"
               value={String(config.indexing.chunk_size)}
-              onChange={(v) => onChange('indexing.chunk_size', parseInt(v) || 400)}
-              type="number"
+              onChange={(value) => onChange('indexing.chunk_size', parseInt(value, 10) || 400)}
             />
+          </Field>
+          <Field label="Chunk overlap">
             <Input
-              label="Chunk overlap"
-              value={String(config.indexing.chunk_overlap)}
-              onChange={(v) => onChange('indexing.chunk_overlap', parseInt(v) || 50)}
               type="number"
+              value={String(config.indexing.chunk_overlap)}
+              onChange={(value) => onChange('indexing.chunk_overlap', parseInt(value, 10) || 50)}
             />
+          </Field>
+          <div className="lg:col-span-3">
+            <Field label="Exclude patterns">
+              <textarea
+                value={excludeText}
+                onChange={(e) => {
+                  setExcludeText(e.target.value)
+                  onChange(
+                    'indexing.exclude',
+                    e.target.value
+                      .split('\n')
+                      .map((entry) => entry.trim())
+                      .filter(Boolean)
+                  )
+                }}
+                rows={8}
+                className="w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-2.5 font-mono text-xs text-gray-200 outline-none transition-colors focus:border-cyan-500"
+              />
+            </Field>
           </div>
         </div>
+      </section>
 
-        <div className="p-4 bg-gray-900 rounded-lg border border-gray-800">
-          <h4 className="text-sm font-medium text-white mb-4">Exclusion Patterns</h4>
-          <p className="text-xs text-gray-500 mb-2">One pattern per line (glob syntax)</p>
-          <textarea
-            value={excludes}
-            onChange={(e) => handleExcludesChange(e.target.value)}
-            rows={10}
-            className="w-full px-3 py-2 text-xs font-mono bg-gray-800 border border-gray-700 rounded-lg text-gray-300
-                     placeholder-gray-600 focus:outline-none focus:border-indigo-500"
-          />
+      <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+        <h2 className="text-sm font-medium text-white">Memory defaults</h2>
+        <div className="mt-4 max-w-sm">
+          <Field label="Default user id">
+            <Input value={config.memory.user_id} onChange={(value) => onChange('memory.user_id', value)} placeholder="default" />
+          </Field>
         </div>
-
-        <div className="p-4 bg-gray-900 rounded-lg border border-gray-800">
-          <h4 className="text-sm font-medium text-white mb-4">Memory Settings</h4>
-          <Input
-            label="User ID"
-            value={config.memory.user_id}
-            onChange={(v) => onChange('memory.user_id', v)}
-            placeholder="default"
-          />
-        </div>
-      </div>
+      </section>
     </div>
   )
 }
 
-// --- Main Settings Component ---
+function getEmbeddingSignature(settings: SettingsData['settings_overrides']) {
+  return {
+    provider: settings.embeddings_provider || 'openai',
+    model: settings.embeddings_model || 'text-embedding-3-small',
+    dims: settings.embeddings_dims || 1536,
+  }
+}
 
 export default function Settings() {
-  const [activeTab, setActiveTab] = useState<Tab>('repos')
+  const [activeTab, setActiveTab] = useState<Tab>('repositories')
   const [data, setData] = useState<SettingsData | null>(null)
+  const [baselineEmbeddingSignature, setBaselineEmbeddingSignature] = useState<ReturnType<typeof getEmbeddingSignature> | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [warnings, setWarnings] = useState<string[]>([])
 
   const load = useCallback(async () => {
     try {
-      const d = await api.settings.get()
-      setData(d as SettingsData)
+      const next = (await api.settings.get()) as SettingsData
+      setData(next)
+      setBaselineEmbeddingSignature(getEmbeddingSignature(next.settings_overrides))
+      setError(null)
     } catch (e) {
       setError(String(e))
     } finally {
@@ -881,23 +675,18 @@ export default function Settings() {
     load()
   }, [load])
 
-  const handleSave = async () => {
-    if (!data) return
-    setSaving(true)
-    setError(null)
-    setSuccess(null)
-    try {
-      await api.settings.update({
-        forge_config: data.forge_config,
-        settings_overrides: data.settings_overrides,
-      })
-      setSuccess('Settings saved successfully')
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setSaving(false)
+  const embeddingRisk = useMemo(() => {
+    if (!data || !baselineEmbeddingSignature) {
+      return { changed: false, dimsChanged: false }
     }
-  }
+    const current = getEmbeddingSignature(data.settings_overrides)
+    const dimsChanged = current.dims !== baselineEmbeddingSignature.dims
+    const changed =
+      dimsChanged ||
+      current.provider !== baselineEmbeddingSignature.provider ||
+      current.model !== baselineEmbeddingSignature.model
+    return { changed, dimsChanged }
+  }, [baselineEmbeddingSignature, data])
 
   const updateSettingsOverride = (key: keyof SettingsData['settings_overrides'], value: unknown) => {
     if (!data) return
@@ -909,117 +698,166 @@ export default function Settings() {
 
   const updateForgeConfig = (path: string, value: unknown) => {
     if (!data) return
-    const parts = path.split('.')
-    const newConfig = { ...data.forge_config }
-    let current: Record<string, unknown> = newConfig
-    for (let i = 0; i < parts.length - 1; i++) {
-      current[parts[i]] = { ...(current[parts[i]] as Record<string, unknown>) }
-      current = current[parts[i]] as Record<string, unknown>
+    const segments = path.split('.')
+    const nextConfig = { ...data.forge_config } as Record<string, unknown>
+    let current: Record<string, unknown> = nextConfig
+    for (let index = 0; index < segments.length - 1; index += 1) {
+      current[segments[index]] = { ...(current[segments[index]] as Record<string, unknown>) }
+      current = current[segments[index]] as Record<string, unknown>
     }
-    current[parts[parts.length - 1]] = value
-    setData({ ...data, forge_config: newConfig as SettingsData['forge_config'] })
+    current[segments[segments.length - 1]] = value
+    setData({ ...data, forge_config: nextConfig as SettingsData['forge_config'] })
+  }
+
+  const handleSave = async () => {
+    if (!data) return
+    if (
+      embeddingRisk.dimsChanged &&
+      !window.confirm(
+        'Changing embedding dimensions requires resetting vector-backed data and re-indexing repositories. Save anyway?'
+      )
+    ) {
+      return
+    }
+
+    setSaving(true)
+    setError(null)
+    setSuccess(null)
+    setWarnings([])
+    try {
+      const result = await api.settings.update({
+        forge_config: data.forge_config,
+        settings_overrides: data.settings_overrides,
+      })
+      setBaselineEmbeddingSignature(getEmbeddingSignature(data.settings_overrides))
+      setSuccess('Runtime settings saved successfully.')
+      setWarnings(result.warnings)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSaving(false)
+    }
   }
 
   const tabs: { id: Tab; label: string; icon: typeof GitBranch }[] = [
-    { id: 'repos', label: 'Repositories', icon: GitBranch },
-    { id: 'api-keys', label: 'API Keys', icon: Key },
-    { id: 'embeddings', label: 'Embeddings', icon: Database },
-    { id: 'advanced', label: 'Advanced', icon: Settings2 },
+    { id: 'repositories', label: 'Repositories', icon: GitBranch },
+    { id: 'access', label: 'API keys', icon: Key },
+    { id: 'models', label: 'Models', icon: Database },
+    { id: 'runtime', label: 'Runtime', icon: Settings2 },
   ]
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
-        <Loader2 className="w-6 h-6 animate-spin text-indigo-500" />
+      <div className="flex min-h-screen items-center justify-center bg-gray-950 text-gray-400">
+        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+        Loading settings...
       </div>
     )
   }
 
   if (!data) {
     return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center text-red-400">
-        Failed to load settings
+      <div className="flex min-h-screen items-center justify-center bg-gray-950 text-rose-400">
+        Unable to load runtime settings.
       </div>
     )
   }
 
   return (
     <div className="min-h-screen bg-gray-950">
-      <div className="max-w-6xl mx-auto p-8">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
+      <div className="mx-auto max-w-6xl p-8">
+        <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold text-white flex items-center gap-3">
-              <SlidersHorizontal className="w-6 h-6 text-indigo-400" />
-              Settings
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-400">Settings</p>
+            <h1 className="mt-1 flex items-center gap-3 text-2xl font-semibold text-white">
+              <SlidersHorizontal className="h-6 w-6 text-cyan-400" />
+              Runtime configuration
             </h1>
-            <p className="text-sm text-gray-500 mt-1">
-              Manage repositories, API keys, and application configuration
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-gray-400">
+              After bootstrap, this page is the primary control plane for providers, tokens, indexing behavior, and manual repository entries.
             </p>
           </div>
           <button
+            type="button"
             onClick={handleSave}
             disabled={saving}
-            className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-white 
-                     bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors disabled:opacity-50"
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-600 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
           >
-            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-            Save Changes
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            Save runtime settings
           </button>
         </div>
 
-        {/* Alerts */}
+        <div className="mb-6 grid gap-4 lg:grid-cols-3">
+          <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/10 p-4">
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-300">Primary source of truth</p>
+            <p className="mt-2 text-sm text-white">Runtime configuration in Postgres now drives the app.</p>
+            <p className="mt-1 text-xs leading-relaxed text-cyan-100/80">Use files for bootstrap, recovery, and legacy import only.</p>
+          </div>
+          <div className="rounded-2xl border border-gray-800 bg-gray-900/70 p-4">
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Remote-friendly</p>
+            <p className="mt-2 text-sm text-white">Providers and tokens can be changed from the UI.</p>
+            <p className="mt-1 text-xs leading-relaxed text-gray-400">No shell edits are required for day-to-day remote administration.</p>
+          </div>
+          <div className="rounded-2xl border border-gray-800 bg-gray-900/70 p-4">
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Repositories first</p>
+            <p className="mt-2 text-sm text-white">The main Repositories page is now the operational landing page.</p>
+            <p className="mt-1 text-xs leading-relaxed text-gray-400">Use it for GitHub and GitLab browsing, indexing, and daily repo operations.</p>
+          </div>
+        </div>
+
         {error && (
-          <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-xl flex items-center gap-3 text-red-400">
-            <AlertCircle className="w-5 h-5" />
-            <span className="text-sm">{error}</span>
+          <div className="mb-4 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-300">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="h-4 w-4" />
+              {error}
+            </div>
           </div>
         )}
         {success && (
-          <div className="mb-6 p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-xl flex items-center gap-3 text-emerald-400">
-            <Check className="w-5 h-5" />
-            <span className="text-sm">{success}</span>
+          <div className="mb-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-300">
+            <div className="flex items-center gap-2">
+              <Check className="h-4 w-4" />
+              {success}
+            </div>
+          </div>
+        )}
+        {warnings.length > 0 && (
+          <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
+            {warnings.map((warning) => (
+              <p key={warning}>{warning}</p>
+            ))}
           </div>
         )}
 
-        {/* Tabs */}
-        <div className="flex gap-1 p-1 bg-gray-900 rounded-xl border border-gray-800 mb-6">
+        <div className="mb-6 flex flex-wrap gap-2 rounded-2xl border border-gray-800 bg-gray-900/70 p-2">
           {tabs.map((tab) => {
             const Icon = tab.icon
             return (
               <button
                 key={tab.id}
+                type="button"
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-all ${
+                className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm transition-colors ${
                   activeTab === tab.id
-                    ? 'bg-indigo-600 text-white'
-                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
+                    ? 'bg-cyan-600 text-white'
+                    : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
                 }`}
               >
-                <Icon className="w-4 h-4" />
+                <Icon className="h-4 w-4" />
                 {tab.label}
               </button>
             )
           })}
         </div>
 
-        {/* Content */}
-        <div className="bg-gray-900/50 rounded-xl border border-gray-800 p-6">
-          {activeTab === 'repos' && (
-            <RepositoriesTab
-              repos={data.forge_config.repos}
-              onReposChange={load}
-            />
+        <div className="rounded-2xl border border-gray-800 bg-gray-900/40 p-6">
+          {activeTab === 'repositories' && <RepositoriesTab repos={data.forge_config.repos} onReload={load} />}
+          {activeTab === 'access' && <AccessTab settings={data.settings_overrides} onChange={updateSettingsOverride} />}
+          {activeTab === 'models' && (
+            <ModelsTab settings={data.settings_overrides} onChange={updateSettingsOverride} embeddingRisk={embeddingRisk} />
           )}
-          {activeTab === 'api-keys' && (
-            <ApiKeysTab settings={data.settings_overrides} onChange={updateSettingsOverride} />
-          )}
-          {activeTab === 'embeddings' && (
-            <EmbeddingsTab settings={data.settings_overrides} onChange={updateSettingsOverride} />
-          )}
-          {activeTab === 'advanced' && (
-            <AdvancedTab config={data.forge_config} onChange={updateForgeConfig} />
-          )}
+          {activeTab === 'runtime' && <RuntimeTab config={data.forge_config} onChange={updateForgeConfig} />}
         </div>
       </div>
     </div>

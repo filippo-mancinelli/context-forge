@@ -1,8 +1,8 @@
 """context-forge server entry point.
 
 Starts two servers concurrently:
-  - FastMCP on port 4000 (/mcp) — MCP HTTP endpoint for AI agents
-  - FastAPI on port 8000 (/api) — REST API for the Web UI
+  - FastMCP on port 4000 (/mcp) - MCP HTTP endpoint for AI agents
+  - FastAPI on port 8000 (/api) - REST API for the Web UI
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 async def main() -> None:
     from .config import get_settings
     from .db import init_db, close_db
-    from .runtime_state import load_runtime_state
+    from .runtime_state import ensure_runtime_state
     from .scheduler import start_scheduler, stop_scheduler, initial_index
 
     # Import tool modules so they register on the mcp instance
@@ -36,7 +36,7 @@ async def main() -> None:
     # Initialize DB
     logger.info("Initializing database...")
     await init_db()
-    await load_runtime_state()
+    await ensure_runtime_state()
 
     # Initial indexing (background)
     logger.info("Starting initial repo sync...")

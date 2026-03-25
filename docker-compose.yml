@@ -39,6 +39,7 @@ services:
       - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - GITLAB_TOKEN=${GITLAB_TOKEN:-}
+      - SETUP_BOOTSTRAP_TOKEN=${SETUP_BOOTSTRAP_TOKEN:-}
       - MCP_PORT=4000
       - API_PORT=8000
       - REPOS_CACHE_DIR=/data/repos-cache
