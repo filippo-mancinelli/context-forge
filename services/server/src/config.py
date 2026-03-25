@@ -1,6 +1,8 @@
 """Configuration loader for context-forge.
 
-Reads settings from environment variables and context-forge.yml.
+Runtime configuration stored in the database is the primary source of truth.
+Environment variables and ``context-forge.yml`` are used for bootstrap defaults,
+legacy import, and infrastructure-only settings.
 """
 from __future__ import annotations
 
@@ -80,6 +82,34 @@ _settings: Optional[Settings] = None
 _forge_config: Optional[ForgeConfig] = None
 _runtime_forge_config: Optional[ForgeConfig] = None
 _runtime_settings_overrides: dict = {}
+RUNTIME_OVERRIDE_FIELDS = (
+    "openai_api_key",
+    "anthropic_api_key",
+    "deepseek_api_key",
+    "embeddings_provider",
+    "embeddings_model",
+    "embeddings_dims",
+    "embeddings_api_key",
+    "embeddings_base_url",
+    "llm_provider",
+    "llm_model",
+    "github_token",
+    "gitlab_token",
+)
+DEFAULT_RUNTIME_OVERRIDE_VALUES = {
+    "openai_api_key": "",
+    "anthropic_api_key": "",
+    "deepseek_api_key": "",
+    "embeddings_provider": "openai",
+    "embeddings_model": "text-embedding-3-small",
+    "embeddings_dims": 1536,
+    "embeddings_api_key": "",
+    "embeddings_base_url": "",
+    "llm_provider": "openai",
+    "llm_model": "gpt-4o-mini",
+    "github_token": "",
+    "gitlab_token": "",
+}
 
 
 def get_settings() -> Settings:
@@ -116,7 +146,7 @@ def reload_forge_config() -> ForgeConfig:
 
 
 def set_forge_config(config: ForgeConfig) -> None:
-    """Save forge config to disk and update runtime config."""
+    """Write bootstrap config to disk and mirror it in memory."""
     global _forge_config, _runtime_forge_config
     _forge_config = config
     _runtime_forge_config = config
@@ -139,6 +169,35 @@ def clear_runtime_config() -> None:
     global _runtime_forge_config, _runtime_settings_overrides
     _runtime_forge_config = None
     _runtime_settings_overrides = {}
+
+
+def get_runtime_settings_overrides() -> dict[str, object]:
+    """Return the currently effective runtime-overridable settings."""
+    settings = get_settings()
+    return {field: getattr(settings, field) for field in RUNTIME_OVERRIDE_FIELDS}
+
+
+def get_non_default_runtime_settings_overrides() -> dict[str, object]:
+    """Return runtime-overridable settings that differ from built-in defaults."""
+    current = get_runtime_settings_overrides()
+    return {
+        field: value
+        for field, value in current.items()
+        if value != DEFAULT_RUNTIME_OVERRIDE_VALUES[field]
+    }
+
+
+def has_file_forge_config() -> bool:
+    """Return whether the bootstrap YAML file exists."""
+    settings = get_settings()
+    return Path(settings.config_path).exists()
+
+
+def has_meaningful_file_forge_config() -> bool:
+    """Return whether the bootstrap YAML contains non-default configuration."""
+    if not has_file_forge_config():
+        return False
+    return _load_forge_config() != ForgeConfig()
 
 
 def _load_forge_config() -> ForgeConfig:

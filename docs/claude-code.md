@@ -1,64 +1,49 @@
 # Connecting Claude Code to context-forge
 
-## One-Command Setup
+## Before connecting
+
+1. Start the stack with `docker compose up -d`
+2. Open `http://localhost:3000`
+3. Finish setup with `SETUP_BOOTSTRAP_TOKEN`
+4. Verify `http://localhost:4000/mcp` is reachable
+
+## One-command setup
 
 ```bash
 claude mcp add --transport http context-forge http://localhost:4000/mcp
 ```
 
-That's it. Verify with:
+## Verify
 
 ```bash
 claude mcp list
 ```
 
-## Manual Setup
+Then ask Claude Code which MCP tools are available.
 
-Add to `~/.claude.json` (create if it doesn't exist):
+## Project instructions
 
-```json
-{
-  "mcpServers": {
-    "context-forge": {
-      "transport": "http",
-      "url": "http://localhost:4000/mcp"
-    }
-  }
-}
-```
-
-## Project-Level Instructions
-
-Copy the system prompt template to any project you work on:
+Claude Code reads `CLAUDE.md` from the project root.
 
 ```bash
 cp templates/CLAUDE.md /path/to/your/project/CLAUDE.md
 ```
 
-Claude Code automatically reads `CLAUDE.md` from the project root as instructions.
-
-## Verifying the Connection
-
-In Claude Code, run:
-
-```
-> What MCP tools do you have available?
-```
-
-You should see tools like `memory_add`, `repo_search`, `job_submit`, etc.
-
-## Remote Server (VPS)
-
-If context-forge runs on a remote server, replace `localhost` with the server address:
+## Remote server
 
 ```bash
-claude mcp add --transport http context-forge http://your-server.com:4000/mcp
+claude mcp add --transport http context-forge http://your-server.example.com:4000/mcp
 ```
 
-Or use an SSH tunnel for security:
+If you want a safer remote path, use an SSH tunnel:
 
 ```bash
-ssh -L 4000:localhost:4000 user@your-server.com
-# then:
+ssh -L 4000:localhost:4000 user@your-server.example.com
 claude mcp add --transport http context-forge http://localhost:4000/mcp
 ```
+
+Security reminder:
+
+- The web UI/API is authenticated after setup
+- The MCP endpoint still has no built-in authentication
+- Expose MCP only on a trusted network, VPN, or tunnel

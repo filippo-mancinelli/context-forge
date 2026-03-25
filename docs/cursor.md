@@ -1,22 +1,15 @@
 # Connecting Cursor to context-forge
 
-## Project-Level Config
+## Before connecting
 
-Create or edit `.cursor/mcp.json` in your project root:
+1. Start the stack with `docker compose up -d`
+2. Open `http://localhost:3000`
+3. Complete setup with `SETUP_BOOTSTRAP_TOKEN`
+4. Verify the MCP endpoint at `http://localhost:4000/mcp`
 
-```json
-{
-  "mcpServers": {
-    "context-forge": {
-      "url": "http://localhost:4000/mcp"
-    }
-  }
-}
-```
+## Workspace config
 
-## Global Config (all workspaces)
-
-Create or edit `~/.cursor/mcp.json`:
+Create or update `.cursor/mcp.json`:
 
 ```json
 {
@@ -28,35 +21,44 @@ Create or edit `~/.cursor/mcp.json`:
 }
 ```
 
-## Adding System Instructions
+## Global config
 
-Copy the instructions template to your project:
+Create or update `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "context-forge": {
+      "url": "http://localhost:4000/mcp"
+    }
+  }
+}
+```
+
+## Project instructions
+
+You can copy the generic agent instructions into a Cursor rules file:
 
 ```bash
 cp templates/AGENTS.md /path/to/your/project/.cursor/rules/context-forge.md
 ```
 
-Or add the content to your existing Cursor rules file.
+## Remote server
 
-## Verifying
-
-After saving the config, restart Cursor. In the chat, ask:
-```
-What MCP tools are available?
-```
-
-You should see the context-forge tools listed.
-
-## Remote Server
-
-Replace `localhost:4000` with your server's address:
+Replace `localhost` with your server hostname or proxy URL:
 
 ```json
 {
   "mcpServers": {
     "context-forge": {
-      "url": "http://your-server.com:4000/mcp"
+      "url": "http://your-server.example.com:4000/mcp"
     }
   }
 }
 ```
+
+Security reminder:
+
+- The UI/API is authenticated after setup
+- The MCP endpoint still has no built-in authentication
+- Prefer private networking, a VPN, or a secure tunnel for remote MCP access

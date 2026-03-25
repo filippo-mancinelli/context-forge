@@ -1,7 +1,7 @@
 """REST API routes for memory management."""
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -16,7 +16,7 @@ def _get_memory():
 
 class MemoryAddRequest(BaseModel):
     content: str
-    metadata: Optional[dict] = None
+    metadata: Optional[dict[str, Any] | str] = None
     user_id: Optional[str] = None
     infer: bool = True
 
@@ -34,7 +34,14 @@ async def add_memory(req: MemoryAddRequest):
     uid = req.user_id or get_forge_config().memory.user_id
     try:
         mem = _get_memory()
-        result = mem.add(req.content, user_id=uid, metadata=req.metadata or {}, infer=req.infer)
+        from ...mcp.memory import _normalize_metadata
+
+        result = mem.add(
+            req.content,
+            user_id=uid,
+            metadata=_normalize_metadata(req.metadata),
+            infer=req.infer,
+        )
         return {"status": "ok", "memory": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -7,7 +7,9 @@ import httpx
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
-from ...config import get_settings
+from ...config import RepoConfig, get_forge_config, get_settings
+from ...indexer.indexer import sync_repos_config
+from ...runtime_state import persist_runtime_config
 from ..security import require_valid_token_or_raise
 
 router = APIRouter(prefix="/github", tags=["github"])
@@ -51,18 +53,6 @@ async def list_github_repos(
     }
     
     async with httpx.AsyncClient() as client:
-        # Get user info first to know the username
-        user_resp = await client.get(
-            "https://api.github.com/user",
-            headers=headers,
-            timeout=30.0,
-        )
-        if user_resp.status_code != 200:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid GitHub token or API error",
-            )
-        
         # Get user's repos
         repos_resp = await client.get(
             "https://api.github.com/user/repos",
@@ -110,10 +100,7 @@ async def add_github_repo(
 ):
     """Add a GitHub repository to the forge config."""
     await require_valid_token_or_raise(authorization)
-    
-    from ...config import get_forge_config, set_forge_config
-    from ...indexer.indexer import sync_repos_config
-    
+
     cfg = get_forge_config()
     
     # Check if repo already exists
@@ -126,14 +113,14 @@ async def add_github_repo(
     repo_url = f"https://github.com/{req.full_name}"
     
     # Add to config (will be synced to DB)
-    cfg.repos.append(type(cfg.repos[0])(
+    cfg.repos.append(RepoConfig(
         name=req.full_name.replace("/", "-"),
         type="github",
         url=repo_url,
         branch=branch,
     ))
-    
-    set_forge_config(cfg)
+
+    await persist_runtime_config(cfg)
     await sync_repos_config()
     
     return {

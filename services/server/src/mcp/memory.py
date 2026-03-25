@@ -1,6 +1,7 @@
 """MCP tools for persistent memory via Mem0."""
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Optional
 
@@ -94,8 +95,26 @@ def reset_memory_client() -> None:
     _memory_client = None
 
 
+def _normalize_metadata(metadata: dict[str, Any] | str | None) -> dict[str, Any]:
+    """Accept metadata as a dict or JSON string and normalize it for Mem0."""
+    if metadata is None:
+        return {}
+    if isinstance(metadata, dict):
+        return metadata
+    if isinstance(metadata, str):
+        parsed = json.loads(metadata)
+        if isinstance(parsed, dict):
+            return parsed
+        raise ValueError("metadata JSON string must decode to an object")
+    raise ValueError("metadata must be a dictionary or a JSON object string")
+
+
 @mcp.tool()
-async def memory_add(content: str, metadata: Optional[dict] = None, user_id: Optional[str] = None) -> dict:
+async def memory_add(
+    content: str,
+    metadata: Optional[dict[str, Any] | str] = None,
+    user_id: Optional[str] = None,
+) -> dict:
     """Save a memory, fact, or note that should persist across sessions.
 
     Use this to store important decisions, context, preferences, architectural notes,
@@ -103,7 +122,8 @@ async def memory_add(content: str, metadata: Optional[dict] = None, user_id: Opt
 
     Args:
         content: The text to remember (a fact, decision, note, etc.)
-        metadata: Optional key-value metadata tags (e.g. {"project": "backend", "type": "decision"})
+        metadata: Optional key-value metadata tags as a dict or JSON object string
+            (e.g. {"project": "backend", "type": "decision"})
         user_id: User or agent identifier (defaults to the configured default)
 
     Returns:
@@ -112,7 +132,7 @@ async def memory_add(content: str, metadata: Optional[dict] = None, user_id: Opt
     from ..config import get_forge_config
     uid = user_id or get_forge_config().memory.user_id
     try:
-        result = _get_memory().add(content, user_id=uid, metadata=metadata or {})
+        result = _get_memory().add(content, user_id=uid, metadata=_normalize_metadata(metadata))
         return {"status": "ok", "memory": result}
     except Exception as e:
         logger.error("memory_add failed: %s", e)

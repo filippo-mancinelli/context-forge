@@ -1,8 +1,21 @@
-# Connecting OpenAI Codex to context-forge
+# Connecting Codex to context-forge
 
-## Via Config File
+## Before connecting
 
-Add to your Codex configuration file (`~/.codex/config.toml` or project-level `codex.toml`):
+1. Start the stack with `docker compose up -d`
+2. Open the UI on `http://localhost:3000`
+3. Complete setup with `SETUP_BOOTSTRAP_TOKEN`
+4. Confirm the MCP endpoint is reachable at `http://localhost:4000/mcp`
+
+## CLI
+
+```bash
+codex mcp add context-forge --url http://localhost:4000/mcp
+```
+
+## Config file
+
+Add to `~/.codex/config.toml` or project-level Codex config:
 
 ```toml
 [[mcp_servers]]
@@ -11,35 +24,24 @@ transport = "http"
 url = "http://localhost:4000/mcp"
 ```
 
-## Via CLI
+## Project instructions
 
-```bash
-codex mcp add --transport http context-forge http://localhost:4000/mcp
-```
-
-## AGENTS.md Instructions
-
-Codex automatically reads `AGENTS.md` from the project root. Copy the template:
+Codex reads `AGENTS.md` from the project root.
 
 ```bash
 cp templates/AGENTS.md /path/to/your/project/AGENTS.md
 ```
 
-## JSON Config Alternative
+## Remote server
 
-Some Codex versions use a JSON config:
+Replace `localhost` with your server hostname or reverse proxy URL:
 
-```json
-{
-  "mcpServers": {
-    "context-forge": {
-      "transport": "http",
-      "url": "http://localhost:4000/mcp"
-    }
-  }
-}
+```bash
+codex mcp add context-forge --url http://your-server.example.com:4000/mcp
 ```
 
-## Remote Server
+Security reminder:
 
-Replace `localhost:4000` with your server address. For security, consider using an SSH tunnel or placing context-forge behind a reverse proxy with authentication.
+- The UI/API is protected by admin auth after setup
+- The MCP endpoint itself does not yet have built-in auth
+- Prefer a VPN, SSH tunnel, or private network exposure for MCP

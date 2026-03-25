@@ -1,153 +1,127 @@
 # context-forge
 
-**Agent context infrastructure — plug and play with Claude Code, Codex, and Cursor.**
+Runtime-first agent context infrastructure for Claude Code, Codex, Cursor, and other MCP clients.
 
-context-forge is a self-hosted platform that gives your AI agents:
+context-forge provides:
 
-- **Persistent memory** across sessions (Mem0 + pgvector)
-- **Semantic search** across multiple repositories (local + GitHub + GitLab)
-- **Async job execution** for slow HTTP calls that would otherwise time out
-- **One MCP endpoint** that works with any MCP-compatible agent
+- Persistent memory with Mem0 + pgvector
+- Semantic repository search across local, GitHub, and GitLab repos
+- Async HTTP jobs for slow downstream services
+- One MCP endpoint plus a web UI for runtime administration
 
-```
-docker compose up -d
-claude mcp add --transport http context-forge http://localhost:4000/mcp
-```
+## Runtime-first model
 
----
+After bootstrap, the source of truth is the runtime configuration stored in Postgres.
 
-## Architecture
+- Use the web UI to manage repositories, providers, tokens, indexing, and memory defaults
+- Keep `.env` for bootstrap and infrastructure secrets
+- Keep `context-forge.yml` only for bootstrap defaults, disaster recovery, or legacy import
 
-```
-Claude Code / Codex / Cursor
-        │
-        │ MCP HTTP
-        ▼
-context-forge (:4000/mcp + :8000/api)
-    ├── memory_*     — Mem0 persistent memory (pgvector)
-    ├── repo_*       — Semantic code search (tree-sitter + pgvector)
-    └── job_*        — Async HTTP jobs (no more MCP timeouts)
-        │
-        ▼
-   PostgreSQL + pgvector
+On startup, if runtime config is missing but bootstrap config contains meaningful values, context-forge imports that configuration into the database automatically.
 
-Web UI (:3000)
-    ├── Repos — indexing status, trigger re-index
-    ├── Memory — browse and search memories
-    ├── Tools — MCP tool reference
-    └── Jobs — async job monitor
-```
+## Services
 
-**Services:** 3 Docker containers — `postgres`, `context-forge`, `ui`
+- `postgres`: PostgreSQL 16 + pgvector
+- `context-forge`: MCP on `:4000/mcp`, REST API on `:8000/api`
+- `ui`: React app on `:3000`
 
----
+The primary landing page in the UI is now `Repositories`.
 
-## Quick Start
+## Quick start
 
-### 1. Clone and configure
+### 1. Bootstrap files
+
+Run the setup script or create the files manually.
+
+Linux or macOS:
 
 ```bash
-git clone https://github.com/yourorg/context-forge
-cd context-forge
-
-# Linux / macOS
 bash setup.sh
+```
 
-# Windows PowerShell
+Windows PowerShell:
+
+```powershell
 .\setup.ps1
 ```
 
-The setup wizard:
-- Creates `.env` with a random Postgres password
-- Creates `context-forge.yml` for your repos
-- Creates `docker-compose.override.yml` for volume mounts
-- Starts all services
-
-### 2. Manual setup (if you prefer)
+Manual bootstrap:
 
 ```bash
 cp .env.example .env
-# Edit .env: set OPENAI_API_KEY (and optionally GITHUB_TOKEN, GITLAB_TOKEN)
-
 cp context-forge.yml.example context-forge.yml
-# Edit context-forge.yml: add your repositories
-
 cp docker-compose.override.yml.example docker-compose.override.yml
-# Edit docker-compose.override.yml: mount your local repo paths
+```
 
+What the bootstrap files are for:
+
+- `.env`: Docker/runtime secrets and first-boot defaults
+- `context-forge.yml`: optional baseline repo/indexing config for import
+- `docker-compose.override.yml`: local repo mounts only
+
+### 2. Required environment variables
+
+At minimum set:
+
+```env
+POSTGRES_PASSWORD=...
+SETUP_BOOTSTRAP_TOKEN=...
+```
+
+Optional provider defaults:
+
+```env
+OPENAI_API_KEY=...
+ANTHROPIC_API_KEY=...
+DEEPSEEK_API_KEY=...
+GITHUB_TOKEN=...
+GITLAB_TOKEN=...
+
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4o-mini
+
+EMBEDDINGS_PROVIDER=openai
+EMBEDDINGS_MODEL=text-embedding-3-small
+EMBEDDINGS_DIMS=1536
+EMBEDDINGS_API_KEY=
+EMBEDDINGS_BASE_URL=
+```
+
+Supported embedding providers in the app:
+
+- `openai`
+- `jina`
+- `openai-compatible`
+- `local`
+
+### 3. Start the stack
+
+```bash
 docker compose up -d
 ```
 
-### 3. Connect your agent
+### 4. Complete setup in the UI
 
-**Claude Code:**
-```bash
-claude mcp add --transport http context-forge http://localhost:4000/mcp
-```
+Open:
 
-**Cursor** — add to `.cursor/mcp.json`:
-```json
-{
-  "mcpServers": {
-    "context-forge": {
-      "url": "http://localhost:4000/mcp"
-    }
-  }
-}
-```
+- UI: [http://localhost:3000](http://localhost:3000)
+- API health: [http://localhost:8000/api/health](http://localhost:8000/api/health)
 
-**Codex** — add to `~/.codex/config.toml`:
-```toml
-[[mcp_servers]]
-name = "context-forge"
-transport = "http"
-url = "http://localhost:4000/mcp"
-```
+Setup behavior:
 
-### 4. Add system prompt to your project
+- Fresh install: enter bootstrap token, admin account, and optional initial runtime config
+- Legacy install: if bootstrap files were auto-imported, create only the admin account and continue
 
-```bash
-# For Claude Code
-cp templates/CLAUDE.md /path/to/your/project/CLAUDE.md
+After login:
 
-# For Codex / any agent
-cp templates/AGENTS.md /path/to/your/project/AGENTS.md
-```
+- `Repositories` is the operational home page
+- `Settings` is the runtime control plane
 
----
+## Local repositories
 
-## Configuration
+For local repositories, mount them into the server container through `docker-compose.override.yml`.
 
-### Repositories (`context-forge.yml`)
-
-```yaml
-repos:
-  # Local repo (requires volume mount in docker-compose.override.yml)
-  - name: my-backend
-    type: local
-    path: /repos/my-backend
-    language: python
-
-  # GitHub repo (auto-cloned, requires GITHUB_TOKEN for private)
-  - name: my-frontend
-    type: github
-    url: https://github.com/myorg/my-frontend
-    branch: main
-
-  # GitLab self-hosted (any URL supported)
-  - name: platform
-    type: gitlab
-    url: https://gitlab.mycompany.com/team/platform
-    branch: develop
-
-indexing:
-  auto: true
-  schedule: "0 */6 * * *"   # re-index every 6 hours
-```
-
-### Volume mounts (`docker-compose.override.yml`)
-
-For local repos only — remote repos are cloned automatically:
+Example:
 
 ```yaml
 services:
@@ -158,145 +132,107 @@ services:
       # - C:/Users/user/projects/my-backend:/repos/my-backend:ro
 ```
 
-### Environment variables (`.env`)
+Then add the mounted path from the UI or place it in `context-forge.yml` for first import.
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `POSTGRES_PASSWORD` | DB password | (required) |
-| `OPENAI_API_KEY` | OpenAI API key for embeddings + Mem0 | (required for openai mode) |
-| `EMBEDDINGS_PROVIDER` | `openai` or `local` | `openai` |
-| `EMBEDDINGS_MODEL` | Embedding model name | `text-embedding-3-small` |
-| `EMBEDDINGS_DIMS` | Embedding dimensions | `1536` |
-| `LLM_PROVIDER` | LLM for Mem0 extraction: `openai` \| `anthropic` \| `deepseek` | `openai` |
-| `LLM_MODEL` | LLM model name | `gpt-4o-mini` |
-| `DEEPSEEK_API_KEY` | DeepSeek API key (if `LLM_PROVIDER=deepseek`) | (optional) |
-| `GITHUB_TOKEN` | GitHub personal access token | (optional) |
-| `GITLAB_TOKEN` | GitLab token | (optional) |
+## Hosted embedding examples
 
-#### DeepSeek as LLM (fast and cheap for memory extraction)
+OpenAI:
 
 ```env
-LLM_PROVIDER=deepseek
-LLM_MODEL=deepseek-chat
-DEEPSEEK_API_KEY=sk-...
-# Keep OPENAI_API_KEY for embeddings (or switch to local)
+EMBEDDINGS_PROVIDER=openai
+EMBEDDINGS_MODEL=text-embedding-3-small
+EMBEDDINGS_DIMS=1536
+OPENAI_API_KEY=...
 ```
 
-#### Local embeddings (no API key needed)
+OpenAI-compatible provider:
 
 ```env
-EMBEDDINGS_PROVIDER=local
-EMBEDDINGS_MODEL=all-MiniLM-L6-v2
-EMBEDDINGS_DIMS=384
+EMBEDDINGS_PROVIDER=openai-compatible
+EMBEDDINGS_MODEL=<provider-model>
+EMBEDDINGS_DIMS=<provider-dims>
+EMBEDDINGS_API_KEY=...
+EMBEDDINGS_BASE_URL=https://provider.example/v1
 ```
 
-> Note: local embeddings download the model on first use (~100MB). Also configure Mem0 with a local LLM (Ollama) to be fully offline.
+Jina:
 
----
-
-## MCP Tools Reference
-
-### Memory
-
-| Tool | Description |
-|------|-------------|
-| `memory_add(content, metadata?)` | Save a fact, decision, or note persistently |
-| `memory_search(query, limit?)` | Semantic search across stored memories |
-| `memory_list(limit?)` | List recent memories |
-| `memory_delete(memory_id)` | Delete a memory |
-
-### Repositories
-
-| Tool | Description |
-|------|-------------|
-| `repo_search(query, repos?, limit?)` | Semantic search across indexed code |
-| `repo_get_file(repo, path)` | Read a file by repo name and path |
-| `repo_list()` | List repos with indexing status |
-| `repo_index(repo?)` | Trigger re-indexing |
-| `repo_relationships(repo?)` | Discover related repos via embedding similarity |
-
-### Async Jobs
-
-| Tool | Description |
-|------|-------------|
-| `job_submit(url, method?, payload?, headers?)` | Submit a slow HTTP call as a background job |
-| `job_status(job_id)` | Poll: pending / running / done / error |
-| `job_result(job_id)` | Get the result when done |
-
-**Example — calling a slow AI agent without timeout:**
-```python
-# In your agent:
-job = job_submit(
-    url="http://my-sql-agent:8005/api/v1/query",
-    payload={"question": "How many users signed up today?"}
-)
-# job["job_id"] = "abc-123..."
-
-# Poll until done:
-status = job_status("abc-123...")
-# {"job_status": "running", ...}
-
-# Get result:
-result = job_result("abc-123...")
-# {"status": "ok", "result": {"answer": "42 users", ...}}
+```env
+EMBEDDINGS_PROVIDER=jina
+EMBEDDINGS_MODEL=jina-embeddings-v3
+EMBEDDINGS_DIMS=1024
+EMBEDDINGS_API_KEY=...
 ```
 
----
+Important:
+
+- Changing embeddings provider or model requires repository re-indexing
+- Changing `EMBEDDINGS_DIMS` requires resetting vector-backed data and then re-indexing
+
+## MCP tools
+
+Memory:
+
+- `memory_add`
+- `memory_search`
+- `memory_list`
+- `memory_delete`
+
+Repositories:
+
+- `repo_list`
+- `repo_search`
+- `repo_get_file`
+- `repo_index`
+- `repo_relationships`
+
+Jobs:
+
+- `job_submit`
+- `job_status`
+- `job_result`
 
 ## Web UI
 
-Open `http://localhost:3000` to access the dashboard:
+Main pages:
 
-- **Repositories** — view indexing status, trigger re-indexing, sync config
-- **Memory** — browse, search, and delete stored memories
-- **MCP Tools** — list all available tools with descriptions and copy-to-clipboard
-- **Async Jobs** — monitor background job execution in real time
+- `Repositories`: home page for repo browsing, import, indexing, and drill-down
+- `Settings`: runtime config for providers, tokens, indexing, and manual repo entries
+- `Memory`
+- `MCP Tools`
+- `Async Jobs`
 
----
+## Agent connection guides
 
-## Useful Commands
+- [docs/claude-code.md](docs/claude-code.md)
+- [docs/codex.md](docs/codex.md)
+- [docs/cursor.md](docs/cursor.md)
+
+## Useful commands
 
 ```bash
-# View logs
 docker compose logs -f context-forge
-
-# Restart after config changes
 docker compose restart context-forge
-
-# Stop everything
 docker compose down
-
-# Reset database (warning: deletes all data)
 docker compose down -v && docker compose up -d
-
-# Check service health
 curl http://localhost:8000/api/health
 ```
 
----
+## Deployment notes
 
-## Deployment on VPS (Dokploy / Coolify / Portainer)
+For remote deployments:
 
-context-forge is a standard Docker Compose stack — deploy it anywhere:
+1. Copy the repository to the server
+2. Create `.env`
+3. Optionally create `context-forge.yml` and `docker-compose.override.yml`
+4. Run `docker compose up -d`
+5. Open the UI and complete setup with `SETUP_BOOTSTRAP_TOKEN`
 
-1. Copy the project to your server (git clone or scp)
-2. Create `.env` and `context-forge.yml` on the server
-3. `docker compose up -d`
-4. Open port 4000 (MCP) and 3000 (UI) on your firewall, or use a reverse proxy
+Security notes:
 
-For Dokploy: create a new "Compose" application pointing to this repository.
-
-> Security: For production, put context-forge behind a reverse proxy (Nginx/Traefik) with HTTPS. The MCP endpoint currently has no authentication — only expose it on your internal network or via VPN.
-
----
-
-## Extending with Custom MCP Servers
-
-context-forge's MCP endpoint is additive — you can also configure additional MCP servers in parallel (GitHub MCP, Jira MCP, etc.) in your agent's config alongside context-forge.
-
-See the [Model Context Protocol registry](https://github.com/modelcontextprotocol/servers) for available community servers.
-
----
+- The REST UI/API has admin auth after setup
+- The MCP endpoint currently has no built-in authentication
+- Expose MCP only on trusted networks or behind a secure proxy/VPN
 
 ## License
 

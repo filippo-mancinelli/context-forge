@@ -12,6 +12,7 @@ from .routes import setup as setup_routes
 from .routes import auth as auth_routes
 from .routes import settings as settings_routes
 from .routes import github as github_routes
+from .routes import gitlab as gitlab_routes
 
 api = FastAPI(
     title="context-forge API",
@@ -21,7 +22,10 @@ api = FastAPI(
 
 api.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -34,11 +38,15 @@ api.include_router(setup_routes.router, prefix="/api")
 api.include_router(auth_routes.router, prefix="/api")
 api.include_router(settings_routes.router, prefix="/api")
 api.include_router(github_routes.router, prefix="/api")
+api.include_router(gitlab_routes.router, prefix="/api")
 
 
 @api.middleware("http")
 async def auth_guard(request, call_next):
     path = request.url.path
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     if not path.startswith("/api"):
         return await call_next(request)
 
@@ -46,10 +54,8 @@ async def auth_guard(request, call_next):
     if path.startswith(open_paths):
         return await call_next(request)
 
-    from .security import is_configured, is_legacy_mode_available, require_valid_token_or_raise
+    from .security import is_configured, require_valid_token_or_raise
     if not await is_configured():
-        if await is_legacy_mode_available():
-            return await call_next(request)
         return JSONResponse(status_code=423, content={"detail": "Setup required"})
 
     try:
