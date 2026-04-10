@@ -14,6 +14,7 @@ from .routes import auth as auth_routes
 from .routes import settings as settings_routes
 from .routes import github as github_routes
 from .routes import gitlab as gitlab_routes
+from .routes import mcp_keys as mcp_keys_routes
 
 api = FastAPI(
     title="context-forge API",
@@ -39,6 +40,7 @@ api.include_router(auth_routes.router, prefix="/api")
 api.include_router(settings_routes.router, prefix="/api")
 api.include_router(github_routes.router, prefix="/api")
 api.include_router(gitlab_routes.router, prefix="/api")
+api.include_router(mcp_keys_routes.router, prefix="/api")
 
 
 @api.middleware("http")

@@ -18,9 +18,9 @@ import {
   Trash2,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, type Repo, type RepoCreateRequest } from '../lib/api'
+import { api, type Repo, type RepoCreateRequest, type MCPApiKey } from '../lib/api'
 
-type Tab = 'repositories' | 'access' | 'models' | 'runtime'
+type Tab = 'repositories' | 'access' | 'models' | 'runtime' | 'mcp_keys'
 
 interface SettingsData {
   forge_config: {
@@ -634,6 +634,354 @@ function RuntimeTab({
   )
 }
 
+function McpKeysTab() {
+  const [keys, setKeys] = useState<MCPApiKey[]>([])
+  const [loading, setLoading] = useState(true)
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [revokingKey, setRevokingKey] = useState<number | null>(null)
+  const [newKey, setNewKey] = useState<{ key: string; name: string } | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadKeys = useCallback(async () => {
+    try {
+      const response = await api.mcpKeys.list()
+      setKeys(response.keys)
+      setError(null)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadKeys()
+  }, [loadKeys])
+
+  const handleCreate = async (name: string, scope: string, expiresDays?: number) => {
+    setCreating(true)
+    setError(null)
+    try {
+      const response = await api.mcpKeys.create({ name, scope, expires_days: expiresDays })
+      setNewKey({ key: response.key, name: response.name })
+      await loadKeys()
+      setShowCreateModal(false)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const handleRevoke = async (keyId: number) => {
+    if (!window.confirm('Revoke this API key? It will stop working immediately.')) return
+    setRevokingKey(keyId)
+    try {
+      await api.mcpKeys.revoke(keyId)
+      await loadKeys()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setRevokingKey(null)
+    }
+  }
+
+  const formatDate = (dateStr?: string) => {
+    if (!dateStr) return '-'
+    return new Date(dateStr).toLocaleDateString() + ' ' + new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  }
+
+  const isExpired = (expiresAt?: string) => {
+    if (!expiresAt) return false
+    return new Date(expiresAt) < new Date()
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-400">MCP API Keys</p>
+            <h2 className="mt-0.5 text-base font-semibold text-white">Manage agent authentication</h2>
+            <p className="mt-1 text-sm text-gray-400">Create API keys for CLI agents to connect to this context-forge instance</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowCreateModal(true)}
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-600 px-3 py-1.5 text-sm font-medium text-white"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Generate API key
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-300">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4" />
+            {error}
+          </div>
+        </div>
+      )}
+
+      {newKey && (
+        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4">
+          <div className="flex items-start gap-3">
+            <Check className="mt-0.5 h-5 w-5 text-emerald-400" />
+            <div className="flex-1">
+              <p className="font-medium text-white">API key generated successfully!</p>
+              <p className="mt-2 text-sm text-gray-300">Copy this key now. You won't be able to see it again.</p>
+              <div className="mt-3 rounded-lg border border-gray-700 bg-gray-950 p-3">
+                <code className="break-all font-mono text-sm text-cyan-400">{newKey.key}</code>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(newKey.key)
+                  setNewKey(null)
+                }}
+                className="mt-3 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"
+              >
+                Copy to clipboard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="flex items-center justify-center rounded-xl border border-gray-800 bg-gray-900/40 p-8">
+          <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
+        </div>
+      ) : keys.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-gray-800 bg-gray-900/40 p-8 text-center text-gray-500">
+          No API keys configured yet. Generate one to allow CLI agents to connect.
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-xl border border-gray-800 bg-gray-900/60">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-800 text-left text-xs uppercase tracking-wider text-gray-500">
+                <th className="px-4 py-2 font-medium">Name</th>
+                <th className="px-3 py-2 font-medium">Scope</th>
+                <th className="px-3 py-2 font-medium">Created</th>
+                <th className="px-3 py-2 font-medium">Last used</th>
+                <th className="px-3 py-2 font-medium">Expires</th>
+                <th className="px-3 py-2"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-800">
+              {keys.map((key) => (
+                <tr key={key.id} className="hover:bg-gray-800/30">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
+                      <Key className="h-3.5 w-3.5 text-gray-400" />
+                      <span className="font-medium text-white">{key.name}</span>
+                      {isExpired(key.expires_at) && (
+                        <span className="rounded bg-rose-500/10 px-1.5 py-0.5 text-xs text-rose-400">Expired</span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-3 py-3">
+                    <code className="rounded bg-gray-950 px-1.5 py-0.5 text-xs text-gray-400">{key.scope}</code>
+                  </td>
+                  <td className="px-3 py-3 text-xs text-gray-400">{formatDate(key.created_at)}</td>
+                  <td className="px-3 py-3 text-xs text-gray-400">{formatDate(key.last_used_at)}</td>
+                  <td className="px-3 py-3 text-xs text-gray-400">
+                    {key.expires_at ? (
+                      <span className={isExpired(key.expires_at) ? 'text-rose-400' : ''}>
+                        {formatDate(key.expires_at)}
+                      </span>
+                    ) : (
+                      'Never'
+                    )}
+                  </td>
+                  <td className="px-3 py-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => handleRevoke(key.id)}
+                      disabled={revokingKey === key.id}
+                      className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-xs text-rose-300 disabled:opacity-50"
+                    >
+                      {revokingKey === key.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {showCreateModal && (
+        <CreateKeyModal
+          onClose={() => setShowCreateModal(false)}
+          onCreate={handleCreate}
+          loading={creating}
+        />
+      )}
+    </div>
+  )
+}
+
+function CreateKeyModal({
+  onClose,
+  onCreate,
+  loading,
+}: {
+  onClose: () => void
+  onCreate: (name: string, scope: string, expiresDays?: number) => Promise<void>
+  loading: boolean
+}) {
+  const [name, setName] = useState('')
+  const [scope, setScope] = useState('read,write')
+  const [expiresDays, setExpiresDays] = useState<number | undefined>(undefined)
+
+  const scopes = [
+    { value: 'read', label: 'Read only' },
+    { value: 'write', label: 'Write only' },
+    { value: 'read,write', label: 'Read + Write (recommended)' },
+    { value: 'admin', label: 'Full admin access' },
+  ]
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-950 p-5 shadow-2xl">
+        <h3 className="text-base font-semibold text-white">Generate MCP API Key</h3>
+
+        <div className="mt-4 space-y-3">
+          <Field label="Key name">
+            <Input value={name} onChange={setName} placeholder="My CLI agent" />
+          </Field>
+
+          <Field label="Scope">
+            <Select
+              value={scope}
+              onChange={setScope}
+              options={scopes}
+            />
+          </Field>
+
+          <Field label="Expires (optional)">
+            <Input
+              type="number"
+              value={expiresDays || ''}
+              onChange={(value) => setExpiresDays(value ? parseInt(value, 10) : undefined)}
+              placeholder="Leave empty for no expiration"
+              min={1}
+              max={365}
+            />
+          </Field>
+        </div>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={loading}
+            className="rounded-lg border border-gray-700 bg-gray-900 px-3 py-1.5 text-sm text-gray-300 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => onCreate(name, scope, expiresDays)}
+            disabled={!name || loading}
+            className="rounded-lg bg-cyan-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          >
+            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Generate'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RuntimeTab({
+  config,
+  onChange,
+}: {
+  config: SettingsData['forge_config']
+  onChange: (path: string, value: unknown) => void
+}) {
+  const [excludeText, setExcludeText] = useState(config.indexing.exclude.join('\n'))
+
+  useEffect(() => {
+    setExcludeText(config.indexing.exclude.join('\n'))
+  }, [config.indexing.exclude])
+
+  return (
+    <div className="space-y-4">
+      <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
+        <h2 className="text-sm font-medium text-white">Indexing</h2>
+        <div className="mt-3 grid gap-3 lg:grid-cols-3">
+          <div className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-950/70 px-3 py-2.5 lg:col-span-3">
+            <div>
+              <p className="text-sm text-white">Auto indexing</p>
+              <p className="text-xs text-gray-500">Use the configured schedule to re-index automatically.</p>
+            </div>
+            <Toggle checked={config.indexing.auto} onChange={(value) => onChange('indexing.auto', value)} />
+          </div>
+          <Field label="Schedule">
+            <Input value={config.indexing.schedule} onChange={(value) => onChange('indexing.schedule', value)} placeholder="0 */6 * * *" />
+          </Field>
+          <Field label="Max file size (KB)">
+            <Input
+              type="number"
+              value={String(config.indexing.max_file_size_kb)}
+              onChange={(value) => onChange('indexing.max_file_size_kb', parseInt(value, 10) || 500)}
+            />
+          </Field>
+          <Field label="Chunk size">
+            <Input
+              type="number"
+              value={String(config.indexing.chunk_size)}
+              onChange={(value) => onChange('indexing.chunk_size', parseInt(value, 10) || 400)}
+            />
+          </Field>
+          <Field label="Chunk overlap">
+            <Input
+              type="number"
+              value={String(config.indexing.chunk_overlap)}
+              onChange={(value) => onChange('indexing.chunk_overlap', parseInt(value, 10) || 50)}
+            />
+          </Field>
+          <div className="lg:col-span-3">
+            <Field label="Exclude patterns">
+              <textarea
+                value={excludeText}
+                onChange={(e) => {
+                  setExcludeText(e.target.value)
+                  onChange(
+                    'indexing.exclude',
+                    e.target.value
+                      .split('\n')
+                      .map((entry) => entry.trim())
+                      .filter(Boolean)
+                  )
+                }}
+                rows={6}
+                className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 font-mono text-xs text-gray-200 outline-none transition-colors focus:border-cyan-500"
+              />
+            </Field>
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
+        <h2 className="text-sm font-medium text-white">Memory defaults</h2>
+        <div className="mt-3 max-w-sm">
+          <Field label="Default user id">
+            <Input value={config.memory.user_id} onChange={(value) => onChange('memory.user_id', value)} placeholder="default" />
+          </Field>
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function getEmbeddingSignature(settings: SettingsData['settings_overrides']) {
   return {
     provider: settings.embeddings_provider || 'openai',
@@ -738,6 +1086,7 @@ export default function Settings() {
     { id: 'access', label: 'API keys', icon: Key },
     { id: 'models', label: 'Models', icon: Database },
     { id: 'runtime', label: 'Runtime', icon: Settings2 },
+    { id: 'mcp_keys', label: 'MCP Keys', icon: Key },
   ]
 
   if (loading) {
@@ -831,6 +1180,7 @@ export default function Settings() {
             <ModelsTab settings={data.settings_overrides} onChange={updateSettingsOverride} embeddingRisk={embeddingRisk} />
           )}
           {activeTab === 'runtime' && <RuntimeTab config={data.forge_config} onChange={updateForgeConfig} />}
+          {activeTab === 'mcp_keys' && <McpKeysTab />}
         </div>
       </div>
     </div>

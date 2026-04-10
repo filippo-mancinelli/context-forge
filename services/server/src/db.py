@@ -91,6 +91,20 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
 
 CREATE INDEX IF NOT EXISTS auth_sessions_user_idx ON auth_sessions (user_id);
 CREATE INDEX IF NOT EXISTS auth_sessions_expires_idx ON auth_sessions (expires_at);
+
+CREATE TABLE IF NOT EXISTS mcp_api_keys (
+    id           BIGSERIAL PRIMARY KEY,
+    name         TEXT NOT NULL,
+    key_hash     TEXT UNIQUE NOT NULL,
+    scope        TEXT NOT NULL DEFAULT 'read,write',
+    created_at   TIMESTAMPTZ DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ,
+    expires_at   TIMESTAMPTZ,
+    created_by   BIGINT REFERENCES admin_users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS mcp_api_keys_key_hash_idx ON mcp_api_keys (key_hash);
+CREATE INDEX IF NOT EXISTS mcp_api_keys_expires_idx ON mcp_api_keys (expires_at);
 """
 
 
