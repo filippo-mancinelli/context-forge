@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom'
-import { Database, Brain, Wrench, Activity, GitBranch, Sparkles, SlidersHorizontal, LogOut, Loader2 } from 'lucide-react'
+import { Database, Brain, Wrench, Activity, GitBranch, SlidersHorizontal, LogOut, Loader2 } from 'lucide-react'
 import Repos from './pages/Repos'
 import Memory from './pages/Memory'
 import Tools from './pages/Tools'
