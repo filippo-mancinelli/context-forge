@@ -47,22 +47,22 @@ def cmd_configure(args: argparse.Namespace) -> None:
             )
             if response.status_code == 200:
                 key_info = response.json()["key"]
-                print(f"✓ API key validated: {key_info['name']} (scope: {key_info['scope']})")
+                print(f"[OK] API key validated: {key_info['name']} (scope: {key_info['scope']})")
                 config["api_key"] = args.api_key
                 config["server_url"] = server_url
                 save_config(config)
-                print(f"✓ Configuration saved to {CONFIG_FILE}")
+                print(f"[OK] Configuration saved to {CONFIG_FILE}")
             else:
-                print(f"✗ API key validation failed: {response.status_code}")
+                print(f"[ERROR] API key validation failed: {response.status_code}")
                 sys.exit(1)
         except Exception as e:
-            print(f"✗ Failed to validate API key: {e}")
+            print(f"[ERROR] Failed to validate API key: {e}")
             sys.exit(1)
 
     if args.server_url:
         config["server_url"] = args.server_url
         save_config(config)
-        print(f"✓ Server URL set to: {args.server_url}")
+        print(f"[OK] Server URL set to: {args.server_url}")
 
     if not args.api_key and not args.server_url:
         # Show current configuration
@@ -79,7 +79,7 @@ def cmd_test(args: argparse.Namespace) -> None:
     api_key = args.api_key or config.get("api_key") or os.getenv("CONTEXT_FORGE_API_KEY")
 
     if not api_key:
-        print("✗ No API key configured. Use: forge-cli configure --api-key YOUR_KEY")
+        print("[ERROR] No API key configured. Use: forge-cli configure --api-key YOUR_KEY")
         sys.exit(1)
 
     print(f"Testing connection to {server_url}...")
@@ -92,14 +92,14 @@ def cmd_test(args: argparse.Namespace) -> None:
         )
         if response.status_code == 200:
             key_info = response.json()["key"]
-            print(f"✓ Connection successful!")
+            print(f"[OK] Connection successful!")
             print(f"  Key: {key_info['name']}")
             print(f"  Scope: {key_info['scope']}")
         else:
-            print(f"✗ Connection failed: {response.status_code}")
+            print(f"[ERROR] Connection failed: {response.status_code}")
             sys.exit(1)
     except Exception as e:
-        print(f"✗ Connection failed: {e}")
+        print(f"[ERROR] Connection failed: {e}")
         sys.exit(1)
 
 
