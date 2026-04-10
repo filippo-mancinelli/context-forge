@@ -24,13 +24,38 @@ api = FastAPI(
 
 _cors_base = ["http://localhost:3000", "http://127.0.0.1:3000"]
 _cors_extra = [o.strip() for o in get_settings().cors_origins.split(",") if o.strip()]
-api.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors_base + _cors_extra,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+# If any entry is "*", allow all origins (useful for self-hosted / reverse-proxy deployments).
+# Wildcard entries like "*.example.com" are treated as regex patterns.
+_allow_all = "*" in _cors_extra
+_regex_origins = [o for o in _cors_extra if o.startswith("*.")]
+_plain_origins = [o for o in _cors_extra if not o.startswith("*.") and o != "*"]
+
+if _allow_all:
+    api.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,  # credentials require explicit origin, not wildcard
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    import re as _re
+    _origin_regex = (
+        "|".join(
+            _re.escape(o).replace(r"\*", r"[^.]+") for o in _regex_origins
+        )
+        if _regex_origins
+        else None
+    )
+    api.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_base + _plain_origins,
+        allow_origin_regex=_origin_regex,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 api.include_router(repos_routes.router, prefix="/api")
 api.include_router(memory_routes.router, prefix="/api")

@@ -1,24 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import {
-  AlertCircle,
-  Check,
-  Database,
-  GitBranch,
-  Github,
-  GitlabIcon,
-  HardDrive,
-  Key,
-  Loader2,
-  Pencil,
-  Plus,
-  RefreshCw,
-  Save,
-  Settings2,
-  SlidersHorizontal,
-  Trash2,
-} from 'lucide-react'
+import { AlertCircle, Check, Github, GitlabIcon, HardDrive, Pencil, Plus, RefreshCw, Save, Trash2 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api, type Repo, type RepoCreateRequest, type MCPApiKey } from '../lib/api'
+import { Button, Input, Textarea, Select, Tabs, TabsList, TabsTrigger, TabsContent, Badge, Dialog, DialogFooter } from '../components/ui'
 
 type Tab = 'repositories' | 'access' | 'models' | 'runtime' | 'mcp_keys'
 
@@ -51,112 +35,43 @@ interface SettingsData {
   }
 }
 
-function Field({
-  label,
-  children,
-}: {
-  label: string
-  children: React.ReactNode
-}) {
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
-    <label className="block">
-      <span className="mb-1 block text-xs font-medium uppercase tracking-wider text-gray-500">{label}</span>
+    <div className="space-y-1">
+      <label className="text-xs font-medium text-muted uppercase tracking-wide block">{label}</label>
       {children}
-    </label>
+      {hint && <p className="text-xs text-muted">{hint}</p>}
+    </div>
   )
 }
 
-function Input({
-  value,
-  onChange,
-  placeholder,
-  type = 'text',
-}: {
-  value: string
-  onChange: (value: string) => void
-  placeholder?: string
-  type?: string
-}) {
-  return (
-    <input
-      type={type}
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder={placeholder}
-      className="w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-2.5 text-sm text-gray-100 placeholder-gray-500 outline-none transition-colors focus:border-cyan-500"
-    />
-  )
-}
-
-function Select({
-  value,
-  onChange,
-  options,
-}: {
-  value: string
-  onChange: (value: string) => void
-  options: { value: string; label: string }[]
-}) {
-  return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-2.5 text-sm text-gray-100 outline-none transition-colors focus:border-cyan-500"
-    >
-      {options.map((option) => (
-        <option key={option.value} value={option.value}>
-          {option.label}
-        </option>
-      ))}
-    </select>
-  )
-}
-
-function Toggle({
-  checked,
-  onChange,
-}: {
-  checked: boolean
-  onChange: (value: boolean) => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={() => onChange(!checked)}
-      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${checked ? 'bg-cyan-600' : 'bg-gray-700'}`}
-    >
-      <span
-        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${checked ? 'translate-x-6' : 'translate-x-1'}`}
-      />
-    </button>
-  )
-}
-
-function SecretInput({
+function SecretField({
   label,
   value,
   onChange,
   placeholder,
+  hint,
 }: {
   label: string
   value?: string
-  onChange: (value: string) => void
+  onChange: (v: string) => void
   placeholder: string
+  hint?: string
 }) {
   const [visible, setVisible] = useState(false)
   return (
-    <Field label={label}>
+    <Field label={label} hint={hint}>
       <div className="relative">
         <Input
-          value={value || ''}
-          onChange={onChange}
-          placeholder={placeholder}
           type={visible ? 'text' : 'password'}
+          value={value || ''}
+          onChange={e => onChange(e.target.value)}
+          placeholder={placeholder}
         />
         <button
           type="button"
-          onClick={() => setVisible((current) => !current)}
-          className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-300"
+          onClick={() => setVisible(v => !v)}
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted hover:text-text"
         >
           {visible ? 'Hide' : 'Show'}
         </button>
@@ -166,19 +81,21 @@ function SecretInput({
 }
 
 function RepoTypeIcon({ type }: { type: Repo['type'] }) {
-  if (type === 'github') return <Github className="h-4 w-4 text-gray-400" />
-  if (type === 'gitlab') return <GitlabIcon className="h-4 w-4 text-orange-400" />
-  return <HardDrive className="h-4 w-4 text-gray-500" />
+  if (type === 'github') return <Github className="h-3.5 w-3.5 text-muted" />
+  if (type === 'gitlab') return <GitlabIcon className="h-3.5 w-3.5 text-warning" />
+  return <HardDrive className="h-3.5 w-3.5 text-muted" />
 }
 
-function RepoModal({
+function RepoDialog({
+  open,
   repo,
   onClose,
   onSave,
 }: {
+  open: boolean
   repo?: Repo
   onClose: () => void
-  onSave: (value: RepoCreateRequest) => void
+  onSave: (v: RepoCreateRequest) => void
 }) {
   const [name, setName] = useState(repo?.name || '')
   const [type, setType] = useState<Repo['type']>(repo?.type || 'local')
@@ -188,86 +105,60 @@ function RepoModal({
   const [language, setLanguage] = useState(repo?.language || 'auto')
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-xl rounded-2xl border border-gray-800 bg-gray-950 p-5 shadow-2xl">
-        <h3 className="text-base font-semibold text-white">{repo ? 'Edit repository' : 'Add repository'}</h3>
-
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          <Field label="Name">
-            <Input value={name} onChange={setName} placeholder="my-repo" />
-          </Field>
-          <Field label="Type">
-            <Select
-              value={type}
-              onChange={(value) => setType(value as Repo['type'])}
-              options={[
-                { value: 'local', label: 'Local' },
-                { value: 'github', label: 'GitHub' },
-                { value: 'gitlab', label: 'GitLab' },
-              ]}
-            />
-          </Field>
+    <Dialog
+      open={open}
+      onOpenChange={o => { if (!o) onClose() }}
+      title={repo ? 'Edit repository' : 'Add repository'}
+    >
+      <div className="grid gap-3 md:grid-cols-2">
+        <Field label="Name">
+          <Input value={name} onChange={e => setName(e.target.value)} placeholder="my-repo" />
+        </Field>
+        <Select
+          label="Type"
+          value={type}
+          onValueChange={v => setType(v as Repo['type'])}
+          options={[
+            { value: 'local', label: 'Local' },
+            { value: 'github', label: 'GitHub' },
+            { value: 'gitlab', label: 'GitLab' },
+          ]}
+        />
+        <div className="md:col-span-2">
           {type === 'local' ? (
-            <div className="md:col-span-2">
-              <Field label="Local path">
-                <Input value={path} onChange={setPath} placeholder="/repos/project" />
-              </Field>
-            </div>
+            <Field label="Local path">
+              <Input value={path} onChange={e => setPath(e.target.value)} placeholder="/repos/project" />
+            </Field>
           ) : (
-            <div className="md:col-span-2">
-              <Field label="Repository URL">
-                <Input value={url} onChange={setUrl} placeholder={`https://${type}.com/owner/repo`} />
-              </Field>
-            </div>
+            <Field label="Repository URL">
+              <Input value={url} onChange={e => setUrl(e.target.value)} placeholder={`https://${type}.com/owner/repo`} />
+            </Field>
           )}
-          <Field label="Branch">
-            <Input value={branch} onChange={setBranch} placeholder="main" />
-          </Field>
-          <Field label="Language">
-            <Input value={language} onChange={setLanguage} placeholder="auto" />
-          </Field>
         </div>
-
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg border border-gray-700 bg-gray-900 px-3 py-1.5 text-sm text-gray-300"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              onSave({
-                name,
-                type,
-                url: url || undefined,
-                path: path || undefined,
-                branch,
-                language,
-              })
-            }
-            disabled={!name || (type === 'local' ? !path : !url)}
-            className="rounded-lg bg-cyan-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-          >
-            {repo ? 'Save changes' : 'Add repository'}
-          </button>
-        </div>
+        <Field label="Branch">
+          <Input value={branch} onChange={e => setBranch(e.target.value)} placeholder="main" />
+        </Field>
+        <Field label="Language">
+          <Input value={language} onChange={e => setLanguage(e.target.value)} placeholder="auto" />
+        </Field>
       </div>
-    </div>
+      <DialogFooter>
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button
+          variant="primary"
+          onClick={() => onSave({ name, type, url: url || undefined, path: path || undefined, branch, language })}
+          disabled={!name || (type === 'local' ? !path : !url)}
+        >
+          {repo ? 'Save changes' : 'Add repository'}
+        </Button>
+      </DialogFooter>
+    </Dialog>
   )
 }
 
-function RepositoriesTab({
-  repos,
-  onReload,
-}: {
-  repos: Repo[]
-  onReload: () => void
-}) {
+function RepositoriesTab({ repos, onReload }: { repos: Repo[]; onReload: () => void }) {
   const [editingRepo, setEditingRepo] = useState<Repo | undefined>()
-  const [showAddModal, setShowAddModal] = useState(false)
+  const [showAdd, setShowAdd] = useState(false)
   const [deletingRepo, setDeletingRepo] = useState<string | null>(null)
   const [indexingRepo, setIndexingRepo] = useState<string | null>(null)
 
@@ -279,18 +170,18 @@ function RepositoriesTab({
         await api.repos.create(payload)
       }
       setEditingRepo(undefined)
-      setShowAddModal(false)
+      setShowAdd(false)
       onReload()
     } catch (e) {
       window.alert(String(e))
     }
   }
 
-  const handleDelete = async (repoName: string) => {
-    if (!window.confirm(`Remove repository "${repoName}" from runtime config?`)) return
-    setDeletingRepo(repoName)
+  const handleDelete = async (name: string) => {
+    if (!window.confirm(`Remove repository "${name}"?`)) return
+    setDeletingRepo(name)
     try {
-      await api.repos.delete(repoName)
+      await api.repos.delete(name)
       onReload()
     } catch (e) {
       window.alert(String(e))
@@ -299,10 +190,10 @@ function RepositoriesTab({
     }
   }
 
-  const handleIndex = async (repoName: string) => {
-    setIndexingRepo(repoName)
+  const handleIndex = async (name: string) => {
+    setIndexingRepo(name)
     try {
-      await api.repos.index(repoName)
+      await api.repos.index(name)
       onReload()
     } catch (e) {
       window.alert(String(e))
@@ -312,89 +203,64 @@ function RepositoriesTab({
   }
 
   return (
-    <div className="space-y-4">
-      <div className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-400">Runtime Repositories</p>
-            <h2 className="mt-0.5 text-base font-semibold text-white">Manual entries & imported remotes</h2>
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <Link
-              to="/repos"
-              className="inline-flex items-center justify-center rounded-lg border border-gray-700 bg-gray-950 px-3 py-1.5 text-sm text-gray-300 transition-colors hover:bg-gray-900"
-            >
-              Open Repositories home
-            </Link>
-            <button
-              type="button"
-              onClick={() => setShowAddModal(true)}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-600 px-3 py-1.5 text-sm font-medium text-white"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Add manual repository
-            </button>
-          </div>
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <p className="text-sm text-muted">
+            {repos.length} repositories configured.{' '}
+            <Link to="/repos" className="text-accent">Open Repositories →</Link>
+          </p>
         </div>
+        <Button variant="primary" size="sm" onClick={() => setShowAdd(true)}>
+          <Plus className="w-3.5 h-3.5" />
+          Add repository
+        </Button>
       </div>
 
       {repos.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-gray-800 bg-gray-900/40 p-8 text-center text-gray-500">
-          No repositories configured yet.
-        </div>
+        <p className="text-muted text-sm">No repositories configured yet.</p>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-gray-800 bg-gray-900/60">
-          <table className="w-full text-sm">
+        <div style={{ border: '1px solid var(--border)' }}>
+          <table className="w-full">
             <thead>
-              <tr className="border-b border-gray-800 text-left text-xs uppercase tracking-wider text-gray-500">
-                <th className="px-4 py-2 font-medium">Repository</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 font-medium">Source</th>
-                <th className="px-3 py-2"></th>
+              <tr style={{ borderBottom: '2px solid var(--border)' }}>
+                <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-4 py-2">Repository</th>
+                <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2">Status</th>
+                <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2">Branch</th>
+                <th className="px-3 py-2" />
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-800">
-              {repos.map((repo) => (
-                <tr key={repo.name} className="hover:bg-gray-800/30">
+            <tbody>
+              {repos.map(repo => (
+                <tr
+                  key={repo.name}
+                  style={{ borderBottom: '1px solid var(--border)' }}
+                  className="last:border-b-0 hover:bg-surface"
+                >
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <RepoTypeIcon type={repo.type} />
                       <div>
-                        <p className="font-medium text-white">{repo.name}</p>
-                        <p className="font-mono text-xs text-gray-500">{repo.url || repo.path || '-'}</p>
+                        <p className="text-sm font-medium">{repo.name}</p>
+                        <p className="text-xs text-muted font-mono">{repo.url || repo.path || '—'}</p>
                       </div>
                     </div>
                   </td>
-                  <td className="px-3 py-3 text-xs text-gray-400">
-                    {repo.status}
-                    {repo.total_chunks > 0 ? ` - ${repo.total_chunks.toLocaleString()} chunks` : ''}
+                  <td className="px-3 py-3">
+                    <span className="text-xs text-muted">{repo.status}{repo.total_chunks > 0 ? ` · ${repo.total_chunks.toLocaleString()} chunks` : ''}</span>
                   </td>
-                  <td className="px-3 py-3 text-xs text-gray-500">{repo.branch}</td>
-                  <td className="px-3 py-3 text-right">
-                    <div className="inline-flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleIndex(repo.name)}
-                        disabled={indexingRepo === repo.name || repo.status === 'indexing'}
-                        className="rounded-lg border border-gray-700 bg-gray-950 px-3 py-1.5 text-xs text-gray-300 disabled:opacity-50"
-                      >
-                        {indexingRepo === repo.name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setEditingRepo(repo)}
-                        className="rounded-lg border border-gray-700 bg-gray-950 px-3 py-1.5 text-xs text-gray-300"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDelete(repo.name)}
-                        disabled={deletingRepo === repo.name}
-                        className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-xs text-rose-300 disabled:opacity-50"
-                      >
-                        {deletingRepo === repo.name ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                      </button>
+                  <td className="px-3 py-3 text-xs text-muted font-mono">{repo.branch}</td>
+                  <td className="px-3 py-3">
+                    <div className="flex items-center gap-2 justify-end">
+                      <Button size="sm" variant="ghost" onClick={() => handleIndex(repo.name)} disabled={indexingRepo === repo.name} loading={indexingRepo === repo.name}>
+                        <RefreshCw className="w-3 h-3" />
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setEditingRepo(repo)}>
+                        <Pencil className="w-3 h-3" />
+                      </Button>
+                      <Button size="sm" variant="danger" onClick={() => handleDelete(repo.name)} disabled={deletingRepo === repo.name} loading={deletingRepo === repo.name}>
+                        <Trash2 className="w-3 h-3" />
+                      </Button>
                     </div>
                   </td>
                 </tr>
@@ -404,16 +270,8 @@ function RepositoriesTab({
         </div>
       )}
 
-      {(showAddModal || editingRepo) && (
-        <RepoModal
-          repo={editingRepo}
-          onClose={() => {
-            setShowAddModal(false)
-            setEditingRepo(undefined)
-          }}
-          onSave={handleSave}
-        />
-      )}
+      <RepoDialog open={showAdd} onClose={() => setShowAdd(false)} onSave={handleSave} />
+      <RepoDialog open={!!editingRepo} repo={editingRepo} onClose={() => setEditingRepo(undefined)} onSave={handleSave} />
     </div>
   )
 }
@@ -426,21 +284,20 @@ function AccessTab({
   onChange: (key: keyof SettingsData['settings_overrides'], value: string) => void
 }) {
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
-        <h2 className="text-sm font-medium text-white">LLM providers</h2>
-        <div className="mt-3 space-y-3">
-          <SecretInput label="OpenAI API key" value={settings.openai_api_key} onChange={(value) => onChange('openai_api_key', value)} placeholder="sk-..." />
-          <SecretInput label="Anthropic API key" value={settings.anthropic_api_key} onChange={(value) => onChange('anthropic_api_key', value)} placeholder="sk-ant-..." />
-          <SecretInput label="DeepSeek API key" value={settings.deepseek_api_key} onChange={(value) => onChange('deepseek_api_key', value)} placeholder="..." />
+    <div className="grid gap-6 lg:grid-cols-2">
+      <section>
+        <h3 className="text-sm font-semibold mb-3">LLM provider keys</h3>
+        <div className="space-y-3">
+          <SecretField label="OpenAI API key" value={settings.openai_api_key} onChange={v => onChange('openai_api_key', v)} placeholder="sk-..." />
+          <SecretField label="Anthropic API key" value={settings.anthropic_api_key} onChange={v => onChange('anthropic_api_key', v)} placeholder="sk-ant-..." />
+          <SecretField label="DeepSeek API key" value={settings.deepseek_api_key} onChange={v => onChange('deepseek_api_key', v)} placeholder="..." />
         </div>
       </section>
-
-      <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
-        <h2 className="text-sm font-medium text-white">Git provider tokens</h2>
-        <div className="mt-3 space-y-3">
-          <SecretInput label="GitHub token" value={settings.github_token} onChange={(value) => onChange('github_token', value)} placeholder="ghp_..." />
-          <SecretInput label="GitLab token" value={settings.gitlab_token} onChange={(value) => onChange('gitlab_token', value)} placeholder="glpat-..." />
+      <section>
+        <h3 className="text-sm font-semibold mb-3">Git provider tokens</h3>
+        <div className="space-y-3">
+          <SecretField label="GitHub token" value={settings.github_token} onChange={v => onChange('github_token', v)} placeholder="ghp_..." hint="Needed for private repos or high-volume API use." />
+          <SecretField label="GitLab token" value={settings.gitlab_token} onChange={v => onChange('gitlab_token', v)} placeholder="glpat-..." />
         </div>
       </section>
     </div>
@@ -457,92 +314,75 @@ function ModelsTab({
   embeddingRisk: { changed: boolean; dimsChanged: boolean }
 }) {
   return (
-    <div className="space-y-4">
-      <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-3">
-        <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-300">Runtime-first control plane</p>
-        <p className="mt-1 text-sm text-white">
-          Primary place to change providers, models, tokens, indexing behavior, and repositories after bootstrap.
-        </p>
-      </div>
-
+    <div className="space-y-6">
       {embeddingRisk.changed && (
-        <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-100">
-          <p className="font-medium text-amber-300">Embedding changes need follow-up work</p>
-          <p className="mt-1">
-            Changing embeddings provider or model requires re-indexing repositories so semantic search uses the new vectors.
+        <div style={{ border: '1px solid var(--warning)', color: 'var(--warning)' }} className="text-sm p-3 bg-[#fef9e7]">
+          <p className="font-medium mb-1">Embedding changes require re-indexing</p>
+          <p className="text-xs">
+            Changing the embeddings provider or model will invalidate existing vectors. Re-index all repositories after saving.
+            {embeddingRisk.dimsChanged && ' Changing dimensions also requires resetting vector-backed data.'}
           </p>
-          {embeddingRisk.dimsChanged && (
-            <p className="mt-1">
-              Changing embedding dimensions is more invasive: reset vector-backed data, restart the stack, and re-index repositories.
-            </p>
-          )}
         </div>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
-          <h2 className="text-sm font-medium text-white">Memory LLM</h2>
-          <div className="mt-3 space-y-3">
-            <Field label="LLM provider">
-              <Select
-                value={settings.llm_provider || 'openai'}
-                onChange={(value) => onChange('llm_provider', value)}
-                options={[
-                  { value: 'openai', label: 'OpenAI' },
-                  { value: 'anthropic', label: 'Anthropic' },
-                  { value: 'deepseek', label: 'DeepSeek' },
-                ]}
-              />
-            </Field>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <section>
+          <h3 className="text-sm font-semibold mb-3">Memory LLM</h3>
+          <div className="space-y-3">
+            <Select
+              label="LLM provider"
+              value={settings.llm_provider || 'openai'}
+              onValueChange={v => onChange('llm_provider', v)}
+              options={[
+                { value: 'openai', label: 'OpenAI' },
+                { value: 'anthropic', label: 'Anthropic' },
+                { value: 'deepseek', label: 'DeepSeek' },
+              ]}
+            />
             <Field label="LLM model">
-              <Input value={settings.llm_model || ''} onChange={(value) => onChange('llm_model', value)} placeholder="gpt-4o-mini" />
+              <Input value={settings.llm_model || ''} onChange={e => onChange('llm_model', e.target.value)} placeholder="gpt-4o-mini" />
             </Field>
           </div>
         </section>
 
-        <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
-          <h2 className="text-sm font-medium text-white">Embeddings</h2>
-          <div className="mt-3 space-y-3">
-            <Field label="Provider">
-              <Select
-                value={settings.embeddings_provider || 'openai'}
-                onChange={(value) => onChange('embeddings_provider', value)}
-                options={[
-                  { value: 'openai', label: 'OpenAI' },
-                  { value: 'jina', label: 'Jina' },
-                  { value: 'openai-compatible', label: 'OpenAI compatible' },
-                  { value: 'local', label: 'Local' },
-                ]}
-              />
-            </Field>
+        <section>
+          <h3 className="text-sm font-semibold mb-3">Embeddings</h3>
+          <div className="space-y-3">
+            <Select
+              label="Provider"
+              value={settings.embeddings_provider || 'openai'}
+              onValueChange={v => onChange('embeddings_provider', v)}
+              options={[
+                { value: 'openai', label: 'OpenAI' },
+                { value: 'jina', label: 'Jina' },
+                { value: 'openai-compatible', label: 'OpenAI compatible' },
+                { value: 'local', label: 'Local' },
+              ]}
+            />
             <Field label="Model">
-              <Input value={settings.embeddings_model || ''} onChange={(value) => onChange('embeddings_model', value)} placeholder="text-embedding-3-small" />
+              <Input value={settings.embeddings_model || ''} onChange={e => onChange('embeddings_model', e.target.value)} placeholder="text-embedding-3-small" />
             </Field>
             <Field label="Dimensions">
               <Input
                 type="number"
                 value={String(settings.embeddings_dims || 1536)}
-                onChange={(value) => onChange('embeddings_dims', parseInt(value, 10) || 1536)}
+                onChange={e => onChange('embeddings_dims', parseInt(e.target.value, 10) || 1536)}
               />
             </Field>
           </div>
         </section>
 
-        <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
-          <h2 className="text-sm font-medium text-white">Embedder connection</h2>
-          <div className="mt-3 space-y-3">
-            <SecretInput
+        <section>
+          <h3 className="text-sm font-semibold mb-3">Embedder connection</h3>
+          <div className="space-y-3">
+            <SecretField
               label="Dedicated embeddings key"
               value={settings.embeddings_api_key}
-              onChange={(value) => onChange('embeddings_api_key', value)}
+              onChange={v => onChange('embeddings_api_key', v)}
               placeholder="Leave empty to reuse provider key"
             />
             <Field label="OpenAI-compatible base URL">
-              <Input
-                value={settings.embeddings_base_url || ''}
-                onChange={(value) => onChange('embeddings_base_url', value)}
-                placeholder="https://api.openai.com/v1"
-              />
+              <Input value={settings.embeddings_base_url || ''} onChange={e => onChange('embeddings_base_url', e.target.value)} placeholder="https://api.openai.com/v1" />
             </Field>
           </div>
         </section>
@@ -558,77 +398,58 @@ function RuntimeTab({
   config: SettingsData['forge_config']
   onChange: (path: string, value: unknown) => void
 }) {
-  const [excludeText, setExcludeText] = useState(config.indexing.exclude.join('\n'))
-
-  useEffect(() => {
-    setExcludeText(config.indexing.exclude.join('\n'))
-  }, [config.indexing.exclude])
+  const indexing = config.indexing || {}
+  const memory = config.memory || { user_id: 'default' }
 
   return (
-    <div className="space-y-4">
-      <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
-        <h2 className="text-sm font-medium text-white">Indexing</h2>
-        <div className="mt-3 grid gap-3 lg:grid-cols-3">
-          <div className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-950/70 px-3 py-2.5 lg:col-span-3">
-            <div>
-              <p className="text-sm text-white">Auto indexing</p>
-              <p className="text-xs text-gray-500">Use the configured schedule to re-index automatically.</p>
-            </div>
-            <Toggle checked={config.indexing.auto} onChange={(value) => onChange('indexing.auto', value)} />
-          </div>
-          <Field label="Schedule">
-            <Input value={config.indexing.schedule} onChange={(value) => onChange('indexing.schedule', value)} placeholder="0 */6 * * *" />
+    <div className="grid gap-6 lg:grid-cols-2">
+      <section>
+        <h3 className="text-sm font-semibold mb-3">Indexing</h3>
+        <div className="space-y-3">
+          <Field label="Auto-index">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={!!indexing.auto}
+                onChange={e => onChange('indexing.auto', e.target.checked)}
+                className="w-3.5 h-3.5"
+              />
+              <span className="text-sm">Enable automatic re-indexing</span>
+            </label>
+          </Field>
+          <Field label="Cron schedule" hint="e.g. 0 */6 * * * (every 6 hours)">
+            <Input value={indexing.schedule || ''} onChange={e => onChange('indexing.schedule', e.target.value)} placeholder="0 */6 * * *" />
           </Field>
           <Field label="Max file size (KB)">
-            <Input
-              type="number"
-              value={String(config.indexing.max_file_size_kb)}
-              onChange={(value) => onChange('indexing.max_file_size_kb', parseInt(value, 10) || 500)}
-            />
+            <Input type="number" value={String(indexing.max_file_size_kb || 500)} onChange={e => onChange('indexing.max_file_size_kb', parseInt(e.target.value, 10) || 500)} />
           </Field>
-          <Field label="Chunk size">
-            <Input
-              type="number"
-              value={String(config.indexing.chunk_size)}
-              onChange={(value) => onChange('indexing.chunk_size', parseInt(value, 10) || 400)}
-            />
+          <Field label="Chunk size (tokens)">
+            <Input type="number" value={String(indexing.chunk_size || 400)} onChange={e => onChange('indexing.chunk_size', parseInt(e.target.value, 10) || 400)} />
           </Field>
-          <Field label="Chunk overlap">
-            <Input
-              type="number"
-              value={String(config.indexing.chunk_overlap)}
-              onChange={(value) => onChange('indexing.chunk_overlap', parseInt(value, 10) || 50)}
-            />
+          <Field label="Chunk overlap (tokens)">
+            <Input type="number" value={String(indexing.chunk_overlap || 50)} onChange={e => onChange('indexing.chunk_overlap', parseInt(e.target.value, 10) || 50)} />
           </Field>
-          <div className="lg:col-span-3">
-            <Field label="Exclude patterns">
-              <textarea
-                value={excludeText}
-                onChange={(e) => {
-                  setExcludeText(e.target.value)
-                  onChange(
-                    'indexing.exclude',
-                    e.target.value
-                      .split('\n')
-                      .map((entry) => entry.trim())
-                      .filter(Boolean)
-                  )
-                }}
-                rows={6}
-                className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 font-mono text-xs text-gray-200 outline-none transition-colors focus:border-cyan-500"
-              />
-            </Field>
-          </div>
         </div>
       </section>
 
-      <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
-        <h2 className="text-sm font-medium text-white">Memory defaults</h2>
-        <div className="mt-3 max-w-sm">
-          <Field label="Default user id">
-            <Input value={config.memory.user_id} onChange={(value) => onChange('memory.user_id', value)} placeholder="default" />
+      <section>
+        <h3 className="text-sm font-semibold mb-3">Memory</h3>
+        <div className="space-y-3">
+          <Field label="User ID" hint="All memories are stored under this user ID.">
+            <Input value={memory.user_id || 'default'} onChange={e => onChange('memory.user_id', e.target.value)} placeholder="default" />
           </Field>
         </div>
+
+        <h3 className="text-sm font-semibold mb-3 mt-6">Exclude patterns</h3>
+        <Field label="Patterns (one per line)" hint="Glob patterns for files to skip during indexing.">
+          <Textarea
+            value={(indexing.exclude || []).join('\n')}
+            onChange={e => onChange('indexing.exclude', e.target.value.split('\n').map(s => s.trim()).filter(Boolean))}
+            rows={8}
+            className="font-mono text-xs"
+            placeholder="**/node_modules/**&#10;**/__pycache__/**"
+          />
+        </Field>
       </section>
     </div>
   )
@@ -637,11 +458,14 @@ function RuntimeTab({
 function McpKeysTab() {
   const [keys, setKeys] = useState<MCPApiKey[]>([])
   const [loading, setLoading] = useState(true)
-  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [showCreate, setShowCreate] = useState(false)
   const [creating, setCreating] = useState(false)
   const [revokingKey, setRevokingKey] = useState<number | null>(null)
   const [newKey, setNewKey] = useState<{ key: string; name: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [keyName, setKeyName] = useState('')
+  const [keyScope, setKeyScope] = useState('read,write')
+  const [expiresDays, setExpiresDays] = useState('')
 
   const loadKeys = useCallback(async () => {
     try {
@@ -655,18 +479,22 @@ function McpKeysTab() {
     }
   }, [])
 
-  useEffect(() => {
-    loadKeys()
-  }, [loadKeys])
+  useEffect(() => { loadKeys() }, [loadKeys])
 
-  const handleCreate = async (name: string, scope: string, expiresDays?: number) => {
+  const handleCreate = async () => {
     setCreating(true)
     setError(null)
     try {
-      const response = await api.mcpKeys.create({ name, scope, expires_days: expiresDays })
+      const response = await api.mcpKeys.create({
+        name: keyName,
+        scope: keyScope,
+        expires_days: expiresDays ? parseInt(expiresDays, 10) : undefined,
+      })
       setNewKey({ key: response.key, name: response.name })
       await loadKeys()
-      setShowCreateModal(false)
+      setShowCreate(false)
+      setKeyName('')
+      setExpiresDays('')
     } catch (e) {
       setError(String(e))
     } finally {
@@ -674,11 +502,11 @@ function McpKeysTab() {
     }
   }
 
-  const handleRevoke = async (keyId: number) => {
+  const handleRevoke = async (id: number) => {
     if (!window.confirm('Revoke this API key? It will stop working immediately.')) return
-    setRevokingKey(keyId)
+    setRevokingKey(id)
     try {
-      await api.mcpKeys.revoke(keyId)
+      await api.mcpKeys.revoke(id)
       await loadKeys()
     } catch (e) {
       setError(String(e))
@@ -687,126 +515,80 @@ function McpKeysTab() {
     }
   }
 
-  const formatDate = (dateStr?: string) => {
-    if (!dateStr) return '-'
-    return new Date(dateStr).toLocaleDateString() + ' ' + new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  }
-
-  const isExpired = (expiresAt?: string) => {
-    if (!expiresAt) return false
-    return new Date(expiresAt) < new Date()
-  }
+  const isExpired = (expiresAt?: string) => expiresAt ? new Date(expiresAt) < new Date() : false
+  const fmtDate = (d?: string) => d ? new Date(d).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'
 
   return (
-    <div className="space-y-4">
-      <div className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-400">MCP API Keys</p>
-            <h2 className="mt-0.5 text-base font-semibold text-white">Manage agent authentication</h2>
-            <p className="mt-1 text-sm text-gray-400">Create API keys for CLI agents to connect to this context-forge instance</p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setShowCreateModal(true)}
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-600 px-3 py-1.5 text-sm font-medium text-white"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Generate API key
-          </button>
-        </div>
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-muted">API keys allow CLI agents to authenticate with this instance.</p>
+        <Button variant="primary" size="sm" onClick={() => setShowCreate(true)}>
+          <Plus className="w-3.5 h-3.5" />
+          Generate key
+        </Button>
       </div>
 
       {error && (
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-300">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="h-4 w-4" />
-            {error}
-          </div>
+        <div style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }} className="text-sm p-3 mb-4 bg-[#fef2f2]">
+          <AlertCircle className="inline w-3.5 h-3.5 mr-1" />{error}
         </div>
       )}
 
       {newKey && (
-        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4">
-          <div className="flex items-start gap-3">
-            <Check className="mt-0.5 h-5 w-5 text-emerald-400" />
-            <div className="flex-1">
-              <p className="font-medium text-white">API key generated successfully!</p>
-              <p className="mt-2 text-sm text-gray-300">Copy this key now. You won't be able to see it again.</p>
-              <div className="mt-3 rounded-lg border border-gray-700 bg-gray-950 p-3">
-                <code className="break-all font-mono text-sm text-cyan-400">{newKey.key}</code>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  navigator.clipboard.writeText(newKey.key)
-                  setNewKey(null)
-                }}
-                className="mt-3 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"
-              >
-                Copy to clipboard
-              </button>
-            </div>
-          </div>
+        <div style={{ border: '1px solid var(--success)', color: 'var(--success)' }} className="text-sm p-4 mb-4 bg-[#eafaf1]">
+          <p className="font-medium mb-2">
+            <Check className="inline w-3.5 h-3.5 mr-1" />
+            Key generated — copy it now, it won't be shown again.
+          </p>
+          <pre className="text-xs font-mono bg-white border border-[#a9dfbf] p-2 overflow-x-auto mb-2">
+            <code>{newKey.key}</code>
+          </pre>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => { navigator.clipboard.writeText(newKey.key); setNewKey(null) }}
+          >
+            Copy &amp; dismiss
+          </Button>
         </div>
       )}
 
       {loading ? (
-        <div className="flex items-center justify-center rounded-xl border border-gray-800 bg-gray-900/40 p-8">
-          <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
-        </div>
+        <p className="text-muted text-sm">Loading...</p>
       ) : keys.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-gray-800 bg-gray-900/40 p-8 text-center text-gray-500">
-          No API keys configured yet. Generate one to allow CLI agents to connect.
-        </div>
+        <p className="text-muted text-sm">No API keys configured yet.</p>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-gray-800 bg-gray-900/60">
-          <table className="w-full text-sm">
+        <div style={{ border: '1px solid var(--border)' }}>
+          <table className="w-full">
             <thead>
-              <tr className="border-b border-gray-800 text-left text-xs uppercase tracking-wider text-gray-500">
-                <th className="px-4 py-2 font-medium">Name</th>
-                <th className="px-3 py-2 font-medium">Scope</th>
-                <th className="px-3 py-2 font-medium">Created</th>
-                <th className="px-3 py-2 font-medium">Last used</th>
-                <th className="px-3 py-2 font-medium">Expires</th>
-                <th className="px-3 py-2"></th>
+              <tr style={{ borderBottom: '2px solid var(--border)' }}>
+                <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-4 py-2">Name</th>
+                <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2">Scope</th>
+                <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2">Created</th>
+                <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2">Last used</th>
+                <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2">Expires</th>
+                <th className="px-3 py-2" />
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-800">
-              {keys.map((key) => (
-                <tr key={key.id} className="hover:bg-gray-800/30">
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <Key className="h-3.5 w-3.5 text-gray-400" />
-                      <span className="font-medium text-white">{key.name}</span>
-                      {isExpired(key.expires_at) && (
-                        <span className="rounded bg-rose-500/10 px-1.5 py-0.5 text-xs text-rose-400">Expired</span>
-                      )}
-                    </div>
+            <tbody>
+              {keys.map(key => (
+                <tr key={key.id} style={{ borderBottom: '1px solid var(--border)' }} className="last:border-b-0 hover:bg-surface">
+                  <td className="px-4 py-3 text-sm font-medium">
+                    {key.name}
+                    {isExpired(key.expires_at) && <Badge variant="danger" className="ml-2">Expired</Badge>}
                   </td>
                   <td className="px-3 py-3">
-                    <code className="rounded bg-gray-950 px-1.5 py-0.5 text-xs text-gray-400">{key.scope}</code>
+                    <code className="text-xs font-mono text-muted">{key.scope}</code>
                   </td>
-                  <td className="px-3 py-3 text-xs text-gray-400">{formatDate(key.created_at)}</td>
-                  <td className="px-3 py-3 text-xs text-gray-400">{formatDate(key.last_used_at)}</td>
-                  <td className="px-3 py-3 text-xs text-gray-400">
-                    {key.expires_at ? (
-                      <span className={isExpired(key.expires_at) ? 'text-rose-400' : ''}>
-                        {formatDate(key.expires_at)}
-                      </span>
-                    ) : (
-                      'Never'
-                    )}
+                  <td className="px-3 py-3 text-xs text-muted">{fmtDate(key.created_at)}</td>
+                  <td className="px-3 py-3 text-xs text-muted">{fmtDate(key.last_used_at)}</td>
+                  <td className="px-3 py-3 text-xs text-muted">
+                    {key.expires_at ? <span className={isExpired(key.expires_at) ? 'text-danger' : ''}>{fmtDate(key.expires_at)}</span> : 'Never'}
                   </td>
-                  <td className="px-3 py-3 text-right">
-                    <button
-                      type="button"
-                      onClick={() => handleRevoke(key.id)}
-                      disabled={revokingKey === key.id}
-                      className="rounded-lg border border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-xs text-rose-300 disabled:opacity-50"
-                    >
-                      {revokingKey === key.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                    </button>
+                  <td className="px-3 py-3">
+                    <Button size="sm" variant="danger" onClick={() => handleRevoke(key.id)} disabled={revokingKey === key.id} loading={revokingKey === key.id}>
+                      <Trash2 className="w-3 h-3" />
+                    </Button>
                   </td>
                 </tr>
               ))}
@@ -815,169 +597,44 @@ function McpKeysTab() {
         </div>
       )}
 
-      {showCreateModal && (
-        <CreateKeyModal
-          onClose={() => setShowCreateModal(false)}
-          onCreate={handleCreate}
-          loading={creating}
-        />
-      )}
-    </div>
-  )
-}
-
-function CreateKeyModal({
-  onClose,
-  onCreate,
-  loading,
-}: {
-  onClose: () => void
-  onCreate: (name: string, scope: string, expiresDays?: number) => Promise<void>
-  loading: boolean
-}) {
-  const [name, setName] = useState('')
-  const [scope, setScope] = useState('read,write')
-  const [expiresDays, setExpiresDays] = useState<number | undefined>(undefined)
-
-  const scopes = [
-    { value: 'read', label: 'Read only' },
-    { value: 'write', label: 'Write only' },
-    { value: 'read,write', label: 'Read + Write (recommended)' },
-    { value: 'admin', label: 'Full admin access' },
-  ]
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-md rounded-2xl border border-gray-800 bg-gray-950 p-5 shadow-2xl">
-        <h3 className="text-base font-semibold text-white">Generate MCP API Key</h3>
-
-        <div className="mt-4 space-y-3">
-          <Field label="Key name">
-            <Input value={name} onChange={setName} placeholder="My CLI agent" />
-          </Field>
-
-          <Field label="Scope">
-            <Select
-              value={scope}
-              onChange={setScope}
-              options={scopes}
-            />
-          </Field>
-
-          <Field label="Expires (optional)">
-            <Input
-              type="number"
-              value={expiresDays || ''}
-              onChange={(value) => setExpiresDays(value ? parseInt(value, 10) : undefined)}
-              placeholder="Leave empty for no expiration"
-              min={1}
-              max={365}
-            />
-          </Field>
+      <Dialog
+        open={showCreate}
+        onOpenChange={o => { if (!o) setShowCreate(false) }}
+        title="Generate MCP API Key"
+      >
+        <div className="space-y-3">
+          <Input
+            label="Key name"
+            value={keyName}
+            onChange={e => setKeyName(e.target.value)}
+            placeholder="My CLI agent"
+          />
+          <Select
+            label="Scope"
+            value={keyScope}
+            onValueChange={setKeyScope}
+            options={[
+              { value: 'read', label: 'Read only' },
+              { value: 'write', label: 'Write only' },
+              { value: 'read,write', label: 'Read + Write (recommended)' },
+              { value: 'admin', label: 'Full admin access' },
+            ]}
+          />
+          <Input
+            label="Expires in days (optional)"
+            type="number"
+            value={expiresDays}
+            onChange={e => setExpiresDays(e.target.value)}
+            placeholder="Leave empty for no expiration"
+          />
         </div>
-
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={loading}
-            className="rounded-lg border border-gray-700 bg-gray-900 px-3 py-1.5 text-sm text-gray-300 disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={() => onCreate(name, scope, expiresDays)}
-            disabled={!name || loading}
-            className="rounded-lg bg-cyan-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-          >
-            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Generate'}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function RuntimeTab({
-  config,
-  onChange,
-}: {
-  config: SettingsData['forge_config']
-  onChange: (path: string, value: unknown) => void
-}) {
-  const [excludeText, setExcludeText] = useState(config.indexing.exclude.join('\n'))
-
-  useEffect(() => {
-    setExcludeText(config.indexing.exclude.join('\n'))
-  }, [config.indexing.exclude])
-
-  return (
-    <div className="space-y-4">
-      <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
-        <h2 className="text-sm font-medium text-white">Indexing</h2>
-        <div className="mt-3 grid gap-3 lg:grid-cols-3">
-          <div className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-950/70 px-3 py-2.5 lg:col-span-3">
-            <div>
-              <p className="text-sm text-white">Auto indexing</p>
-              <p className="text-xs text-gray-500">Use the configured schedule to re-index automatically.</p>
-            </div>
-            <Toggle checked={config.indexing.auto} onChange={(value) => onChange('indexing.auto', value)} />
-          </div>
-          <Field label="Schedule">
-            <Input value={config.indexing.schedule} onChange={(value) => onChange('indexing.schedule', value)} placeholder="0 */6 * * *" />
-          </Field>
-          <Field label="Max file size (KB)">
-            <Input
-              type="number"
-              value={String(config.indexing.max_file_size_kb)}
-              onChange={(value) => onChange('indexing.max_file_size_kb', parseInt(value, 10) || 500)}
-            />
-          </Field>
-          <Field label="Chunk size">
-            <Input
-              type="number"
-              value={String(config.indexing.chunk_size)}
-              onChange={(value) => onChange('indexing.chunk_size', parseInt(value, 10) || 400)}
-            />
-          </Field>
-          <Field label="Chunk overlap">
-            <Input
-              type="number"
-              value={String(config.indexing.chunk_overlap)}
-              onChange={(value) => onChange('indexing.chunk_overlap', parseInt(value, 10) || 50)}
-            />
-          </Field>
-          <div className="lg:col-span-3">
-            <Field label="Exclude patterns">
-              <textarea
-                value={excludeText}
-                onChange={(e) => {
-                  setExcludeText(e.target.value)
-                  onChange(
-                    'indexing.exclude',
-                    e.target.value
-                      .split('\n')
-                      .map((entry) => entry.trim())
-                      .filter(Boolean)
-                  )
-                }}
-                rows={6}
-                className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 font-mono text-xs text-gray-200 outline-none transition-colors focus:border-cyan-500"
-              />
-            </Field>
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
-        <h2 className="text-sm font-medium text-white">Memory defaults</h2>
-        <div className="mt-3 max-w-sm">
-          <Field label="Default user id">
-            <Input value={config.memory.user_id} onChange={(value) => onChange('memory.user_id', value)} placeholder="default" />
-          </Field>
-        </div>
-      </section>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
+          <Button variant="primary" onClick={handleCreate} disabled={!keyName || creating} loading={creating}>
+            Generate
+          </Button>
+        </DialogFooter>
+      </Dialog>
     </div>
   )
 }
@@ -993,7 +650,7 @@ function getEmbeddingSignature(settings: SettingsData['settings_overrides']) {
 export default function Settings() {
   const [activeTab, setActiveTab] = useState<Tab>('repositories')
   const [data, setData] = useState<SettingsData | null>(null)
-  const [baselineEmbeddingSignature, setBaselineEmbeddingSignature] = useState<ReturnType<typeof getEmbeddingSignature> | null>(null)
+  const [baselineEmbedding, setBaselineEmbedding] = useState<ReturnType<typeof getEmbeddingSignature> | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1004,7 +661,7 @@ export default function Settings() {
     try {
       const next = (await api.settings.get()) as SettingsData
       setData(next)
-      setBaselineEmbeddingSignature(getEmbeddingSignature(next.settings_overrides))
+      setBaselineEmbedding(getEmbeddingSignature(next.settings_overrides))
       setError(null)
     } catch (e) {
       setError(String(e))
@@ -1013,29 +670,19 @@ export default function Settings() {
     }
   }, [])
 
-  useEffect(() => {
-    load()
-  }, [load])
+  useEffect(() => { load() }, [load])
 
   const embeddingRisk = useMemo(() => {
-    if (!data || !baselineEmbeddingSignature) {
-      return { changed: false, dimsChanged: false }
-    }
+    if (!data || !baselineEmbedding) return { changed: false, dimsChanged: false }
     const current = getEmbeddingSignature(data.settings_overrides)
-    const dimsChanged = current.dims !== baselineEmbeddingSignature.dims
-    const changed =
-      dimsChanged ||
-      current.provider !== baselineEmbeddingSignature.provider ||
-      current.model !== baselineEmbeddingSignature.model
+    const dimsChanged = current.dims !== baselineEmbedding.dims
+    const changed = dimsChanged || current.provider !== baselineEmbedding.provider || current.model !== baselineEmbedding.model
     return { changed, dimsChanged }
-  }, [baselineEmbeddingSignature, data])
+  }, [baselineEmbedding, data])
 
-  const updateSettingsOverride = (key: keyof SettingsData['settings_overrides'], value: unknown) => {
+  const updateOverride = (key: keyof SettingsData['settings_overrides'], value: unknown) => {
     if (!data) return
-    setData({
-      ...data,
-      settings_overrides: { ...data.settings_overrides, [key]: value },
-    })
+    setData({ ...data, settings_overrides: { ...data.settings_overrides, [key]: value as string | number | undefined } })
   }
 
   const updateForgeConfig = (path: string, value: unknown) => {
@@ -1043,9 +690,9 @@ export default function Settings() {
     const segments = path.split('.')
     const nextConfig = { ...data.forge_config } as Record<string, unknown>
     let current: Record<string, unknown> = nextConfig
-    for (let index = 0; index < segments.length - 1; index += 1) {
-      current[segments[index]] = { ...(current[segments[index]] as Record<string, unknown>) }
-      current = current[segments[index]] as Record<string, unknown>
+    for (let i = 0; i < segments.length - 1; i++) {
+      current[segments[i]] = { ...(current[segments[i]] as Record<string, unknown>) }
+      current = current[segments[i]] as Record<string, unknown>
     }
     current[segments[segments.length - 1]] = value
     setData({ ...data, forge_config: nextConfig as SettingsData['forge_config'] })
@@ -1053,26 +700,15 @@ export default function Settings() {
 
   const handleSave = async () => {
     if (!data) return
-    if (
-      embeddingRisk.dimsChanged &&
-      !window.confirm(
-        'Changing embedding dimensions requires resetting vector-backed data and re-indexing repositories. Save anyway?'
-      )
-    ) {
-      return
-    }
-
+    if (embeddingRisk.dimsChanged && !window.confirm('Changing embedding dimensions requires resetting vector data and re-indexing. Save anyway?')) return
     setSaving(true)
     setError(null)
     setSuccess(null)
     setWarnings([])
     try {
-      const result = await api.settings.update({
-        forge_config: data.forge_config,
-        settings_overrides: data.settings_overrides,
-      })
-      setBaselineEmbeddingSignature(getEmbeddingSignature(data.settings_overrides))
-      setSuccess('Runtime settings saved successfully.')
+      const result = await api.settings.update({ forge_config: data.forge_config, settings_overrides: data.settings_overrides })
+      setBaselineEmbedding(getEmbeddingSignature(data.settings_overrides))
+      setSuccess('Settings saved.')
       setWarnings(result.warnings)
     } catch (e) {
       setError(String(e))
@@ -1081,107 +717,64 @@ export default function Settings() {
     }
   }
 
-  const tabs: { id: Tab; label: string; icon: typeof GitBranch }[] = [
-    { id: 'repositories', label: 'Repositories', icon: GitBranch },
-    { id: 'access', label: 'API keys', icon: Key },
-    { id: 'models', label: 'Models', icon: Database },
-    { id: 'runtime', label: 'Runtime', icon: Settings2 },
-    { id: 'mcp_keys', label: 'MCP Keys', icon: Key },
-  ]
-
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-950 text-gray-400">
-        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-        Loading settings...
-      </div>
-    )
-  }
-
-  if (!data) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-950 text-rose-400">
-        Unable to load runtime settings.
-      </div>
-    )
-  }
+  if (loading) return <div className="p-8 text-muted text-sm">Loading settings...</div>
+  if (!data) return <div className="p-8 text-danger text-sm">Unable to load settings.</div>
 
   return (
-    <div className="min-h-screen bg-gray-950">
-      <div className="mx-auto max-w-6xl p-6">
-        <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+    <div className="p-8">
+      <div className="page-content">
+        <div className="flex items-start justify-between mb-6">
           <div>
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-400">Settings</p>
-            <h1 className="mt-1 flex items-center gap-2 text-xl font-semibold text-white">
-              <SlidersHorizontal className="h-5 w-5 text-cyan-400" />
-              Runtime configuration
-            </h1>
+            <h1>Settings</h1>
+            <p className="text-muted text-sm">Runtime configuration — changes take effect immediately.</p>
           </div>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={saving}
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-          >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            Save runtime settings
-          </button>
+          <Button variant="primary" onClick={handleSave} loading={saving} disabled={saving} className="mt-1">
+            <Save className="w-3.5 h-3.5" />
+            Save
+          </Button>
         </div>
 
         {error && (
-          <div className="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-300">
-            <div className="flex items-center gap-2">
-              <AlertCircle className="h-4 w-4" />
-              {error}
-            </div>
+          <div style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }} className="text-sm p-3 mb-4 bg-[#fef2f2]">
+            <AlertCircle className="inline w-3.5 h-3.5 mr-1" />{error}
           </div>
         )}
         {success && (
-          <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-300">
-            <div className="flex items-center gap-2">
-              <Check className="h-4 w-4" />
-              {success}
-            </div>
+          <div style={{ border: '1px solid var(--success)', color: 'var(--success)' }} className="text-sm p-3 mb-4 bg-[#eafaf1]">
+            <Check className="inline w-3.5 h-3.5 mr-1" />{success}
           </div>
         )}
         {warnings.length > 0 && (
-          <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
-            {warnings.map((warning) => (
-              <p key={warning}>{warning}</p>
-            ))}
+          <div style={{ border: '1px solid var(--warning)', color: 'var(--warning)' }} className="text-sm p-3 mb-4 bg-[#fef9e7]">
+            {warnings.map(w => <p key={w}>{w}</p>)}
           </div>
         )}
 
-        <div className="mb-4 flex flex-wrap gap-2 rounded-xl border border-gray-800 bg-gray-900/70 p-1.5">
-          {tabs.map((tab) => {
-            const Icon = tab.icon
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTab(tab.id)}
-                className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${
-                  activeTab === tab.id
-                    ? 'bg-cyan-600 text-white'
-                    : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
-                }`}
-              >
-                <Icon className="h-3.5 w-3.5" />
-                {tab.label}
-              </button>
-            )
-          })}
-        </div>
+        <Tabs value={activeTab} onValueChange={v => setActiveTab(v as Tab)}>
+          <TabsList>
+            <TabsTrigger value="repositories">Repositories</TabsTrigger>
+            <TabsTrigger value="access">API keys</TabsTrigger>
+            <TabsTrigger value="models">Models</TabsTrigger>
+            <TabsTrigger value="runtime">Runtime</TabsTrigger>
+            <TabsTrigger value="mcp_keys">MCP keys</TabsTrigger>
+          </TabsList>
 
-        <div className="rounded-xl border border-gray-800 bg-gray-900/40 p-5">
-          {activeTab === 'repositories' && <RepositoriesTab repos={data.forge_config.repos} onReload={load} />}
-          {activeTab === 'access' && <AccessTab settings={data.settings_overrides} onChange={updateSettingsOverride} />}
-          {activeTab === 'models' && (
-            <ModelsTab settings={data.settings_overrides} onChange={updateSettingsOverride} embeddingRisk={embeddingRisk} />
-          )}
-          {activeTab === 'runtime' && <RuntimeTab config={data.forge_config} onChange={updateForgeConfig} />}
-          {activeTab === 'mcp_keys' && <McpKeysTab />}
-        </div>
+          <TabsContent value="repositories">
+            <RepositoriesTab repos={data.forge_config.repos} onReload={load} />
+          </TabsContent>
+          <TabsContent value="access">
+            <AccessTab settings={data.settings_overrides} onChange={updateOverride} />
+          </TabsContent>
+          <TabsContent value="models">
+            <ModelsTab settings={data.settings_overrides} onChange={updateOverride} embeddingRisk={embeddingRisk} />
+          </TabsContent>
+          <TabsContent value="runtime">
+            <RuntimeTab config={data.forge_config} onChange={updateForgeConfig} />
+          </TabsContent>
+          <TabsContent value="mcp_keys">
+            <McpKeysTab />
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   )
