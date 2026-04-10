@@ -81,8 +81,10 @@ async def revoke_key(key_id: int, user_id: int = 1):
 
 
 @router.post("/validate")
-async def validate_key(api_key: str):
+async def validate_key(api_key: str | None = None):
     """Validate an MCP API key (for testing)."""
+    if not api_key:
+        raise HTTPException(status_code=401, detail="Missing API key")
     key_info = await validate_mcp_api_key(api_key)
     if not key_info:
         raise HTTPException(status_code=401, detail="Invalid or expired API key")

@@ -77,7 +77,7 @@ async def auth_guard(request, call_next):
     if not path.startswith("/api"):
         return await call_next(request)
 
-    open_paths = ("/api/health", "/api/setup", "/api/auth")
+    open_paths = ("/api/health", "/api/setup", "/api/auth", "/api/mcp/keys/validate")
     if path.startswith(open_paths):
         return await call_next(request)
 
