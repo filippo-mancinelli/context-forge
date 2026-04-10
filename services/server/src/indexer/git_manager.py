@@ -48,11 +48,19 @@ async def ensure_repo_cloned(repo: RepoConfig) -> str:
     local_path = get_repo_local_path(repo)
     path = Path(local_path)
 
-    clone_url = repo.url
-    if repo.token:
-        clone_url = _inject_token(repo.url, repo.token)
+    token = repo.token
+    if not token:
+        settings = get_settings()
+        if repo.type == "github" and settings.github_token:
+            token = settings.github_token
+        elif repo.type == "gitlab" and settings.gitlab_token:
+            token = settings.gitlab_token
+
+    clone_url = _inject_token(repo.url, token) if token else repo.url
 
     if path.exists() and (path / ".git").exists():
+        # Keep the stored remote URL in sync with the current token.
+        await _run_git("remote", "set-url", "origin", clone_url, cwd=local_path)
         logger.info("Pulling latest changes for %s", repo.name)
         code, out, err = await _run_git("pull", "--ff-only", cwd=local_path)
         if code != 0:
