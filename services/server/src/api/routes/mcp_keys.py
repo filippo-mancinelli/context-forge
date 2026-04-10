@@ -1,7 +1,7 @@
 """MCP API key management routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from ..security import (
@@ -81,11 +81,11 @@ async def revoke_key(key_id: int, user_id: int = 1):
 
 
 @router.post("/validate")
-async def validate_key(api_key: str | None = None):
+async def validate_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")):
     """Validate an MCP API key (for testing)."""
-    if not api_key:
+    if not x_api_key:
         raise HTTPException(status_code=401, detail="Missing API key")
-    key_info = await validate_mcp_api_key(api_key)
+    key_info = await validate_mcp_api_key(x_api_key)
     if not key_info:
         raise HTTPException(status_code=401, detail="Invalid or expired API key")
     return {"valid": True, "key": {"id": key_info["id"], "name": key_info["name"], "scope": key_info["scope"]}}
