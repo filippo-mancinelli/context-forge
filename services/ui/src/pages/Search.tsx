@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
-import { ArrowRightLeft, Brain, Loader2, Search as SearchIcon, Sparkles } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api, type Job, type Memory, type RepoRelationship, type RepoSearchResult } from '../lib/api'
+import { Button, Input } from '../components/ui'
 
 function snippet(content: string, max = 260) {
   const flat = content.replace(/\s+/g, ' ').trim()
@@ -16,6 +16,7 @@ export default function Search() {
   const [memories, setMemories] = useState<Memory[]>([])
   const [jobMatches, setJobMatches] = useState<Job[]>([])
   const [relationships, setRelationships] = useState<RepoRelationship[]>([])
+  const [hasSearched, setHasSearched] = useState(false)
 
   const grouped = useMemo(() => {
     const groups: Record<string, RepoSearchResult[]> = {}
@@ -56,6 +57,7 @@ export default function Search() {
       setMemories(memoryData.memories)
       setJobMatches(matchedJobs.slice(0, 8))
       setRelationships(filteredRelationships.slice(0, 10))
+      setHasSearched(true)
     } catch (e) {
       setError(String(e))
     } finally {
@@ -64,106 +66,145 @@ export default function Search() {
   }
 
   return (
-    <div className="p-8 space-y-6">
-      <div>
-        <h1 className="text-xl font-semibold text-white flex items-center gap-2">
-          <Sparkles className="w-5 h-5 text-indigo-400" />
-          Cross-Repo Search
-        </h1>
-        <p className="text-sm text-gray-500 mt-1">Unified search across repositories, memories and jobs.</p>
-      </div>
+    <div className="p-8">
+      <div className="page-content">
+        <div className="mb-6">
+          <h1>Cross-Repo Search</h1>
+          <p className="text-muted text-sm">Unified search across repositories, memories, and jobs.</p>
+        </div>
 
-      <div className="flex gap-2">
-        <div className="flex-1 relative">
-          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-          <input
+        <div className="flex gap-2 mb-6">
+          <Input
+            className="flex-1"
             type="text"
             value={query}
             onChange={e => setQuery(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && runSearch()}
-            placeholder="Search across repos + memory + jobs..."
-            className="w-full pl-9 pr-4 py-2 text-sm bg-gray-900 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500"
+            placeholder="Search across repos, memory, jobs..."
           />
+          <Button
+            variant="primary"
+            onClick={runSearch}
+            disabled={loading || !query.trim()}
+            loading={loading}
+          >
+            Search
+          </Button>
         </div>
-        <button
-          onClick={runSearch}
-          disabled={loading || !query.trim()}
-          className="px-4 py-2 text-sm text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg transition-colors disabled:opacity-50"
-        >
-          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Search'}
-        </button>
-      </div>
 
-      {error && <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-sm text-red-400">{error}</div>}
+        {error && (
+          <div
+            style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
+            className="text-sm p-3 mb-4 bg-[#fef2f2]"
+          >
+            {error}
+          </div>
+        )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-        <div className="xl:col-span-2 bg-gray-900 border border-gray-800 rounded-xl p-4">
-          <h2 className="text-sm text-white font-medium mb-3">Code Results by Repository</h2>
-          <div className="space-y-4">
-            {grouped.length === 0 && <p className="text-sm text-gray-500">Run a query to see grouped results.</p>}
-            {grouped.map(([repoName, items]) => (
-              <div key={repoName} className="border border-gray-800 rounded-xl p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <p className="text-sm text-indigo-300 font-medium">{repoName}</p>
-                  <Link to={`/repos/${encodeURIComponent(repoName)}`} className="text-xs text-gray-400 hover:text-gray-200">
-                    Open repo
-                  </Link>
-                </div>
-                <div className="space-y-2">
-                  {items.slice(0, 4).map((result, idx) => (
-                    <div key={`${result.file_path}-${idx}`} className="bg-gray-800/60 rounded-lg p-2">
-                      <p className="text-xs text-gray-400 font-mono">
-                        {result.file_path} · {result.chunk_type} · score {result.score.toFixed(3)}
-                      </p>
-                      <p className="text-xs text-gray-300 mt-1">{snippet(result.content)}</p>
+        {!hasSearched ? null : (
+          <div className="space-y-8">
+            {/* Code Results */}
+            <section>
+              <h2 className="text-base font-semibold mb-3">
+                Code results
+                {repoResults.length > 0 && (
+                  <span className="text-muted font-normal text-sm ml-2">({repoResults.length})</span>
+                )}
+              </h2>
+              {grouped.length === 0 ? (
+                <p className="text-muted text-sm">No code matches found.</p>
+              ) : (
+                <div className="space-y-4">
+                  {grouped.map(([repoName, items]) => (
+                    <div key={repoName} style={{ border: '1px solid var(--border)' }}>
+                      <div
+                        style={{ borderBottom: '1px solid var(--border)' }}
+                        className="flex items-center justify-between px-3 py-2 bg-surface"
+                      >
+                        <span className="text-sm font-medium text-accent">{repoName}</span>
+                        <Link
+                          to={`/repos/${encodeURIComponent(repoName)}`}
+                          className="text-xs text-muted hover:text-accent"
+                        >
+                          Open repo →
+                        </Link>
+                      </div>
+                      <div>
+                        {items.slice(0, 4).map((result, idx) => (
+                          <div
+                            key={`${result.file_path}-${idx}`}
+                            style={{ borderBottom: '1px solid var(--border)' }}
+                            className="px-3 py-2 last:border-b-0"
+                          >
+                            <p className="text-xs text-muted font-mono mb-1">
+                              {result.file_path} · {result.chunk_type} · score {result.score.toFixed(3)}
+                            </p>
+                            <p className="text-sm">{snippet(result.content)}</p>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   ))}
                 </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-            <h2 className="text-sm text-white font-medium mb-3 inline-flex items-center gap-2">
-              <ArrowRightLeft className="w-4 h-4 text-indigo-400" />
-              Relationship Graph
-            </h2>
-            <div className="space-y-2">
-              {relationships.length === 0 && <p className="text-xs text-gray-500">No edges for current results.</p>}
-              {relationships.map(edge => (
-                <div key={`${edge.repo_a}-${edge.repo_b}`} className="text-xs text-gray-300 bg-gray-800/60 rounded-lg px-3 py-2">
-                  <p className="font-mono text-gray-200">{edge.repo_a} <span className="text-gray-500">-&gt;</span> {edge.repo_b}</p>
-                  <p className="text-gray-500">similarity {edge.similarity.toFixed(3)}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-            <h2 className="text-sm text-white font-medium mb-3 inline-flex items-center gap-2">
-              <Brain className="w-4 h-4 text-indigo-400" />
-              Memory + Jobs
-            </h2>
-            <div className="space-y-2">
-              {memories.slice(0, 4).map(memory => (
-                <div key={memory.id} className="text-xs text-gray-300 bg-gray-800/60 rounded-lg px-3 py-2">
-                  {snippet(memory.memory, 140)}
-                </div>
-              ))}
-              {jobMatches.map(job => (
-                <div key={job.id} className="text-xs text-gray-300 bg-gray-800/60 rounded-lg px-3 py-2">
-                  <p className="font-mono text-amber-300">{job.tool}</p>
-                  <p className="text-gray-500">{job.status} · {job.id.slice(0, 8)}...</p>
-                </div>
-              ))}
-              {memories.length === 0 && jobMatches.length === 0 && (
-                <p className="text-xs text-gray-500">No memory/job match for this query.</p>
               )}
-            </div>
+            </section>
+
+            {/* Memory + Jobs */}
+            {(memories.length > 0 || jobMatches.length > 0) && (
+              <section>
+                <h2 className="text-base font-semibold mb-3">Memory &amp; Jobs</h2>
+                <div className="space-y-2">
+                  {memories.slice(0, 4).map(memory => (
+                    <div
+                      key={memory.id}
+                      style={{ border: '1px solid var(--border)' }}
+                      className="px-3 py-2 text-sm"
+                    >
+                      {snippet(memory.memory, 140)}
+                    </div>
+                  ))}
+                  {jobMatches.map(job => (
+                    <div
+                      key={job.id}
+                      style={{ border: '1px solid var(--border)' }}
+                      className="px-3 py-2 text-sm"
+                    >
+                      <code className="font-mono text-xs">{job.tool}</code>
+                      <span className="text-muted text-xs ml-2">{job.status} · {job.id.slice(0, 8)}...</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* Relationships */}
+            {relationships.length > 0 && (
+              <section>
+                <h2 className="text-base font-semibold mb-3">Repository relationships</h2>
+                <div style={{ border: '1px solid var(--border)' }}>
+                  <table className="w-full">
+                    <tbody>
+                      {relationships.map(edge => (
+                        <tr
+                          key={`${edge.repo_a}-${edge.repo_b}`}
+                          style={{ borderBottom: '1px solid var(--border)' }}
+                          className="last:border-b-0"
+                        >
+                          <td className="px-3 py-2 text-sm font-mono">
+                            {edge.repo_a} → {edge.repo_b}
+                          </td>
+                          <td className="px-3 py-2 text-sm text-muted">
+                            similarity {edge.similarity.toFixed(3)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
           </div>
-        </div>
+        )}
       </div>
     </div>
   )
