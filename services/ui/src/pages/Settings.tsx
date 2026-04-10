@@ -551,89 +551,6 @@ function ModelsTab({
   )
 }
 
-function RuntimeTab({
-  config,
-  onChange,
-}: {
-  config: SettingsData['forge_config']
-  onChange: (path: string, value: unknown) => void
-}) {
-  const [excludeText, setExcludeText] = useState(config.indexing.exclude.join('\n'))
-
-  useEffect(() => {
-    setExcludeText(config.indexing.exclude.join('\n'))
-  }, [config.indexing.exclude])
-
-  return (
-    <div className="space-y-4">
-      <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
-        <h2 className="text-sm font-medium text-white">Indexing</h2>
-        <div className="mt-3 grid gap-3 lg:grid-cols-3">
-          <div className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-950/70 px-3 py-2.5 lg:col-span-3">
-            <div>
-              <p className="text-sm text-white">Auto indexing</p>
-              <p className="text-xs text-gray-500">Use the configured schedule to re-index automatically.</p>
-            </div>
-            <Toggle checked={config.indexing.auto} onChange={(value) => onChange('indexing.auto', value)} />
-          </div>
-          <Field label="Schedule">
-            <Input value={config.indexing.schedule} onChange={(value) => onChange('indexing.schedule', value)} placeholder="0 */6 * * *" />
-          </Field>
-          <Field label="Max file size (KB)">
-            <Input
-              type="number"
-              value={String(config.indexing.max_file_size_kb)}
-              onChange={(value) => onChange('indexing.max_file_size_kb', parseInt(value, 10) || 500)}
-            />
-          </Field>
-          <Field label="Chunk size">
-            <Input
-              type="number"
-              value={String(config.indexing.chunk_size)}
-              onChange={(value) => onChange('indexing.chunk_size', parseInt(value, 10) || 400)}
-            />
-          </Field>
-          <Field label="Chunk overlap">
-            <Input
-              type="number"
-              value={String(config.indexing.chunk_overlap)}
-              onChange={(value) => onChange('indexing.chunk_overlap', parseInt(value, 10) || 50)}
-            />
-          </Field>
-          <div className="lg:col-span-3">
-            <Field label="Exclude patterns">
-              <textarea
-                value={excludeText}
-                onChange={(e) => {
-                  setExcludeText(e.target.value)
-                  onChange(
-                    'indexing.exclude',
-                    e.target.value
-                      .split('\n')
-                      .map((entry) => entry.trim())
-                      .filter(Boolean)
-                  )
-                }}
-                rows={6}
-                className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 font-mono text-xs text-gray-200 outline-none transition-colors focus:border-cyan-500"
-              />
-            </Field>
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
-        <h2 className="text-sm font-medium text-white">Memory defaults</h2>
-        <div className="mt-3 max-w-sm">
-          <Field label="Default user id">
-            <Input value={config.memory.user_id} onChange={(value) => onChange('memory.user_id', value)} placeholder="default" />
-          </Field>
-        </div>
-      </section>
-    </div>
-  )
-}
-
 function McpKeysTab() {
   const [keys, setKeys] = useState<MCPApiKey[]>([])
   const [loading, setLoading] = useState(true)
@@ -867,7 +784,7 @@ function CreateKeyModal({
           <Field label="Expires (optional)">
             <Input
               type="number"
-              value={expiresDays || ''}
+              value={expiresDays !== undefined ? String(expiresDays) : ''}
               onChange={(value) => setExpiresDays(value ? parseInt(value, 10) : undefined)}
               placeholder="Leave empty for no expiration"
               min={1}
@@ -895,89 +812,6 @@ function CreateKeyModal({
           </button>
         </div>
       </div>
-    </div>
-  )
-}
-
-function RuntimeTab({
-  config,
-  onChange,
-}: {
-  config: SettingsData['forge_config']
-  onChange: (path: string, value: unknown) => void
-}) {
-  const [excludeText, setExcludeText] = useState(config.indexing.exclude.join('\n'))
-
-  useEffect(() => {
-    setExcludeText(config.indexing.exclude.join('\n'))
-  }, [config.indexing.exclude])
-
-  return (
-    <div className="space-y-4">
-      <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
-        <h2 className="text-sm font-medium text-white">Indexing</h2>
-        <div className="mt-3 grid gap-3 lg:grid-cols-3">
-          <div className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-950/70 px-3 py-2.5 lg:col-span-3">
-            <div>
-              <p className="text-sm text-white">Auto indexing</p>
-              <p className="text-xs text-gray-500">Use the configured schedule to re-index automatically.</p>
-            </div>
-            <Toggle checked={config.indexing.auto} onChange={(value) => onChange('indexing.auto', value)} />
-          </div>
-          <Field label="Schedule">
-            <Input value={config.indexing.schedule} onChange={(value) => onChange('indexing.schedule', value)} placeholder="0 */6 * * *" />
-          </Field>
-          <Field label="Max file size (KB)">
-            <Input
-              type="number"
-              value={String(config.indexing.max_file_size_kb)}
-              onChange={(value) => onChange('indexing.max_file_size_kb', parseInt(value, 10) || 500)}
-            />
-          </Field>
-          <Field label="Chunk size">
-            <Input
-              type="number"
-              value={String(config.indexing.chunk_size)}
-              onChange={(value) => onChange('indexing.chunk_size', parseInt(value, 10) || 400)}
-            />
-          </Field>
-          <Field label="Chunk overlap">
-            <Input
-              type="number"
-              value={String(config.indexing.chunk_overlap)}
-              onChange={(value) => onChange('indexing.chunk_overlap', parseInt(value, 10) || 50)}
-            />
-          </Field>
-          <div className="lg:col-span-3">
-            <Field label="Exclude patterns">
-              <textarea
-                value={excludeText}
-                onChange={(e) => {
-                  setExcludeText(e.target.value)
-                  onChange(
-                    'indexing.exclude',
-                    e.target.value
-                      .split('\n')
-                      .map((entry) => entry.trim())
-                      .filter(Boolean)
-                  )
-                }}
-                rows={6}
-                className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 font-mono text-xs text-gray-200 outline-none transition-colors focus:border-cyan-500"
-              />
-            </Field>
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
-        <h2 className="text-sm font-medium text-white">Memory defaults</h2>
-        <div className="mt-3 max-w-sm">
-          <Field label="Default user id">
-            <Input value={config.memory.user_id} onChange={(value) => onChange('memory.user_id', value)} placeholder="default" />
-          </Field>
-        </div>
-      </section>
     </div>
   )
 }
@@ -1034,7 +868,7 @@ export default function Settings() {
     if (!data) return
     setData({
       ...data,
-      settings_overrides: { ...data.settings_overrides, [key]: value },
+      settings_overrides: { ...data.settings_overrides, [key]: value as string | number | undefined },
     })
   }
 
