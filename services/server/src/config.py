@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     config_path: str = "/app/context-forge.yml"
     setup_bootstrap_token: str = ""
+    # Comma-separated extra origins for the REST API (e.g. UI on another host than the API).
+    cors_origins: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
