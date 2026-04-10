@@ -60,7 +60,7 @@ function Field({
 }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-xs font-medium uppercase tracking-wider text-gray-500">{label}</span>
+      <span className="mb-1 block text-xs font-medium uppercase tracking-wider text-gray-500">{label}</span>
       {children}
     </label>
   )
@@ -189,11 +189,10 @@ function RepoModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-xl rounded-2xl border border-gray-800 bg-gray-950 p-6 shadow-2xl">
-        <h3 className="text-lg font-semibold text-white">{repo ? 'Edit repository' : 'Add repository'}</h3>
-        <p className="mt-1 text-sm text-gray-400">Manual repository entries are saved directly to runtime config.</p>
+      <div className="w-full max-w-xl rounded-2xl border border-gray-800 bg-gray-950 p-5 shadow-2xl">
+        <h3 className="text-base font-semibold text-white">{repo ? 'Edit repository' : 'Add repository'}</h3>
 
-        <div className="mt-5 grid gap-4 md:grid-cols-2">
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
           <Field label="Name">
             <Input value={name} onChange={setName} placeholder="my-repo" />
           </Field>
@@ -229,11 +228,11 @@ function RepoModal({
           </Field>
         </div>
 
-        <div className="mt-6 flex justify-end gap-3">
+        <div className="mt-5 flex justify-end gap-2">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-xl border border-gray-700 bg-gray-900 px-4 py-2 text-sm text-gray-300"
+            className="rounded-lg border border-gray-700 bg-gray-900 px-3 py-1.5 text-sm text-gray-300"
           >
             Cancel
           </button>
@@ -250,7 +249,7 @@ function RepoModal({
               })
             }
             disabled={!name || (type === 'local' ? !path : !url)}
-            className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+            className="rounded-lg bg-cyan-600 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
           >
             {repo ? 'Save changes' : 'Add repository'}
           </button>
@@ -313,29 +312,26 @@ function RepositoriesTab({
   }
 
   return (
-    <div className="space-y-5">
-      <div className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    <div className="space-y-4">
+      <div className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-400">Runtime Repositories</p>
-            <h2 className="mt-1 text-lg font-semibold text-white">Edit manual entries, import remotes from Repositories</h2>
-            <p className="mt-1 text-sm text-gray-400">
-              Local paths and manual URLs can be managed here. GitHub and GitLab browsing lives on the main Repositories page.
-            </p>
+            <h2 className="mt-0.5 text-base font-semibold text-white">Manual entries & imported remotes</h2>
           </div>
-          <div className="flex flex-col gap-3 sm:flex-row">
+          <div className="flex flex-col gap-2 sm:flex-row">
             <Link
               to="/repos"
-              className="inline-flex items-center justify-center rounded-xl border border-gray-700 bg-gray-950 px-4 py-2.5 text-sm text-gray-300 transition-colors hover:bg-gray-900"
+              className="inline-flex items-center justify-center rounded-lg border border-gray-700 bg-gray-950 px-3 py-1.5 text-sm text-gray-300 transition-colors hover:bg-gray-900"
             >
               Open Repositories home
             </Link>
             <button
               type="button"
               onClick={() => setShowAddModal(true)}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-600 px-4 py-2.5 text-sm font-medium text-white"
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-600 px-3 py-1.5 text-sm font-medium text-white"
             >
-              <Plus className="h-4 w-4" />
+              <Plus className="h-3.5 w-3.5" />
               Add manual repository
             </button>
           </div>
@@ -343,25 +339,25 @@ function RepositoriesTab({
       </div>
 
       {repos.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-gray-800 bg-gray-900/40 p-12 text-center text-gray-500">
+        <div className="rounded-xl border border-dashed border-gray-800 bg-gray-900/40 p-8 text-center text-gray-500">
           No repositories configured yet.
         </div>
       ) : (
-        <div className="overflow-hidden rounded-2xl border border-gray-800 bg-gray-900/60">
+        <div className="overflow-hidden rounded-xl border border-gray-800 bg-gray-900/60">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-800 text-left text-xs uppercase tracking-wider text-gray-500">
-                <th className="px-5 py-3 font-medium">Repository</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Source</th>
-                <th className="px-4 py-3"></th>
+                <th className="px-4 py-2 font-medium">Repository</th>
+                <th className="px-3 py-2 font-medium">Status</th>
+                <th className="px-3 py-2 font-medium">Source</th>
+                <th className="px-3 py-2"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800">
               {repos.map((repo) => (
                 <tr key={repo.name} className="hover:bg-gray-800/30">
-                  <td className="px-5 py-4">
-                    <div className="flex items-center gap-3">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2">
                       <RepoTypeIcon type={repo.type} />
                       <div>
                         <p className="font-medium text-white">{repo.name}</p>
@@ -369,12 +365,12 @@ function RepositoriesTab({
                       </div>
                     </div>
                   </td>
-                  <td className="px-4 py-4 text-xs text-gray-400">
+                  <td className="px-3 py-3 text-xs text-gray-400">
                     {repo.status}
                     {repo.total_chunks > 0 ? ` - ${repo.total_chunks.toLocaleString()} chunks` : ''}
                   </td>
-                  <td className="px-4 py-4 text-xs text-gray-500">{repo.branch}</td>
-                  <td className="px-4 py-4 text-right">
+                  <td className="px-3 py-3 text-xs text-gray-500">{repo.branch}</td>
+                  <td className="px-3 py-3 text-right">
                     <div className="inline-flex items-center gap-2">
                       <button
                         type="button"
@@ -430,21 +426,19 @@ function AccessTab({
   onChange: (key: keyof SettingsData['settings_overrides'], value: string) => void
 }) {
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
-      <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+    <div className="grid gap-4 lg:grid-cols-2">
+      <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
         <h2 className="text-sm font-medium text-white">LLM providers</h2>
-        <p className="mt-1 text-sm text-gray-400">Used by the memory pipeline and by providers that need their own API keys.</p>
-        <div className="mt-4 space-y-4">
+        <div className="mt-3 space-y-3">
           <SecretInput label="OpenAI API key" value={settings.openai_api_key} onChange={(value) => onChange('openai_api_key', value)} placeholder="sk-..." />
           <SecretInput label="Anthropic API key" value={settings.anthropic_api_key} onChange={(value) => onChange('anthropic_api_key', value)} placeholder="sk-ant-..." />
           <SecretInput label="DeepSeek API key" value={settings.deepseek_api_key} onChange={(value) => onChange('deepseek_api_key', value)} placeholder="..." />
         </div>
       </section>
 
-      <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+      <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
         <h2 className="text-sm font-medium text-white">Git provider tokens</h2>
-        <p className="mt-1 text-sm text-gray-400">These tokens power GitHub and GitLab browsing on the Repositories page.</p>
-        <div className="mt-4 space-y-4">
+        <div className="mt-3 space-y-3">
           <SecretInput label="GitHub token" value={settings.github_token} onChange={(value) => onChange('github_token', value)} placeholder="ghp_..." />
           <SecretInput label="GitLab token" value={settings.gitlab_token} onChange={(value) => onChange('gitlab_token', value)} placeholder="glpat-..." />
         </div>
@@ -463,32 +457,32 @@ function ModelsTab({
   embeddingRisk: { changed: boolean; dimsChanged: boolean }
 }) {
   return (
-    <div className="space-y-5">
-      <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/10 p-5">
+    <div className="space-y-4">
+      <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-3">
         <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-300">Runtime-first control plane</p>
-        <p className="mt-2 text-sm text-white">
-          Use this page as the primary place to change providers, models, tokens, indexing behavior, and repositories after bootstrap.
+        <p className="mt-1 text-sm text-white">
+          Primary place to change providers, models, tokens, indexing behavior, and repositories after bootstrap.
         </p>
       </div>
 
       {embeddingRisk.changed && (
-        <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-5 text-sm text-amber-100">
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-100">
           <p className="font-medium text-amber-300">Embedding changes need follow-up work</p>
-          <p className="mt-2">
-            Changing the embeddings provider or model requires re-indexing repositories so semantic search uses the new vectors.
+          <p className="mt-1">
+            Changing embeddings provider or model requires re-indexing repositories so semantic search uses the new vectors.
           </p>
           {embeddingRisk.dimsChanged && (
-            <p className="mt-2">
-              Changing embedding dimensions is more invasive: reset vector-backed data, restart the stack, and then re-index repositories before relying on search or memory.
+            <p className="mt-1">
+              Changing embedding dimensions is more invasive: reset vector-backed data, restart the stack, and re-index repositories.
             </p>
           )}
         </div>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+      <div className="grid gap-4 lg:grid-cols-3">
+        <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
           <h2 className="text-sm font-medium text-white">Memory LLM</h2>
-          <div className="mt-4 space-y-4">
+          <div className="mt-3 space-y-3">
             <Field label="LLM provider">
               <Select
                 value={settings.llm_provider || 'openai'}
@@ -506,9 +500,9 @@ function ModelsTab({
           </div>
         </section>
 
-        <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+        <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
           <h2 className="text-sm font-medium text-white">Embeddings</h2>
-          <div className="mt-4 space-y-4">
+          <div className="mt-3 space-y-3">
             <Field label="Provider">
               <Select
                 value={settings.embeddings_provider || 'openai'}
@@ -534,9 +528,9 @@ function ModelsTab({
           </div>
         </section>
 
-        <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+        <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
           <h2 className="text-sm font-medium text-white">Embedder connection</h2>
-          <div className="mt-4 space-y-4">
+          <div className="mt-3 space-y-3">
             <SecretInput
               label="Dedicated embeddings key"
               value={settings.embeddings_api_key}
@@ -571,11 +565,11 @@ function RuntimeTab({
   }, [config.indexing.exclude])
 
   return (
-    <div className="space-y-6">
-      <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+    <div className="space-y-4">
+      <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
         <h2 className="text-sm font-medium text-white">Indexing</h2>
-        <div className="mt-4 grid gap-4 lg:grid-cols-3">
-          <div className="flex items-center justify-between rounded-xl border border-gray-800 bg-gray-950/70 px-4 py-3 lg:col-span-3">
+        <div className="mt-3 grid gap-3 lg:grid-cols-3">
+          <div className="flex items-center justify-between rounded-lg border border-gray-800 bg-gray-950/70 px-3 py-2.5 lg:col-span-3">
             <div>
               <p className="text-sm text-white">Auto indexing</p>
               <p className="text-xs text-gray-500">Use the configured schedule to re-index automatically.</p>
@@ -620,17 +614,17 @@ function RuntimeTab({
                       .filter(Boolean)
                   )
                 }}
-                rows={8}
-                className="w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-2.5 font-mono text-xs text-gray-200 outline-none transition-colors focus:border-cyan-500"
+                rows={6}
+                className="w-full rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 font-mono text-xs text-gray-200 outline-none transition-colors focus:border-cyan-500"
               />
             </Field>
           </div>
         </div>
       </section>
 
-      <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+      <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
         <h2 className="text-sm font-medium text-white">Memory defaults</h2>
-        <div className="mt-4 max-w-sm">
+        <div className="mt-3 max-w-sm">
           <Field label="Default user id">
             <Input value={config.memory.user_id} onChange={(value) => onChange('memory.user_id', value)} placeholder="default" />
           </Field>
@@ -765,49 +759,28 @@ export default function Settings() {
 
   return (
     <div className="min-h-screen bg-gray-950">
-      <div className="mx-auto max-w-6xl p-8">
-        <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+      <div className="mx-auto max-w-6xl p-6">
+        <div className="mb-6 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-400">Settings</p>
-            <h1 className="mt-1 flex items-center gap-3 text-2xl font-semibold text-white">
-              <SlidersHorizontal className="h-6 w-6 text-cyan-400" />
+            <h1 className="mt-1 flex items-center gap-2 text-xl font-semibold text-white">
+              <SlidersHorizontal className="h-5 w-5 text-cyan-400" />
               Runtime configuration
             </h1>
-            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-gray-400">
-              After bootstrap, this page is the primary control plane for providers, tokens, indexing behavior, and manual repository entries.
-            </p>
           </div>
           <button
             type="button"
             onClick={handleSave}
             disabled={saving}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-600 px-5 py-3 text-sm font-medium text-white disabled:opacity-50"
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
             Save runtime settings
           </button>
         </div>
 
-        <div className="mb-6 grid gap-4 lg:grid-cols-3">
-          <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/10 p-4">
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-300">Primary source of truth</p>
-            <p className="mt-2 text-sm text-white">Runtime configuration in Postgres now drives the app.</p>
-            <p className="mt-1 text-xs leading-relaxed text-cyan-100/80">Use files for bootstrap, recovery, and legacy import only.</p>
-          </div>
-          <div className="rounded-2xl border border-gray-800 bg-gray-900/70 p-4">
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Remote-friendly</p>
-            <p className="mt-2 text-sm text-white">Providers and tokens can be changed from the UI.</p>
-            <p className="mt-1 text-xs leading-relaxed text-gray-400">No shell edits are required for day-to-day remote administration.</p>
-          </div>
-          <div className="rounded-2xl border border-gray-800 bg-gray-900/70 p-4">
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Repositories first</p>
-            <p className="mt-2 text-sm text-white">The main Repositories page is now the operational landing page.</p>
-            <p className="mt-1 text-xs leading-relaxed text-gray-400">Use it for GitHub and GitLab browsing, indexing, and daily repo operations.</p>
-          </div>
-        </div>
-
         {error && (
-          <div className="mb-4 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-300">
+          <div className="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-300">
             <div className="flex items-center gap-2">
               <AlertCircle className="h-4 w-4" />
               {error}
@@ -815,7 +788,7 @@ export default function Settings() {
           </div>
         )}
         {success && (
-          <div className="mb-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-300">
+          <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-300">
             <div className="flex items-center gap-2">
               <Check className="h-4 w-4" />
               {success}
@@ -823,14 +796,14 @@ export default function Settings() {
           </div>
         )}
         {warnings.length > 0 && (
-          <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-200">
+          <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
             {warnings.map((warning) => (
               <p key={warning}>{warning}</p>
             ))}
           </div>
         )}
 
-        <div className="mb-6 flex flex-wrap gap-2 rounded-2xl border border-gray-800 bg-gray-900/70 p-2">
+        <div className="mb-4 flex flex-wrap gap-2 rounded-xl border border-gray-800 bg-gray-900/70 p-1.5">
           {tabs.map((tab) => {
             const Icon = tab.icon
             return (
@@ -838,20 +811,20 @@ export default function Settings() {
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
-                className={`inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm transition-colors ${
+                className={`inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${
                   activeTab === tab.id
                     ? 'bg-cyan-600 text-white'
                     : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
                 }`}
               >
-                <Icon className="h-4 w-4" />
+                <Icon className="h-3.5 w-3.5" />
                 {tab.label}
               </button>
             )
           })}
         </div>
 
-        <div className="rounded-2xl border border-gray-800 bg-gray-900/40 p-6">
+        <div className="rounded-xl border border-gray-800 bg-gray-900/40 p-5">
           {activeTab === 'repositories' && <RepositoriesTab repos={data.forge_config.repos} onReload={load} />}
           {activeTab === 'access' && <AccessTab settings={data.settings_overrides} onChange={updateSettingsOverride} />}
           {activeTab === 'models' && (

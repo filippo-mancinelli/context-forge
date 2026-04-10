@@ -49,117 +49,83 @@ function ToolCard({ tool }: { tool: Tool }) {
 function MCPConfigSnippet() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [selectedKey, setSelectedKey] = useState('codex')
+  const [expanded, setExpanded] = useState(false)
   const snippets = [
     {
       key: 'claude',
       title: 'Claude Code',
-      summary: 'CLI add command for a local MCP HTTP endpoint.',
       value: 'claude mcp add --transport http context-forge http://localhost:4000/mcp',
     },
     {
       key: 'codex',
       title: 'Codex CLI',
-      summary: 'Current Codex syntax for streamable HTTP MCP servers.',
       value: 'codex mcp add context-forge --url http://localhost:4000/mcp',
     },
     {
       key: 'opencode',
-      title: 'OpenCode (opencode.json)',
-      summary: 'Drop this into your OpenCode config file.',
-      value: `{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "context-forge": {
-      "type": "remote",
-      "url": "http://localhost:4000/mcp",
-      "enabled": true
-    }
-  }
-}`,
+      title: 'OpenCode',
+      value: `{"mcp":{"context-forge":{"type":"remote","url":"http://localhost:4000/mcp","enabled":true}}}`,
     },
     {
       key: 'cursor',
-      title: 'Cursor (.cursor/mcp.json)',
-      summary: 'Workspace-level MCP config for Cursor.',
-      value: `{
-  "mcpServers": {
-    "context-forge": {
-      "url": "http://localhost:4000/mcp"
-    }
-  }
-}`,
+      title: 'Cursor',
+      value: `{"mcpServers":{"context-forge":{"url":"http://localhost:4000/mcp"}}}`,
     },
   ]
   const selectedSnippet = snippets.find((snippet) => snippet.key === selectedKey) ?? snippets[0]
 
   return (
-    <div className="mb-8 rounded-2xl border border-gray-800 bg-gradient-to-br from-gray-900 via-gray-900 to-gray-950 p-5">
-      <div className="mb-4 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+    <div className="mb-6 rounded-xl border border-gray-800 bg-gray-900/50">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-800/50 transition-colors"
+      >
         <div>
-          <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-400">Quick Connect</p>
-          <h2 className="mt-1 text-lg font-semibold text-white">Connect your MCP client in one step</h2>
-          <p className="mt-1 text-sm text-gray-400">
-            Pick a client, copy the snippet, then point it to your local or remote `context-forge` MCP URL.
-          </p>
+          <p className="text-sm font-medium text-white">Quick Connect</p>
+          <p className="text-xs text-gray-500 mt-0.5">Connect MCP clients</p>
         </div>
-        <div className="w-full lg:w-72">
-          <label className="mb-1 block text-xs font-medium uppercase tracking-wider text-gray-500">
-            Client
-          </label>
-          <select
-            value={selectedKey}
-            onChange={(e) => setSelectedKey(e.target.value)}
-            className="w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 outline-none transition-colors focus:border-cyan-500"
-          >
+        <span className="text-gray-500">{expanded ? '−' : '+'}</span>
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-4 border-t border-gray-800 pt-4">
+          <div className="flex gap-2 mb-3">
             {snippets.map((snippet) => (
-              <option key={snippet.key} value={snippet.key}>
+              <button
+                key={snippet.key}
+                onClick={() => setSelectedKey(snippet.key)}
+                className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
+                  selectedKey === snippet.key
+                    ? 'bg-cyan-600 text-white'
+                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                }`}
+              >
                 {snippet.title}
-              </option>
+              </button>
             ))}
-          </select>
-        </div>
-      </div>
+          </div>
 
-      <div className="mb-3 rounded-xl border border-gray-800 bg-gray-950/70 p-3">
-        <p className="text-sm font-medium text-white">{selectedSnippet.title}</p>
-        <p className="mt-1 text-xs leading-relaxed text-gray-400">{selectedSnippet.summary}</p>
-      </div>
-
-      <div className="flex items-start gap-2">
-        <code className="flex-1 overflow-x-auto whitespace-pre rounded-xl bg-gray-950 px-4 py-3 text-xs font-mono text-cyan-300">
-          {selectedSnippet.value}
-        </code>
-        <button
-          onClick={() => {
-            navigator.clipboard.writeText(selectedSnippet.value)
-            setCopiedKey(selectedSnippet.key)
-            setTimeout(() => setCopiedKey(null), 1500)
-          }}
-          className="flex-shrink-0 rounded-xl bg-gray-800 p-2.5 text-gray-500 transition-colors hover:text-gray-300"
-          title={`Copy ${selectedSnippet.title} config`}
-        >
-          {copiedKey === selectedSnippet.key ? (
-            <Check className="h-3.5 w-3.5 text-emerald-400" />
-          ) : (
-            <Copy className="h-3.5 w-3.5" />
-          )}
-        </button>
-      </div>
-
-      <div className="mt-4 grid gap-3 text-xs text-gray-400 lg:grid-cols-3">
-        <div className="rounded-xl border border-gray-800 bg-gray-950/60 p-3">
-          <p className="font-medium text-gray-200">Local default</p>
-          <p className="mt-1">Use `http://localhost:4000/mcp` when the stack runs on the same machine as the client.</p>
+          <div className="flex items-start gap-2">
+            <code className="flex-1 overflow-x-auto whitespace-pre rounded-lg bg-gray-950 px-3 py-2 text-xs font-mono text-cyan-300">
+              {selectedSnippet.value}
+            </code>
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(selectedSnippet.value)
+                setCopiedKey(selectedSnippet.key)
+                setTimeout(() => setCopiedKey(null), 1500)
+              }}
+              className="flex-shrink-0 rounded-lg bg-gray-800 p-2 text-gray-500 transition-colors hover:text-gray-300"
+            >
+              {copiedKey === selectedSnippet.key ? (
+                <Check className="h-3.5 w-3.5 text-emerald-400" />
+              ) : (
+                <Copy className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </div>
         </div>
-        <div className="rounded-xl border border-gray-800 bg-gray-950/60 p-3">
-          <p className="font-medium text-gray-200">Remote server</p>
-          <p className="mt-1">Replace `localhost` with your server hostname or reverse proxy URL.</p>
-        </div>
-        <div className="rounded-xl border border-gray-800 bg-gray-950/60 p-3">
-          <p className="font-medium text-gray-200">Need auth?</p>
-          <p className="mt-1">If you later protect the MCP endpoint, keep the same client entry and add auth at the proxy layer.</p>
-        </div>
-      </div>
+      )}
     </div>
   )
 }
@@ -184,38 +150,37 @@ export default function Tools() {
   })
 
   return (
-    <div className="p-8">
-      <div className="mb-8">
-        <h1 className="text-xl font-semibold text-white flex items-center gap-2">
-          <Wrench className="w-5 h-5 text-indigo-400" />
+    <div className="p-6">
+      <div className="mb-6">
+        <h1 className="text-lg font-semibold text-white flex items-center gap-2">
+          <Wrench className="w-4 h-4 text-indigo-400" />
           MCP Tools
         </h1>
-        <p className="text-sm text-gray-500 mt-1">{tools.length} tools available at :4000/mcp</p>
       </div>
 
       <MCPConfigSnippet />
 
       {error && (
-        <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-sm text-red-400">{error}</div>
+        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-sm text-red-400">{error}</div>
       )}
 
       {loading ? (
-        <div className="flex items-center justify-center h-48 text-gray-600">
-          <Loader2 className="w-5 h-5 animate-spin mr-2" />
+        <div className="flex items-center justify-center h-32 text-gray-600">
+          <Loader2 className="w-4 h-4 animate-spin mr-2" />
           Loading…
         </div>
       ) : (
-        <div className="space-y-8">
+        <div className="space-y-4">
           {[...groups, 'other'].map(group => {
             const items = grouped[group]
             if (!items?.length) return null
             const groupMeta = TOOL_GROUPS[group]
             return (
               <div key={group}>
-                <h2 className={`text-xs font-semibold uppercase tracking-wider mb-3 ${groupMeta?.color ?? 'text-gray-500'}`}>
+                <h2 className={`text-xs font-semibold uppercase tracking-wider mb-2 ${groupMeta?.color ?? 'text-gray-500'}`}>
                   {group}
                 </h2>
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
                   {items.map(t => <ToolCard key={t.name} tool={t} />)}
                 </div>
               </div>
