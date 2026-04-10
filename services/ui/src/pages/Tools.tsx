@@ -1,18 +1,19 @@
 import { useEffect, useState } from 'react'
-import { Wrench, Loader2, Copy, Check } from 'lucide-react'
+import { Copy, Check } from 'lucide-react'
 import { api, type Tool } from '../lib/api'
+import { Button } from '../components/ui'
 
-const TOOL_GROUPS: Record<string, { prefix: string; color: string; bg: string }> = {
-  memory: { prefix: 'memory_', color: 'text-purple-400', bg: 'bg-purple-500/10 ring-purple-500/30' },
-  repo: { prefix: 'repo_', color: 'text-blue-400', bg: 'bg-blue-500/10 ring-blue-500/30' },
-  job: { prefix: 'job_', color: 'text-amber-400', bg: 'bg-amber-500/10 ring-amber-500/30' },
+const TOOL_GROUPS: Record<string, { prefix: string; label: string }> = {
+  memory: { prefix: 'memory_', label: 'Memory' },
+  repo: { prefix: 'repo_', label: 'Repository' },
+  job: { prefix: 'job_', label: 'Jobs' },
 }
 
 function getGroup(name: string) {
   return Object.entries(TOOL_GROUPS).find(([, v]) => name.startsWith(v.prefix))
 }
 
-function ToolCard({ tool }: { tool: Tool }) {
+function ToolRow({ tool }: { tool: Tool }) {
   const [copied, setCopied] = useState(false)
   const group = getGroup(tool.name)
 
@@ -23,104 +24,102 @@ function ToolCard({ tool }: { tool: Tool }) {
   }
 
   return (
-    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 hover:border-gray-700 transition-colors">
-      <div className="flex items-start justify-between gap-3 mb-2">
+    <tr style={{ borderBottom: '1px solid var(--border)' }} className="last:border-b-0">
+      <td className="py-3 px-4 align-top w-48">
         <div className="flex items-center gap-2">
-          {group && (
-            <span className={`text-xs px-1.5 py-0.5 rounded ring-1 ${group[1].color} ${group[1].bg} font-medium`}>
-              {group[0]}
-            </span>
-          )}
-          <code className="text-sm font-mono text-white">{tool.name}()</code>
+          <code className="text-sm font-mono text-text">{tool.name}()</code>
         </div>
+        {group && (
+          <span className="text-xs text-muted">{group[1].label}</span>
+        )}
+      </td>
+      <td className="py-3 px-4 align-top text-sm text-muted">{tool.description || '—'}</td>
+      <td className="py-3 px-4 align-top w-10">
         <button
           onClick={handleCopy}
-          className="p-1 text-gray-600 hover:text-gray-400 transition-colors flex-shrink-0"
+          className="text-muted hover:text-text transition-colors"
           title="Copy tool name"
         >
-          {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+          {copied ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
         </button>
-      </div>
-      <p className="text-xs text-gray-400 leading-relaxed">{tool.description || '—'}</p>
-    </div>
+      </td>
+    </tr>
   )
 }
 
-function MCPConfigSnippet() {
+const MCP_SNIPPETS = [
+  {
+    key: 'claude',
+    title: 'Claude Code',
+    value: 'claude mcp add --transport http context-forge http://localhost:4000/mcp',
+  },
+  {
+    key: 'codex',
+    title: 'Codex CLI',
+    value: 'codex mcp add context-forge --url http://localhost:4000/mcp',
+  },
+  {
+    key: 'opencode',
+    title: 'OpenCode',
+    value: `{"mcp":{"context-forge":{"type":"remote","url":"http://localhost:4000/mcp","enabled":true}}}`,
+  },
+  {
+    key: 'cursor',
+    title: 'Cursor',
+    value: `{"mcpServers":{"context-forge":{"url":"http://localhost:4000/mcp"}}}`,
+  },
+]
+
+function QuickConnect() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [selectedKey, setSelectedKey] = useState('codex')
   const [expanded, setExpanded] = useState(false)
-  const snippets = [
-    {
-      key: 'claude',
-      title: 'Claude Code',
-      value: 'claude mcp add --transport http context-forge http://localhost:4000/mcp',
-    },
-    {
-      key: 'codex',
-      title: 'Codex CLI',
-      value: 'codex mcp add context-forge --url http://localhost:4000/mcp',
-    },
-    {
-      key: 'opencode',
-      title: 'OpenCode',
-      value: `{"mcp":{"context-forge":{"type":"remote","url":"http://localhost:4000/mcp","enabled":true}}}`,
-    },
-    {
-      key: 'cursor',
-      title: 'Cursor',
-      value: `{"mcpServers":{"context-forge":{"url":"http://localhost:4000/mcp"}}}`,
-    },
-  ]
-  const selectedSnippet = snippets.find((snippet) => snippet.key === selectedKey) ?? snippets[0]
+  const selectedSnippet = MCP_SNIPPETS.find(s => s.key === selectedKey) ?? MCP_SNIPPETS[0]
 
   return (
-    <div className="mb-6 rounded-xl border border-gray-800 bg-gray-900/50">
+    <div style={{ border: '1px solid var(--border)' }} className="mb-8">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-gray-800/50 transition-colors"
+        style={{ borderBottom: expanded ? '1px solid var(--border)' : 'none' }}
+        className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-surface transition-colors"
       >
         <div>
-          <p className="text-sm font-medium text-white">Quick Connect</p>
-          <p className="text-xs text-gray-500 mt-0.5">Connect MCP clients</p>
+          <span className="text-sm font-medium">Quick Connect</span>
+          <span className="text-xs text-muted ml-3">Connect MCP clients to this server</span>
         </div>
-        <span className="text-gray-500">{expanded ? '−' : '+'}</span>
+        <span className="text-muted text-sm">{expanded ? '−' : '+'}</span>
       </button>
 
       {expanded && (
-        <div className="px-4 pb-4 border-t border-gray-800 pt-4">
-          <div className="flex gap-2 mb-3">
-            {snippets.map((snippet) => (
-              <button
+        <div className="px-4 py-4">
+          <div className="flex gap-2 mb-3 flex-wrap">
+            {MCP_SNIPPETS.map(snippet => (
+              <Button
                 key={snippet.key}
+                size="sm"
+                variant={selectedKey === snippet.key ? 'primary' : 'secondary'}
                 onClick={() => setSelectedKey(snippet.key)}
-                className={`px-3 py-1.5 text-xs rounded-lg transition-colors ${
-                  selectedKey === snippet.key
-                    ? 'bg-cyan-600 text-white'
-                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
-                }`}
               >
                 {snippet.title}
-              </button>
+              </Button>
             ))}
           </div>
-
           <div className="flex items-start gap-2">
-            <code className="flex-1 overflow-x-auto whitespace-pre rounded-lg bg-gray-950 px-3 py-2 text-xs font-mono text-cyan-300">
-              {selectedSnippet.value}
-            </code>
+            <pre className="flex-1 overflow-x-auto text-xs m-0">
+              <code>{selectedSnippet.value}</code>
+            </pre>
             <button
               onClick={() => {
                 navigator.clipboard.writeText(selectedSnippet.value)
                 setCopiedKey(selectedSnippet.key)
                 setTimeout(() => setCopiedKey(null), 1500)
               }}
-              className="flex-shrink-0 rounded-lg bg-gray-800 p-2 text-gray-500 transition-colors hover:text-gray-300"
+              className="flex-shrink-0 text-muted hover:text-text transition-colors p-1 mt-2"
             >
               {copiedKey === selectedSnippet.key ? (
-                <Check className="h-3.5 w-3.5 text-emerald-400" />
+                <Check className="w-3.5 h-3.5 text-success" />
               ) : (
-                <Copy className="h-3.5 w-3.5" />
+                <Copy className="w-3.5 h-3.5" />
               )}
             </button>
           </div>
@@ -141,7 +140,6 @@ export default function Tools() {
       .catch(e => { setError(String(e)); setLoading(false) })
   }, [])
 
-  const groups = Object.keys(TOOL_GROUPS)
   const grouped: Record<string, Tool[]> = { memory: [], repo: [], job: [], other: [] }
   tools.forEach(t => {
     const g = getGroup(t.name)
@@ -150,44 +148,50 @@ export default function Tools() {
   })
 
   return (
-    <div className="p-6">
-      <div className="mb-6">
-        <h1 className="text-lg font-semibold text-white flex items-center gap-2">
-          <Wrench className="w-4 h-4 text-indigo-400" />
-          MCP Tools
-        </h1>
+    <div className="p-8">
+      <div className="page-content">
+        <div className="mb-6">
+          <h1>MCP Tools</h1>
+          <p className="text-muted text-sm">Available tools exposed through the MCP endpoint.</p>
+        </div>
+
+        <QuickConnect />
+
+        {error && (
+          <div
+            style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
+            className="text-sm p-3 mb-4 bg-[#fef2f2]"
+          >
+            {error}
+          </div>
+        )}
+
+        {loading ? (
+          <p className="text-muted text-sm">Loading...</p>
+        ) : (
+          <div className="space-y-8">
+            {[...Object.keys(TOOL_GROUPS), 'other'].map(group => {
+              const items = grouped[group]
+              if (!items?.length) return null
+              const meta = TOOL_GROUPS[group]
+              return (
+                <section key={group}>
+                  <h2 className="text-base font-semibold mb-3">
+                    {meta?.label ?? 'Other'} tools
+                  </h2>
+                  <div style={{ border: '1px solid var(--border)' }}>
+                    <table className="w-full">
+                      <tbody>
+                        {items.map(t => <ToolRow key={t.name} tool={t} />)}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              )
+            })}
+          </div>
+        )}
       </div>
-
-      <MCPConfigSnippet />
-
-      {error && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-sm text-red-400">{error}</div>
-      )}
-
-      {loading ? (
-        <div className="flex items-center justify-center h-32 text-gray-600">
-          <Loader2 className="w-4 h-4 animate-spin mr-2" />
-          Loading…
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {[...groups, 'other'].map(group => {
-            const items = grouped[group]
-            if (!items?.length) return null
-            const groupMeta = TOOL_GROUPS[group]
-            return (
-              <div key={group}>
-                <h2 className={`text-xs font-semibold uppercase tracking-wider mb-2 ${groupMeta?.color ?? 'text-gray-500'}`}>
-                  {group}
-                </h2>
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-                  {items.map(t => <ToolCard key={t.name} tool={t} />)}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
     </div>
   )
 }
