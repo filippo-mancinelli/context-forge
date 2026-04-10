@@ -139,6 +139,22 @@ export interface Job {
   updated_at: string
 }
 
+export interface MCPApiKey {
+  id: number
+  name: string
+  scope: string
+  created_at: string
+  last_used_at?: string
+  expires_at?: string
+  created_by: number
+}
+
+export interface MCPApiKeyCreateRequest {
+  name: string
+  scope?: string
+  expires_days?: number
+}
+
 export interface SetupStatus {
   is_configured: boolean
   mode: 'configured' | 'admin' | 'full'
@@ -254,6 +270,15 @@ export const api = {
     get: () => request<{ forge_config: Record<string, unknown>; settings_overrides: Record<string, unknown> }>('/api/settings'),
     update: (payload: { forge_config: Record<string, unknown>; settings_overrides: Record<string, unknown> }) =>
       request<SettingsUpdateResponse>('/api/settings', { method: 'PUT', body: JSON.stringify(payload) }),
+  },
+  mcpKeys: {
+    list: () => request<{ keys: MCPApiKey[] }>('/api/mcp/keys'),
+    create: (req: MCPApiKeyCreateRequest) =>
+      request<{ key: string; id: number; name: string; scope: string; expires_at: string | null }>('/api/mcp/keys', {
+        method: 'POST',
+        body: JSON.stringify(req),
+      }),
+    revoke: (keyId: number) => request<{ status: string }>(`/api/mcp/keys/${keyId}`, { method: 'DELETE' }),
   },
   health: () => request<{ status: string }>('/api/health'),
 }

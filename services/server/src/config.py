@@ -76,6 +76,8 @@ class Settings(BaseSettings):
     setup_bootstrap_token: str = ""
     # Comma-separated extra origins for the REST API (e.g. UI on another host than the API).
     cors_origins: str = ""
+    # MCP authentication mode: "disabled", "enabled", "transition"
+    mcp_auth_mode: str = "disabled"
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

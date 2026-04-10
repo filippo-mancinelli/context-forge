@@ -30,6 +30,7 @@ async def main() -> None:
     from .mcp import memory, repos, jobs  # noqa: F401
     from .mcp.server import mcp
     from .api.app import api
+    from .mcp.auth import add_auth_middleware
 
     settings = get_settings()
 
@@ -47,6 +48,8 @@ async def main() -> None:
 
     # Configure both ASGI apps
     mcp_app = mcp.http_app(path="/mcp")
+    # Add authentication middleware if enabled
+    mcp_app = add_auth_middleware(mcp_app, auth_mode=settings.mcp_auth_mode)
     mcp_config = uvicorn.Config(
         mcp_app,
         host="0.0.0.0",
