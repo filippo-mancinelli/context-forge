@@ -57,3 +57,6 @@ dependencies = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["src*"]
+
+[project.scripts]
+forge-cli = "src.cli:main"
