@@ -67,8 +67,8 @@ export default function Jobs() {
   const active = jobs.filter(j => j.status === 'running' || j.status === 'pending').length
 
   return (
-    <div className="p-8">
-      <div className="mb-8">
+    <div className="p-5">
+      <div className="mb-5">
         <h1 className="text-xl font-semibold text-white flex items-center gap-2">
           <Activity className="w-5 h-5 text-indigo-400" />
           Async Jobs
@@ -78,51 +78,42 @@ export default function Jobs() {
         </p>
       </div>
 
-      <div className="mb-6 p-4 bg-gray-900 border border-gray-800 rounded-xl">
-        <p className="text-xs text-gray-500 mb-1 font-medium">About Async Jobs</p>
-        <p className="text-xs text-gray-400">
-          Use <code className="font-mono text-amber-300">job_submit(url, payload)</code> in your agent to call slow HTTP endpoints
-          without MCP timeouts. Poll with <code className="font-mono text-amber-300">job_status(job_id)</code> and retrieve with{' '}
-          <code className="font-mono text-amber-300">job_result(job_id)</code>.
-        </p>
-      </div>
-
       {error && (
-        <div className="mb-6 p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-sm text-red-400">{error}</div>
+        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-sm text-red-400">{error}</div>
       )}
 
       {loading ? (
-        <div className="flex items-center justify-center h-48 text-gray-600">
-          <Loader2 className="w-5 h-5 animate-spin mr-2" />
+        <div className="flex items-center justify-center h-32 text-gray-600">
+          <Loader2 className="w-4 h-4 animate-spin mr-2" />
           Loading…
         </div>
       ) : jobs.length === 0 ? (
-        <div className="text-center py-20 text-gray-600">
-          <Activity className="w-10 h-10 mx-auto mb-3 opacity-40" />
+        <div className="text-center py-12 text-gray-600">
+          <Activity className="w-8 h-8 mx-auto mb-2 opacity-40" />
           <p className="text-sm">No jobs yet.</p>
         </div>
       ) : (
-        <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+        <div className="bg-gray-900 rounded-lg border border-gray-800 overflow-hidden">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-800 text-gray-500 text-xs uppercase tracking-wider">
-                <th className="text-left px-5 py-3 font-medium">Job ID</th>
-                <th className="text-left px-4 py-3 font-medium">Tool</th>
-                <th className="text-left px-4 py-3 font-medium">Status</th>
-                <th className="text-left px-4 py-3 font-medium">Duration</th>
-                <th className="text-left px-4 py-3 font-medium">Created</th>
+                <th className="text-left px-4 py-2 font-medium">Job ID</th>
+                <th className="text-left px-3 py-2 font-medium">Tool</th>
+                <th className="text-left px-3 py-2 font-medium">Status</th>
+                <th className="text-left px-3 py-2 font-medium">Duration</th>
+                <th className="text-left px-3 py-2 font-medium">Created</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800">
               {jobs.map(job => (
                 <tr key={job.id} className="hover:bg-gray-800/50 transition-colors">
-                  <td className="px-5 py-3.5">
+                  <td className="px-4 py-2.5">
                     <code className="text-xs font-mono text-gray-500">{job.id.slice(0, 8)}…</code>
                   </td>
-                  <td className="px-4 py-3.5">
+                  <td className="px-3 py-2.5">
                     <span className="text-xs font-mono text-amber-300">{job.tool}</span>
                   </td>
-                  <td className="px-4 py-3.5">
+                  <td className="px-3 py-2.5">
                     <div>
                       <StatusBadge status={job.status} />
                       {job.error_message && (
@@ -130,10 +121,10 @@ export default function Jobs() {
                       )}
                     </div>
                   </td>
-                  <td className="px-4 py-3.5 text-xs text-gray-500 font-mono">
+                  <td className="px-3 py-2.5 text-xs text-gray-500 font-mono">
                     {duration(job.created_at, job.updated_at)}
                   </td>
-                  <td className="px-4 py-3.5 text-xs text-gray-500">
+                  <td className="px-3 py-2.5 text-xs text-gray-500">
                     {new Date(job.created_at).toLocaleString(undefined, {
                       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
                     })}

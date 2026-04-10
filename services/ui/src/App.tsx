@@ -15,7 +15,6 @@ import { api, clearAuthToken, getAuthToken } from './lib/api'
 function Sidebar({ onLogout }: { onLogout: () => void }) {
   const links: Array<{ to: string; icon: typeof GitBranch; label: string; end?: boolean }> = [
     { to: '/repos', icon: GitBranch, label: 'Repositories' },
-    { to: '/search', icon: Sparkles, label: 'Cross Search' },
     { to: '/memory', icon: Brain, label: 'Memory' },
     { to: '/settings', icon: SlidersHorizontal, label: 'Settings' },
     { to: '/tools', icon: Wrench, label: 'MCP Tools' },
@@ -23,22 +22,21 @@ function Sidebar({ onLogout }: { onLogout: () => void }) {
   ]
 
   return (
-    <aside className="w-56 bg-gray-900 border-r border-gray-800 flex flex-col min-h-screen">
-      <div className="px-5 py-5 border-b border-gray-800">
-        <div className="flex items-center gap-2.5">
-          <Database className="w-5 h-5 text-indigo-400" />
-          <span className="font-semibold text-white text-sm tracking-tight">context-forge</span>
+    <aside className="w-48 bg-gray-900 border-r border-gray-800 flex flex-col min-h-screen">
+      <div className="px-4 py-3 border-b border-gray-800">
+        <div className="flex items-center gap-2">
+          <Database className="w-4 h-4 text-indigo-400" />
+          <span className="font-semibold text-white text-sm">context-forge</span>
         </div>
-        <p className="text-xs text-gray-500 mt-0.5 ml-7">agent platform</p>
       </div>
-      <nav className="flex-1 px-3 py-4 space-y-0.5">
+      <nav className="flex-1 px-2 py-3 space-y-0.5">
         {links.map(({ to, icon: Icon, label, end }) => (
           <NavLink
             key={to}
             to={to}
             end={end}
             className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
+              `flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
                 isActive
                   ? 'bg-indigo-500/15 text-indigo-400 font-medium'
                   : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'
@@ -50,12 +48,10 @@ function Sidebar({ onLogout }: { onLogout: () => void }) {
           </NavLink>
         ))}
       </nav>
-      <div className="px-5 py-4 border-t border-gray-800">
-        <p className="text-xs text-gray-600">MCP: :4000/mcp</p>
-        <p className="text-xs text-gray-600">API: :8000/api</p>
+      <div className="px-4 py-3 border-t border-gray-800">
         <button
           onClick={onLogout}
-          className="mt-3 w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 text-xs text-gray-300 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
+          className="w-full inline-flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:bg-gray-800 rounded-lg transition-colors"
         >
           <LogOut className="w-3.5 h-3.5" />
           Logout

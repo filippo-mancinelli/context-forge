@@ -163,7 +163,7 @@ function ImportModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
       <div className="flex max-h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-gray-800 bg-gray-950 shadow-2xl">
-        <div className="border-b border-gray-800 bg-gradient-to-r from-gray-900 via-gray-900 to-gray-950 p-5">
+        <div className="border-b border-gray-800 bg-gradient-to-r from-gray-900 via-gray-900 to-gray-950 p-4">
           <div className="flex items-start justify-between gap-4">
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-400">Repository Import</p>
@@ -171,9 +171,6 @@ function ImportModal({
                 <ProviderIcon provider={provider} />
                 Browse {title} repositories
               </h3>
-              <p className="mt-1 text-sm text-gray-400">
-                Select one or more repositories and add them directly to the indexing queue.
-              </p>
             </div>
             <button onClick={onClose} className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-900 hover:text-gray-300">
               <span className="sr-only">Close</span>
@@ -184,7 +181,7 @@ function ImportModal({
           </div>
         </div>
 
-        <div className="border-b border-gray-800 p-4">
+        <div className="border-b border-gray-800 p-3">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
             <div className="relative flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-600" />
@@ -193,13 +190,13 @@ function ImportModal({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={`Search ${title} repositories...`}
-                className="w-full rounded-xl border border-gray-700 bg-gray-900 py-2.5 pl-10 pr-3 text-sm text-gray-200 outline-none transition-colors focus:border-cyan-500"
+                className="w-full rounded-xl border border-gray-700 bg-gray-900 py-2 pl-10 pr-3 text-sm text-gray-200 outline-none transition-colors focus:border-cyan-500"
               />
             </div>
             <button
               onClick={loadRepos}
               disabled={loading}
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-700 bg-gray-900 px-4 py-2.5 text-sm text-gray-300 transition-colors hover:bg-gray-800 disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-700 bg-gray-900 px-4 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800 disabled:opacity-50"
             >
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
               Refresh
@@ -207,25 +204,11 @@ function ImportModal({
             <button
               onClick={handleAddSelected}
               disabled={!selectedRepos.length || adding}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-cyan-500 disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-500 disabled:opacity-50"
             >
               {adding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
               Add {selectedRepos.length || ''} {selectedRepos.length === 1 ? 'repository' : 'repositories'}
             </button>
-          </div>
-          <div className="mt-3 grid gap-3 text-xs text-gray-400 lg:grid-cols-3">
-            <div className="rounded-xl border border-gray-800 bg-gray-900/60 p-3">
-              <p className="font-medium text-gray-200">Provider token</p>
-              <p className="mt-1">If this list is empty or errors, check the token in Settings first.</p>
-            </div>
-            <div className="rounded-xl border border-gray-800 bg-gray-900/60 p-3">
-              <p className="font-medium text-gray-200">Selection aware</p>
-              <p className="mt-1">Already configured repos stay visible but are marked and cannot be re-added.</p>
-            </div>
-            <div className="rounded-xl border border-gray-800 bg-gray-900/60 p-3">
-              <p className="font-medium text-gray-200">Persistence</p>
-              <p className="mt-1">Imported repos are stored in runtime config, so remote setup does not depend on editing files.</p>
-            </div>
           </div>
         </div>
 
@@ -251,7 +234,7 @@ function ImportModal({
                 return (
                   <label
                     key={repo.id}
-                    className={`flex cursor-pointer items-start gap-4 rounded-2xl border p-4 transition-colors ${
+                    className={`flex cursor-pointer items-start gap-3 rounded-xl border p-3 transition-colors ${
                       alreadyConfigured
                         ? 'border-gray-800 bg-gray-900/40 opacity-60'
                         : selected[repo.full_name]
@@ -368,60 +351,54 @@ export default function Repos() {
 
   return (
     <div className="min-h-screen bg-gray-950">
-      <div className="mx-auto max-w-7xl p-8">
-        <div className="mb-8 flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+      <div className="mx-auto max-w-7xl p-6">
+        <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-400">Repositories</p>
             <h1 className="mt-1 flex items-center gap-2 text-2xl font-semibold text-white">
               <GitBranch className="h-6 w-6 text-cyan-400" />
               Manage indexed code sources
             </h1>
-            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-gray-400">
-              Browse configured repositories, import remote GitHub and GitLab sources, and manage runtime-backed indexing without editing config files.
-            </p>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3 xl:w-[34rem]">
-            <div className="rounded-2xl border border-gray-800 bg-gray-900/70 p-4">
+            <div className="rounded-xl border border-gray-800 bg-gray-900/70 p-3">
               <p className="text-xs uppercase tracking-wider text-gray-500">Configured</p>
-              <p className="mt-2 text-2xl font-semibold text-white">{repos.length}</p>
-              <p className="mt-1 text-xs text-gray-500">{remoteCount} remote sources</p>
+              <p className="mt-1 text-xl font-semibold text-white">{repos.length}</p>
+              <p className="mt-0.5 text-xs text-gray-500">{remoteCount} remote</p>
             </div>
-            <div className="rounded-2xl border border-gray-800 bg-gray-900/70 p-4">
+            <div className="rounded-xl border border-gray-800 bg-gray-900/70 p-3">
               <p className="text-xs uppercase tracking-wider text-gray-500">Indexed</p>
-              <p className="mt-2 text-2xl font-semibold text-white">{indexedCount}</p>
-              <p className="mt-1 text-xs text-gray-500">ready for semantic search</p>
+              <p className="mt-1 text-xl font-semibold text-white">{indexedCount}</p>
+              <p className="mt-0.5 text-xs text-gray-500">ready for search</p>
             </div>
-            <div className="rounded-2xl border border-gray-800 bg-gray-900/70 p-4">
+            <div className="rounded-xl border border-gray-800 bg-gray-900/70 p-3">
               <p className="text-xs uppercase tracking-wider text-gray-500">Chunks</p>
-              <p className="mt-2 text-2xl font-semibold text-white">{totalChunks.toLocaleString()}</p>
-              <p className="mt-1 text-xs text-gray-500">total indexed fragments</p>
+              <p className="mt-1 text-xl font-semibold text-white">{totalChunks.toLocaleString()}</p>
+              <p className="mt-0.5 text-xs text-gray-500">total fragments</p>
             </div>
           </div>
         </div>
 
-        <div className="mb-6 grid gap-4 xl:grid-cols-[1.3fr_0.9fr]">
-          <div className="rounded-2xl border border-gray-800 bg-gradient-to-br from-gray-900 via-gray-900 to-gray-950 p-5">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div className="mb-4 grid gap-3 xl:grid-cols-[1.3fr_0.9fr]">
+          <div className="rounded-xl border border-gray-800 bg-gradient-to-br from-gray-900 via-gray-900 to-gray-950 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div>
                 <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-400">Remote Import</p>
-                <h2 className="mt-1 text-lg font-semibold text-white">Pick repositories from your provider</h2>
-                <p className="mt-1 text-sm text-gray-400">
-                  Use provider tokens from Settings, then add repositories in bulk from GitHub or GitLab.
-                </p>
+                <h2 className="mt-1 text-base font-semibold text-white">Pick repositories from your provider</h2>
               </div>
-              <div className="flex flex-col gap-3 sm:flex-row">
+              <div className="flex flex-col gap-2 sm:flex-row">
                 <select
                   value={provider}
                   onChange={(e) => setProvider(e.target.value as Provider)}
-                  className="rounded-xl border border-gray-700 bg-gray-950 px-3 py-2.5 text-sm text-gray-200 outline-none transition-colors focus:border-cyan-500"
+                  className="rounded-lg border border-gray-700 bg-gray-950 px-3 py-2 text-sm text-gray-200 outline-none transition-colors focus:border-cyan-500"
                 >
                   <option value="github">GitHub</option>
                   <option value="gitlab">GitLab</option>
                 </select>
                 <button
                   onClick={() => setShowImportModal(true)}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-cyan-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-cyan-500"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-cyan-500"
                 >
                   <ProviderIcon provider={provider} />
                   Browse {provider === 'github' ? 'GitHub' : 'GitLab'}
@@ -430,35 +407,35 @@ export default function Repos() {
             </div>
           </div>
 
-          <div className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+          <div className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Actions</p>
-            <div className="mt-4 flex flex-col gap-3">
+            <div className="mt-3 flex flex-col gap-2">
               <button
                 onClick={handleIndexAll}
                 disabled={syncing}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-gray-100 px-4 py-2.5 text-sm font-medium text-gray-950 transition-colors hover:bg-white disabled:opacity-50"
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-950 transition-colors hover:bg-white disabled:opacity-50"
               >
                 <RefreshCw className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
                 Re-index all
               </button>
               <Link
                 to="/settings"
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-700 bg-gray-900 px-4 py-2.5 text-sm text-gray-300 transition-colors hover:bg-gray-800"
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-700 bg-gray-900 px-4 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800"
               >
                 Add local repositories
               </Link>
               <Link
                 to="/settings"
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-700 bg-gray-900 px-4 py-2.5 text-sm text-gray-300 transition-colors hover:bg-gray-800"
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-700 bg-gray-900 px-4 py-2 text-sm text-gray-300 transition-colors hover:bg-gray-800"
               >
-                Configure tokens and providers
+                Configure tokens
               </Link>
             </div>
           </div>
         </div>
 
         {error && (
-          <div className="mb-6 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-300">
+          <div className="mb-4 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-300">
             <span className="font-medium">API error:</span> {error}
           </div>
         )}
@@ -469,29 +446,29 @@ export default function Repos() {
             Loading...
           </div>
         ) : repos.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-gray-800 bg-gray-900/40 py-24 text-center text-gray-500">
-            <GitBranch className="mx-auto mb-4 h-12 w-12 opacity-30" />
+          <div className="rounded-xl border border-dashed border-gray-800 bg-gray-900/40 py-16 text-center text-gray-500">
+            <GitBranch className="mx-auto mb-3 h-10 w-10 opacity-30" />
             <p className="text-sm">No repositories configured yet.</p>
             <p className="mt-1 text-xs text-gray-600">Browse a provider above or add local repositories from Settings.</p>
           </div>
         ) : (
-          <div className="overflow-hidden rounded-2xl border border-gray-800 bg-gray-900/80">
+          <div className="overflow-hidden rounded-xl border border-gray-800 bg-gray-900/80">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-800 text-left text-xs uppercase tracking-wider text-gray-500">
-                  <th className="px-5 py-3 font-medium">Repository</th>
-                  <th className="px-4 py-3 font-medium">Branch</th>
-                  <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium text-right">Chunks</th>
-                  <th className="px-4 py-3 font-medium">Last Indexed</th>
-                  <th className="px-4 py-3"></th>
+                  <th className="px-4 py-2 font-medium">Repository</th>
+                  <th className="px-3 py-2 font-medium">Branch</th>
+                  <th className="px-3 py-2 font-medium">Status</th>
+                  <th className="px-3 py-2 font-medium text-right">Chunks</th>
+                  <th className="px-3 py-2 font-medium">Last Indexed</th>
+                  <th className="px-3 py-2"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800">
                 {repos.map((repo) => (
                   <tr key={repo.name} className="transition-colors hover:bg-gray-800/40">
-                    <td className="px-5 py-4">
-                      <div className="flex items-center gap-3">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
                         <TypeIcon type={repo.type} />
                         <div className="min-w-0">
                           <Link to={`/repos/${encodeURIComponent(repo.name)}`} className="font-medium text-white hover:text-cyan-300">
@@ -503,10 +480,10 @@ export default function Repos() {
                         </div>
                       </div>
                     </td>
-                    <td className="px-4 py-4">
+                    <td className="px-3 py-3">
                       <span className="font-mono text-xs text-gray-400">{repo.branch}</span>
                     </td>
-                    <td className="px-4 py-4">
+                    <td className="px-3 py-3">
                       <div>
                         <StatusBadge status={repo.status} />
                         {repo.error_message && (
@@ -516,15 +493,15 @@ export default function Repos() {
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-4 text-right">
+                    <td className="px-3 py-3 text-right">
                       <span className="font-mono text-xs text-gray-300">
                         {repo.total_chunks > 0 ? repo.total_chunks.toLocaleString() : '-'}
                       </span>
                     </td>
-                    <td className="px-4 py-4 text-xs text-gray-500">
+                    <td className="px-3 py-3 text-xs text-gray-500">
                       {formatDate(repo.last_indexed_at)}
                     </td>
-                    <td className="px-4 py-4 text-right">
+                    <td className="px-3 py-3 text-right">
                       <div className="inline-flex items-center gap-2">
                         <button
                           onClick={() => handleIndex(repo.name)}

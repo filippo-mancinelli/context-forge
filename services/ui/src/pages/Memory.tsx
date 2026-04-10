@@ -43,35 +43,35 @@ function MemoryCard({ memory, onDelete }: { memory: MemoryItem; onDelete: (id: s
   }
 
   return (
-    <div className="group rounded-2xl border border-gray-800 bg-gray-900/80 p-4 transition-colors hover:border-gray-700">
+    <div className="group rounded-xl border border-gray-800 bg-gray-900/80 p-3 transition-colors hover:border-gray-700">
       <div className="flex items-start justify-between gap-3">
         <p className="flex-1 text-sm leading-relaxed text-gray-200">{memory.memory}</p>
         <button
           onClick={handleDelete}
           disabled={deleting}
-          className="flex-shrink-0 rounded-lg p-1.5 text-gray-600 transition-all hover:bg-gray-800 hover:text-rose-400 disabled:opacity-50 md:opacity-0 md:group-hover:opacity-100"
+          className="flex-shrink-0 rounded-lg p-1 text-gray-600 transition-all hover:bg-gray-800 hover:text-rose-400 disabled:opacity-50 md:opacity-0 md:group-hover:opacity-100"
           title="Delete memory"
         >
-          {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+          {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
         </button>
       </div>
-      <div className="mt-3 flex flex-wrap items-center gap-2.5">
+      <div className="mt-2 flex flex-wrap items-center gap-2">
         {memory.score !== undefined && (
-          <span className="rounded bg-indigo-500/10 px-2 py-0.5 font-mono text-xs text-indigo-300">
-            score {memory.score.toFixed(3)}
+          <span className="rounded bg-indigo-500/10 px-1.5 py-0.5 font-mono text-[10px] text-indigo-300">
+            {memory.score.toFixed(3)}
           </span>
         )}
         {memory.metadata && Object.keys(memory.metadata).length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap gap-1">
             {Object.entries(memory.metadata).slice(0, 4).map(([key, value]) => (
-              <span key={key} className="rounded bg-gray-800 px-2 py-0.5 font-mono text-xs text-gray-400">
+              <span key={key} className="rounded bg-gray-800 px-1.5 py-0.5 font-mono text-[10px] text-gray-400">
                 {key}: {String(value)}
               </span>
             ))}
           </div>
         )}
         {memory.created_at && (
-          <span className="ml-auto text-xs text-gray-500">
+          <span className="ml-auto text-[10px] text-gray-500">
             {formatDate(memory.created_at)}
           </span>
         )}
@@ -189,112 +189,100 @@ export default function Memory() {
 
   return (
     <div className="min-h-screen bg-gray-950">
-      <div className="mx-auto max-w-6xl p-8">
-        <div className="mb-8 flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+      <div className="mx-auto max-w-6xl p-6">
+        <div className="mb-6 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
           <div>
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-indigo-400">Memory</p>
-            <h1 className="mt-1 flex items-center gap-2 text-2xl font-semibold text-white">
-              <Brain className="h-6 w-6 text-indigo-400" />
-              Persistent notes for your agents
+            <h1 className="mt-1 flex items-center gap-2 text-xl font-semibold text-white">
+              <Brain className="h-5 w-5 text-indigo-400" />
+              Persistent notes
             </h1>
-            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-gray-400">
-              Save decisions, facts, and reminders directly from the dashboard, then search or remove them without leaving the UI.
-            </p>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 xl:w-[24rem]">
-            <div className="rounded-2xl border border-gray-800 bg-gray-900/70 p-4">
-              <p className="text-xs uppercase tracking-wider text-gray-500">Visible</p>
-              <p className="mt-2 text-2xl font-semibold text-white">{memories.length}</p>
-              <p className="mt-1 text-xs text-gray-500">{isSearchMode ? 'search results' : 'stored memories'}</p>
+          <div className="grid gap-2 sm:grid-cols-2 xl:w-[20rem]">
+            <div className="rounded-xl border border-gray-800 bg-gray-900/70 p-3">
+              <p className="text-[10px] uppercase tracking-wider text-gray-500">Visible</p>
+              <p className="mt-1 text-xl font-semibold text-white">{memories.length}</p>
+              <p className="mt-0.5 text-[10px] text-gray-500">{isSearchMode ? 'results' : 'memories'}</p>
             </div>
-            <div className="rounded-2xl border border-gray-800 bg-gray-900/70 p-4">
-              <p className="text-xs uppercase tracking-wider text-gray-500">Mode</p>
-              <p className="mt-2 text-2xl font-semibold text-white">{isSearchMode ? 'Search' : 'Browse'}</p>
-              <p className="mt-1 text-xs text-gray-500">
-                {isSearchMode ? `query: "${query}"` : 'manual entry enabled'}
+            <div className="rounded-xl border border-gray-800 bg-gray-900/70 p-3">
+              <p className="text-[10px] uppercase tracking-wider text-gray-500">Mode</p>
+              <p className="mt-1 text-xl font-semibold text-white">{isSearchMode ? 'Search' : 'Browse'}</p>
+              <p className="mt-0.5 text-[10px] text-gray-500 truncate">
+                {isSearchMode ? `"${query}"` : 'manual entry'}
               </p>
             </div>
           </div>
         </div>
 
-        <div className="mb-6 grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-          <section className="rounded-2xl border border-gray-800 bg-gradient-to-br from-gray-900 via-gray-900 to-gray-950 p-5">
+        <div className="mb-5 grid gap-3 xl:grid-cols-[1.15fr_0.85fr]">
+          <section className="rounded-xl border border-gray-800 bg-gradient-to-br from-gray-900 via-gray-900 to-gray-950 p-4">
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-indigo-400">Manual Entry</p>
-            <h2 className="mt-1 text-lg font-semibold text-white">Add a new memory</h2>
-            <p className="mt-1 text-sm text-gray-400">
-              Entries saved here use direct storage, so the text remains exactly as you write it.
-            </p>
+            <h2 className="mt-1 text-base font-semibold text-white">Add memory</h2>
 
-            <form className="mt-5 space-y-4" onSubmit={handleCreate}>
+            <form className="mt-4 space-y-3" onSubmit={handleCreate}>
               <label className="block">
-                <span className="mb-1.5 block text-xs font-medium uppercase tracking-wider text-gray-500">Content</span>
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wider text-gray-500">Content</span>
                 <textarea
                   value={content}
                   onChange={(event) => setContent(event.target.value)}
-                  rows={5}
-                  placeholder="Example: The billing service now reads provider tokens from runtime settings instead of .env."
-                  className="w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-2.5 text-sm text-gray-100 placeholder-gray-500 outline-none transition-colors focus:border-indigo-500"
+                  rows={4}
+                  placeholder="The billing service now reads provider tokens from runtime settings."
+                  className="w-full rounded-lg border border-gray-700 bg-gray-950 px-2.5 py-2 text-sm text-gray-100 placeholder-gray-500 outline-none transition-colors focus:border-indigo-500"
                 />
               </label>
 
               <label className="block">
-                <span className="mb-1.5 block text-xs font-medium uppercase tracking-wider text-gray-500">Metadata JSON (optional)</span>
+                <span className="mb-1 block text-xs font-medium uppercase tracking-wider text-gray-500">Metadata JSON (optional)</span>
                 <textarea
                   value={metadataInput}
                   onChange={(event) => setMetadataInput(event.target.value)}
-                  rows={4}
+                  rows={3}
                   placeholder={'{"source":"dashboard","type":"decision"}'}
-                  className="w-full rounded-xl border border-gray-700 bg-gray-950 px-3 py-2.5 font-mono text-xs text-gray-200 placeholder-gray-600 outline-none transition-colors focus:border-indigo-500"
+                  className="w-full rounded-lg border border-gray-700 bg-gray-950 px-2.5 py-2 font-mono text-xs text-gray-200 placeholder-gray-600 outline-none transition-colors focus:border-indigo-500"
                 />
               </label>
 
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-xs leading-relaxed text-gray-500">
-                  Tip: use metadata to tag project, area, owner, or decision type for easier filtering later.
-                </p>
+              <div className="flex justify-end">
                 <button
                   type="submit"
                   disabled={creating || !content.trim()}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
                 >
-                  {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                  {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
                   Add memory
                 </button>
               </div>
             </form>
 
             {createError && (
-              <div className="mt-4 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-300">
+              <div className="mt-3 rounded-lg border border-rose-500/20 bg-rose-500/10 p-2.5 text-sm text-rose-300">
                 {createError}
               </div>
             )}
 
             {createSuccess && (
-              <div className="mt-4 flex items-center gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm text-emerald-300">
-                <CheckCircle className="h-4 w-4 flex-shrink-0" />
+              <div className="mt-3 flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-2.5 text-sm text-emerald-300">
+                <CheckCircle className="h-3.5 w-3.5 flex-shrink-0" />
                 {createSuccess}
               </div>
             )}
           </section>
 
-          <section className="rounded-2xl border border-gray-800 bg-gray-900/70 p-5">
+          <section className="rounded-xl border border-gray-800 bg-gray-900/70 p-4">
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-gray-500">Search</p>
-            <h2 className="mt-1 text-lg font-semibold text-white">Find existing memories</h2>
-            <p className="mt-1 text-sm text-gray-400">
-              Semantic search matches related notes even when the wording is different.
-            </p>
+            <h2 className="mt-1 text-base font-semibold text-white">Find memories</h2>
 
-            <div className="mt-5 flex gap-2">
+            <div className="mt-4 flex gap-2">
               <div className="relative flex-1">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
                 <input
                   type="text"
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
                   onKeyDown={(event) => event.key === 'Enter' && handleSearch()}
-                  placeholder="Search across memories..."
-                  className="w-full rounded-xl border border-gray-700 bg-gray-950 py-2.5 pl-10 pr-3 text-sm text-gray-200 placeholder-gray-600 outline-none transition-colors focus:border-indigo-500"
+                  placeholder="Search memories..."
+                  className="w-full rounded-lg border border-gray-700 bg-gray-950 py-2 pl-9 pr-2.5 text-sm text-gray-200 placeholder-gray-600 outline-none transition-colors focus:border-indigo-500"
                 />
               </div>
               {isSearchMode && (
@@ -302,10 +290,10 @@ export default function Memory() {
                   onClick={() => {
                     void handleClear()
                   }}
-                  className="rounded-xl border border-gray-700 bg-gray-950 px-3 py-2.5 text-gray-400 transition-colors hover:bg-gray-800"
+                  className="rounded-lg border border-gray-700 bg-gray-950 px-2.5 py-2 text-gray-400 transition-colors hover:bg-gray-800"
                   title="Clear search"
                 >
-                  <X className="h-4 w-4" />
+                  <X className="h-3.5 w-3.5" />
                 </button>
               )}
               <button
@@ -313,41 +301,38 @@ export default function Memory() {
                   void handleSearch()
                 }}
                 disabled={searching}
-                className="inline-flex items-center justify-center gap-2 rounded-xl bg-gray-100 px-4 py-2.5 text-sm font-medium text-gray-950 transition-colors hover:bg-white disabled:opacity-50"
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-gray-100 px-3 py-2 text-sm font-medium text-gray-950 transition-colors hover:bg-white disabled:opacity-50"
               >
-                {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Search'}
+                {searching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Search'}
               </button>
             </div>
 
-            <div className="mt-4 rounded-xl border border-gray-800 bg-gray-950/60 p-4 text-sm text-gray-400">
+            <div className="mt-3 rounded-lg border border-gray-800 bg-gray-950/60 p-2.5 text-sm text-gray-400">
               {isSearchMode
-                ? `Showing ${memories.length} result${memories.length === 1 ? '' : 's'} for "${query}".`
-                : 'Browsing the latest stored memories. Delete from the list below if you want to clean up old notes.'}
+                ? `${memories.length} result${memories.length === 1 ? '' : 's'} for "${query}"`
+                : `Browsing ${memories.length} memories`}
             </div>
           </section>
         </div>
 
         {pageError && (
-          <div className="mb-6 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-300">
+          <div className="mb-5 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-300">
             <span className="font-medium">API error:</span> {pageError}
           </div>
         )}
 
         {loading ? (
-          <div className="flex h-48 items-center justify-center text-gray-600">
+          <div className="flex h-40 items-center justify-center text-gray-600">
             <Loader2 className="mr-2 h-5 w-5 animate-spin" />
             Loading...
           </div>
         ) : memories.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-gray-800 bg-gray-900/40 py-24 text-center text-gray-500">
-            <Brain className="mx-auto mb-4 h-12 w-12 opacity-30" />
+          <div className="rounded-xl border border-dashed border-gray-800 bg-gray-900/40 py-16 text-center text-gray-500">
+            <Brain className="mx-auto mb-3 h-10 w-10 opacity-30" />
             <p className="text-sm">{isSearchMode ? 'No memories match your query.' : 'No memories stored yet.'}</p>
-            <p className="mt-1 text-xs text-gray-600">
-              Add one from the form above or use <code className="font-mono">memory_add()</code> from your agent tools.
-            </p>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2">
             {memories.map((memory) => (
               <MemoryCard key={memory.id} memory={memory} onDelete={handleDelete} />
             ))}
