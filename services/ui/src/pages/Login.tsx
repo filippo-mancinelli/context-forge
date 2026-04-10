@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Lock, Loader2 } from 'lucide-react'
 import { api, setAuthToken } from '../lib/api'
+import { Button } from '../components/ui'
+import { Input } from '../components/ui'
 
 type LoginProps = { onLoggedIn: () => void }
 
@@ -25,37 +26,56 @@ export default function Login({ onLoggedIn }: LoginProps) {
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 flex items-center justify-center p-6">
-      <div className="w-full max-w-md bg-gray-900 border border-gray-800 rounded-2xl p-6 space-y-4">
-        <h1 className="text-xl font-semibold text-white inline-flex items-center gap-2">
-          <Lock className="w-5 h-5 text-indigo-400" />
-          Admin Login
-        </h1>
-        {error && <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg p-3">{error}</div>}
-        <input
-          value={username}
-          onChange={e => setUsername(e.target.value)}
-          placeholder="Username"
-          className="w-full px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg"
-        />
-        <input
-          type="password"
-          value={password}
-          onChange={e => setPassword(e.target.value)}
-          onKeyDown={e => e.key === 'Enter' && handleLogin()}
-          placeholder="Password"
-          className="w-full px-3 py-2 text-sm bg-gray-950 border border-gray-700 rounded-lg"
-        />
-        <button
-          onClick={handleLogin}
-          disabled={loading || !username || !password}
-          className="w-full px-4 py-2 text-sm text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg disabled:opacity-50 inline-flex items-center justify-center gap-2"
-        >
-          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-          Login
-        </button>
+    <div
+      style={{ minHeight: '100vh', background: 'var(--surface)' }}
+      className="flex items-center justify-center p-6"
+    >
+      <div
+        style={{ maxWidth: '360px', border: '1px solid var(--border)' }}
+        className="w-full bg-bg p-8"
+      >
+        <h1 className="text-xl font-semibold mb-1">context-forge</h1>
+        <p className="text-sm text-muted mb-6">Admin login</p>
+
+        {error && (
+          <div
+            style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
+            className="text-sm p-3 mb-4 bg-[#fef2f2]"
+          >
+            {error}
+          </div>
+        )}
+
+        <div className="space-y-4">
+          <Input
+            id="username"
+            label="Username"
+            value={username}
+            onChange={e => setUsername(e.target.value)}
+            placeholder="admin"
+            autoComplete="username"
+          />
+          <Input
+            id="password"
+            label="Password"
+            type="password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleLogin()}
+            placeholder="••••••••"
+            autoComplete="current-password"
+          />
+          <Button
+            variant="primary"
+            className="w-full justify-center mt-2"
+            onClick={handleLogin}
+            disabled={loading || !username || !password}
+            loading={loading}
+          >
+            Sign in
+          </Button>
+        </div>
       </div>
     </div>
   )
 }
-
