@@ -49,7 +49,8 @@ export default function OAuth() {
       }
 
       // Call authorize endpoint
-      const response = await fetch(`${api.defaults.baseURL}/mcp/oauth/authorize?${new URLSearchParams({
+      const baseUrl = import.meta.env.VITE_API_URL || ''
+      const response = await fetch(`${baseUrl}/mcp/oauth/authorize?${new URLSearchParams({
         client_id: params.client_id,
         redirect_uri: params.redirect_uri,
         response_type: params.response_type || 'code',
