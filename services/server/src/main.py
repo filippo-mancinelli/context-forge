@@ -29,6 +29,7 @@ async def main() -> None:
     # Import tool modules so they register on the mcp instance
     from .mcp import memory, repos, jobs  # noqa: F401
     from .mcp.server import mcp
+    from .mcp import oauth  # noqa: F401 - register OAuth handlers
     from .api.app import api
     from .mcp.auth import add_auth_middleware
 
