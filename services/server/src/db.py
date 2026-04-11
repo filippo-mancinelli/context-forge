@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
     client_id    TEXT UNIQUE NOT NULL,
     client_secret TEXT,
     name         TEXT NOT NULL,
-    redirect_uris TEXT[] NOT NULL DEFAULT '{}',
+    redirect_uris TEXT[] NOT NULL DEFAULT '{{}}',
     scopes       TEXT NOT NULL DEFAULT 'read,write',
     created_at   TIMESTAMPTZ DEFAULT NOW()
 );
