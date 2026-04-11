@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { api } from '../lib/api'
 import { Button } from '../components/ui'
 
 interface OAuthParams {
