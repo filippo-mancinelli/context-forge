@@ -15,6 +15,7 @@ from .routes import settings as settings_routes
 from .routes import github as github_routes
 from .routes import gitlab as gitlab_routes
 from .routes import mcp_keys as mcp_keys_routes
+from .routes import oauth as oauth_routes
 
 api = FastAPI(
     title="context-forge API",
@@ -66,6 +67,7 @@ api.include_router(settings_routes.router, prefix="/api")
 api.include_router(github_routes.router, prefix="/api")
 api.include_router(gitlab_routes.router, prefix="/api")
 api.include_router(mcp_keys_routes.router, prefix="/api")
+api.include_router(oauth_routes.router, prefix="/api")
 
 
 @api.middleware("http")
@@ -77,7 +79,7 @@ async def auth_guard(request, call_next):
     if not path.startswith("/api"):
         return await call_next(request)
 
-    open_paths = ("/api/health", "/api/setup", "/api/auth", "/api/mcp/keys/validate")
+    open_paths = ("/api/health", "/api/setup", "/api/auth", "/api/mcp/keys/validate", "/api/oauth")
     if path.startswith(open_paths):
         return await call_next(request)
 
