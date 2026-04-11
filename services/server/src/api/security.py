@@ -198,3 +198,148 @@ async def revoke_mcp_api_key(key_id: int) -> bool:
     async with pool.acquire() as conn:
         result = await conn.execute("DELETE FROM mcp_api_keys WHERE id = $1", key_id)
         return result == "DELETE 1"
+
+
+# ========== OAuth 2.0 Functions ==========
+
+async def create_oauth_client(client_id: str, name: str, redirect_uris: list[str], scopes: str = "read,write") -> None:
+    """Create a new OAuth client."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO oauth_clients (id, client_id, name, redirect_uris, scopes)
+               VALUES ($1, $2, $3, $4, $5)""",
+            client_id,
+            client_id,
+            name,
+            redirect_uris,
+            scopes,
+        )
+
+
+async def get_oauth_client(client_id: str) -> Optional[dict]:
+    """Get OAuth client by ID."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM oauth_clients WHERE client_id = $1", client_id)
+    return dict(row) if row else None
+
+
+async def create_authorization_code(client_id: str, user_id: int, redirect_uri: str, scope: str, ttl_seconds: int = 600) -> str:
+    """Create an OAuth authorization code."""
+    import secrets
+
+    code = secrets.token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO oauth_authorization_codes (code, client_id, user_id, redirect_uri, scope, expires_at)
+               VALUES ($1, $2, $3, $4, $5, $6)""",
+            code,
+            client_id,
+            user_id,
+            redirect_uri,
+            scope,
+            expires_at,
+        )
+
+    return code
+
+
+async def validate_authorization_code(code: str, client_id: str) -> Optional[dict]:
+    """Validate and consume an authorization code."""
+    now = datetime.now(timezone.utc)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT * FROM oauth_authorization_codes
+               WHERE code = $1 AND client_id = $2 AND expires_at > $3""",
+            code,
+            client_id,
+            now,
+        )
+        if not row:
+            return None
+
+        # Delete the code to prevent reuse
+        await conn.execute("DELETE FROM oauth_authorization_codes WHERE code = $1", code)
+
+    return dict(row)
+
+
+async def create_oauth_token(client_id: str, user_id: int, scope: str, ttl_hours: int = 24) -> str:
+    """Create an OAuth access token."""
+    import secrets
+
+    access_token = secrets.token_urlsafe(48)
+    refresh_token = secrets.token_urlsafe(48)
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO oauth_tokens (access_token, refresh_token, client_id, user_id, scope, expires_at)
+               VALUES ($1, $2, $3, $4, $5, $6)""",
+            access_token,
+            refresh_token,
+            client_id,
+            user_id,
+            scope,
+            expires_at,
+        )
+
+    return access_token
+
+
+async def validate_oauth_token(access_token: str) -> Optional[dict]:
+    """Validate an OAuth access token and return token info."""
+    now = datetime.now(timezone.utc)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT * FROM oauth_tokens
+               WHERE access_token = $1 AND expires_at > $2""",
+            access_token,
+            now,
+        )
+
+    return dict(row) if row else None
+
+
+async def refresh_oauth_token(refresh_token: str) -> Optional[tuple[str, str]]:
+    """Refresh an OAuth token using refresh token. Returns (new_access_token, new_refresh_token)."""
+    import secrets
+
+    now = datetime.now(timezone.utc)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT client_id, user_id, scope FROM oauth_tokens
+               WHERE refresh_token = $1""",
+            refresh_token,
+        )
+        if not row:
+            return None
+
+        # Delete old token
+        await conn.execute("DELETE FROM oauth_tokens WHERE refresh_token = $1", refresh_token)
+
+        # Create new tokens
+        new_access = secrets.token_urlsafe(48)
+        new_refresh = secrets.token_urlsafe(48)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+
+        await conn.execute(
+            """INSERT INTO oauth_tokens (access_token, refresh_token, client_id, user_id, scope, expires_at)
+               VALUES ($1, $2, $3, $4, $5, $6)""",
+            new_access,
+            new_refresh,
+            row["client_id"],
+            row["user_id"],
+            row["scope"],
+            expires_at,
+        )
+
+    return (new_access, new_refresh)

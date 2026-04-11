@@ -51,22 +51,31 @@ const MCP_SNIPPETS = [
   {
     key: 'claude',
     title: 'Claude Code',
-    value: 'claude mcp add --transport http context-forge http://localhost:4000/mcp',
+    value: `~/.claude/mcp.json:
+{
+  "mcpServers": {
+    "context-forge": {
+      "transport": { "type": "http" },
+      "baseUrl": "https://contextapi.edia.cloud/mcp",
+      "headers": { "Authorization": "Bearer YOUR_TOKEN" }
+    }
+  }
+}`,
   },
   {
     key: 'codex',
     title: 'Codex CLI',
-    value: 'codex mcp add context-forge --url http://localhost:4000/mcp',
+    value: `codex mcp add context-forge --url https://contextapi.edia.cloud/mcp --header "Authorization: Bearer YOUR_TOKEN"`,
   },
   {
     key: 'opencode',
     title: 'OpenCode',
-    value: `{"mcp":{"context-forge":{"type":"remote","url":"http://localhost:4000/mcp","enabled":true}}}`,
+    value: `{"mcp":{"context-forge":{"type":"remote","url":"https://contextapi.edia.cloud/mcp","headers":{"Authorization":"Bearer YOUR_TOKEN"},"enabled":true}}}`,
   },
   {
     key: 'cursor',
     title: 'Cursor',
-    value: `{"mcpServers":{"context-forge":{"url":"http://localhost:4000/mcp"}}}`,
+    value: `{"mcpServers":{"context-forge":{"url":"https://contextapi.edia.cloud/mcp","headers":{"Authorization":"Bearer YOUR_TOKEN"}}}}`,
   },
 ]
 
@@ -92,6 +101,9 @@ function QuickConnect() {
 
       {expanded && (
         <div className="px-4 py-4">
+          <p className="text-xs text-muted mb-3">
+            🔑 Generate a token in <strong>Settings → MCP keys</strong> and replace <code className="text-xs">YOUR_TOKEN</code> in the examples below
+          </p>
           <div className="flex gap-2 mb-3 flex-wrap">
             {MCP_SNIPPETS.map(snippet => (
               <Button

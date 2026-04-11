@@ -105,6 +105,45 @@ CREATE TABLE IF NOT EXISTS mcp_api_keys (
 
 CREATE INDEX IF NOT EXISTS mcp_api_keys_key_hash_idx ON mcp_api_keys (key_hash);
 CREATE INDEX IF NOT EXISTS mcp_api_keys_expires_idx ON mcp_api_keys (expires_at);
+
+-- OAuth 2.0 tables for MCP server authentication
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    id           TEXT PRIMARY KEY,
+    client_id    TEXT UNIQUE NOT NULL,
+    client_secret TEXT,
+    name         TEXT NOT NULL,
+    redirect_uris TEXT[] NOT NULL DEFAULT '{}',
+    scopes       TEXT NOT NULL DEFAULT 'read,write',
+    created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+    code         TEXT PRIMARY KEY,
+    client_id    TEXT NOT NULL REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+    user_id      BIGINT REFERENCES admin_users(id) ON DELETE CASCADE,
+    expires_at   TIMESTAMPTZ NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    scope        TEXT NOT NULL,
+    created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS oauth_authorization_codes_client_idx ON oauth_authorization_codes(client_id);
+CREATE INDEX IF NOT EXISTS oauth_authorization_codes_expires_idx ON oauth_authorization_codes(expires_at);
+
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    access_token  TEXT PRIMARY KEY,
+    refresh_token TEXT UNIQUE,
+    client_id     TEXT NOT NULL REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+    user_id       BIGINT REFERENCES admin_users(id) ON DELETE CASCADE,
+    scope         TEXT NOT NULL,
+    expires_at    TIMESTAMPTZ NOT NULL,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS oauth_tokens_access_idx ON oauth_tokens(access_token);
+CREATE INDEX IF NOT EXISTS oauth_tokens_refresh_idx ON oauth_tokens(refresh_token);
+CREATE INDEX IF NOT EXISTS oauth_tokens_expires_idx ON oauth_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS oauth_tokens_client_idx ON oauth_tokens(client_id);
 """
 
 

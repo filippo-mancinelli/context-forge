@@ -10,6 +10,7 @@ import RepoDetail from './pages/RepoDetail'
 import Settings from './pages/Settings'
 import Setup from './pages/Setup'
 import Login from './pages/Login'
+import OAuth from './pages/OAuth'
 import { useAppStore } from './store'
 
 const navLinks = [
@@ -110,6 +111,7 @@ export default function App() {
             <Route path="/settings" element={<Settings />} />
             <Route path="/tools" element={<Tools />} />
             <Route path="/jobs" element={<Jobs />} />
+            <Route path="/oauth" element={<OAuth />} />
           </Routes>
         </main>
       </div>
