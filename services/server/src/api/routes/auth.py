@@ -1,6 +1,8 @@
 """Admin authentication routes."""
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
@@ -11,6 +13,8 @@ from ..security import (
     is_configured,
     require_valid_token_or_raise,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -24,10 +28,13 @@ class LoginRequest(BaseModel):
 async def login(req: LoginRequest):
     """Login admin and issue bearer token."""
     if not await is_configured():
+        logger.warning("Login attempt rejected: setup not completed")
         raise HTTPException(status_code=423, detail="Setup required")
     user_id = await authenticate_admin(req.username, req.password)
     if not user_id:
+        logger.warning("Failed login attempt for username=%r", req.username)
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    logger.info("Successful login for username=%r (user_id=%d)", req.username, user_id)
     token = await create_session(user_id)
     return {"token": token, "token_type": "bearer"}
 

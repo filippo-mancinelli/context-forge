@@ -1,6 +1,7 @@
 """First-run onboarding routes."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -11,7 +12,9 @@ from ...indexer.indexer import sync_repos_config
 from ...indexer.embedder import reset_embedder_clients
 from ...mcp.memory import reset_memory_client
 from ...runtime_state import persist_runtime_config, save_runtime_state, load_runtime_state
-from ..security import create_admin_user, has_admin_user, has_runtime_config, is_configured
+from ..security import create_admin_user, has_admin_user, has_runtime_config, is_configured, reset_admin_password
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/setup", tags=["setup"])
 
@@ -119,3 +122,31 @@ async def patch_settings(req: PatchSettingsRequest):
     reset_memory_client()
 
     return {"status": "ok", "patched_fields": sorted(req.settings_overrides.keys())}
+
+
+class ResetPasswordRequest(BaseModel):
+    bootstrap_token: str
+    admin_username: str = Field(min_length=3, max_length=64)
+    new_password: str = Field(min_length=8, max_length=256)
+
+
+@router.post("/reset-password")
+async def reset_password(req: ResetPasswordRequest):
+    """Reset admin password using the bootstrap token.
+
+    Requires the SETUP_BOOTSTRAP_TOKEN from the environment to authorise
+    the operation, so only someone with server-level access can trigger it.
+    """
+    expected_bootstrap = get_settings().setup_bootstrap_token
+    if not expected_bootstrap:
+        raise HTTPException(status_code=500, detail="SETUP_BOOTSTRAP_TOKEN is not configured")
+    if req.bootstrap_token != expected_bootstrap:
+        logger.warning("Password reset rejected: invalid bootstrap token")
+        raise HTTPException(status_code=401, detail="Invalid bootstrap token")
+
+    if not await has_admin_user():
+        raise HTTPException(status_code=404, detail="No admin user exists; run setup first")
+
+    await reset_admin_password(req.admin_username, req.new_password)
+    logger.info("Admin password reset for username=%r", req.admin_username)
+    return {"status": "ok", "message": f"Password reset for '{req.admin_username}'"}
