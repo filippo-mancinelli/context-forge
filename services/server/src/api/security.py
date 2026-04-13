@@ -55,6 +55,27 @@ async def create_admin_user(username: str, password: str) -> None:
         )
 
 
+async def reset_admin_password(username: str, new_password: str) -> None:
+    """Reset password for an existing admin user, or create if username doesn't exist."""
+    salt = secrets.token_hex(16)
+    password_hash = _hash_password(new_password, salt)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE admin_users SET password_hash = $1, salt = $2 WHERE username = $3",
+            password_hash,
+            salt,
+            username,
+        )
+        if result == "UPDATE 0":
+            await conn.execute(
+                "INSERT INTO admin_users (username, password_hash, salt) VALUES ($1, $2, $3)",
+                username,
+                password_hash,
+                salt,
+            )
+
+
 async def authenticate_admin(username: str, password: str) -> Optional[int]:
     pool = await get_pool()
     async with pool.acquire() as conn:
