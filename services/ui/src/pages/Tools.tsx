@@ -51,23 +51,16 @@ const MCP_SNIPPETS = [
   {
     key: 'claude',
     title: 'Claude Code',
-    value: `~/.claude/mcp.json:
-{
-  "mcpServers": {
-    "context-forge": {
-      "transport": { "type": "http" },
-      "baseUrl": "https://contextapi.edia.cloud/mcp",
-      "headers": { "Authorization": "Bearer YOUR_TOKEN" }
-    }
-  }
-}`,
+    value: `claude mcp add context-forge {MCP_URL} \\
+  --transport http --scope user \\
+  --header "X-API-Key: {YOUR_API_KEY}"`,
   },
   {
     key: 'codex',
     title: 'Codex CLI',
     value: `codex mcp add context-forge \\
-  --url https://contextapi.edia.cloud/mcp \\
-  --header "Authorization: Bearer YOUR_TOKEN"`,
+  --url {MCP_URL} \\
+  --header "X-API-Key: {YOUR_API_KEY}"`,
   },
   {
     key: 'opencode',
@@ -77,9 +70,9 @@ const MCP_SNIPPETS = [
   "mcp": {
     "context-forge": {
       "type": "remote",
-      "url": "https://contextapi.edia.cloud/mcp",
+      "url": "{MCP_URL}",
       "headers": {
-        "Authorization": "Bearer YOUR_TOKEN"
+        "X-API-Key": "{YOUR_API_KEY}"
       },
       "enabled": true
     }
@@ -93,9 +86,9 @@ const MCP_SNIPPETS = [
 {
   "mcpServers": {
     "context-forge": {
-      "url": "https://contextapi.edia.cloud/mcp",
+      "url": "{MCP_URL}",
       "headers": {
-        "Authorization": "Bearer YOUR_TOKEN"
+        "X-API-Key": "{YOUR_API_KEY}"
       }
     }
   }
@@ -105,9 +98,11 @@ const MCP_SNIPPETS = [
 
 function QuickConnect() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
-  const [selectedKey, setSelectedKey] = useState('codex')
+  const [selectedKey, setSelectedKey] = useState('claude')
   const [expanded, setExpanded] = useState(false)
-  const selectedSnippet = MCP_SNIPPETS.find(s => s.key === selectedKey) ?? MCP_SNIPPETS[0]
+  const mcpUrl = (import.meta.env.VITE_API_URL || window.location.origin) + '/mcp'
+  const raw = MCP_SNIPPETS.find(s => s.key === selectedKey) ?? MCP_SNIPPETS[0]
+  const selectedSnippet = { ...raw, value: raw.value.replaceAll('{MCP_URL}', mcpUrl) }
 
   return (
     <div style={{ border: '1px solid var(--border)' }} className="mb-8">
@@ -126,7 +121,7 @@ function QuickConnect() {
       {expanded && (
         <div className="px-4 py-4">
           <p className="text-xs text-muted mb-3">
-            🔑 Generate a token in <strong>Settings → MCP keys</strong> and replace <code className="text-xs">YOUR_TOKEN</code> in the examples below
+            🔑 Generate an API key in <strong>Settings → API Keys</strong> and replace <code className="text-xs">{'{YOUR_API_KEY}'}</code> in the examples below
           </p>
           <div className="flex gap-2 mb-3 flex-wrap">
             {MCP_SNIPPETS.map(snippet => (
