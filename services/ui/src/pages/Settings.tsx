@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertCircle, Check, Github, GitlabIcon, HardDrive, Pencil, Plus, RefreshCw, Save, Trash2 } from 'lucide-react'
+import { AlertCircle, Check, Clipboard, Github, GitlabIcon, HardDrive, Pencil, Plus, RefreshCw, Save, Trash2, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api, type Repo, type RepoCreateRequest, type MCPApiKey } from '../lib/api'
 import { Button, Input, Textarea, Select, Tabs, TabsList, TabsTrigger, TabsContent, Badge, Dialog, DialogFooter } from '../components/ui'
@@ -455,6 +455,49 @@ function RuntimeTab({
   )
 }
 
+function CopyButton({ text, className }: { text: string; className?: string }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className={`inline-flex items-center justify-center p-1.5 rounded hover:bg-black/5 transition-colors ${className ?? ''}`}
+      title={copied ? 'Copied!' : 'Copy to clipboard'}
+    >
+      {copied
+        ? <Check className="w-3.5 h-3.5 text-success" />
+        : <Clipboard className="w-3.5 h-3.5 text-muted hover:text-text" />}
+    </button>
+  )
+}
+
+function NewKeyBanner({ apiKey, onDismiss }: { apiKey: string; onDismiss: () => void }) {
+  return (
+    <div style={{ border: '1px solid var(--success)', color: 'var(--success)' }} className="text-sm p-4 mb-4 bg-[#eafaf1]">
+      <div className="flex items-start justify-between mb-2">
+        <p className="font-medium">
+          <Check className="inline w-3.5 h-3.5 mr-1" />
+          Key generated — copy it now, it won't be shown again.
+        </p>
+        <button type="button" onClick={onDismiss} className="p-1 hover:bg-black/5 rounded" title="Dismiss">
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      <div className="flex items-center gap-1 bg-white border border-[#a9dfbf] p-2 rounded">
+        <code className="text-xs font-mono flex-1 overflow-x-auto select-all">{apiKey}</code>
+        <CopyButton text={apiKey} />
+      </div>
+    </div>
+  )
+}
+
 function McpKeysTab() {
   const [keys, setKeys] = useState<MCPApiKey[]>([])
   const [loading, setLoading] = useState(true)
@@ -535,22 +578,7 @@ function McpKeysTab() {
       )}
 
       {newKey && (
-        <div style={{ border: '1px solid var(--success)', color: 'var(--success)' }} className="text-sm p-4 mb-4 bg-[#eafaf1]">
-          <p className="font-medium mb-2">
-            <Check className="inline w-3.5 h-3.5 mr-1" />
-            Key generated — copy it now, it won't be shown again.
-          </p>
-          <pre className="text-xs font-mono bg-white border border-[#a9dfbf] p-2 overflow-x-auto mb-2">
-            <code>{newKey.key}</code>
-          </pre>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => { navigator.clipboard.writeText(newKey.key); setNewKey(null) }}
-          >
-            Copy &amp; dismiss
-          </Button>
-        </div>
+        <NewKeyBanner apiKey={newKey.key} onDismiss={() => setNewKey(null)} />
       )}
 
       {loading ? (

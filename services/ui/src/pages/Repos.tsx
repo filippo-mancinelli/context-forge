@@ -336,15 +336,23 @@ export default function Repos() {
             </p>
           </div>
         ) : (
-          <div style={{ border: '1px solid var(--border)' }}>
-            <table className="w-full">
+          <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto">
+            <table className="w-full table-fixed">
+              <colgroup>
+                <col className="w-[40%]" />
+                <col className="w-[10%]" />
+                <col className="w-[10%]" />
+                <col className="w-[10%]" />
+                <col className="w-[15%]" />
+                <col className="w-[15%]" />
+              </colgroup>
               <thead>
                 <tr style={{ borderBottom: '2px solid var(--border)' }}>
                   <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-4 py-2">Repository</th>
-                  <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2">Branch</th>
-                  <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2">Status</th>
-                  <th className="text-right text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2">Chunks</th>
-                  <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2">Last indexed</th>
+                  <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2 whitespace-nowrap">Branch</th>
+                  <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2 whitespace-nowrap">Status</th>
+                  <th className="text-right text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2 whitespace-nowrap">Chunks</th>
+                  <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2 whitespace-nowrap">Last indexed</th>
                   <th className="px-3 py-2" />
                 </tr>
               </thead>
@@ -387,9 +395,9 @@ export default function Repos() {
                         {repo.total_chunks > 0 ? repo.total_chunks.toLocaleString() : '—'}
                       </span>
                     </td>
-                    <td className="px-3 py-3 text-xs text-muted">{formatDate(repo.last_indexed_at)}</td>
+                    <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{formatDate(repo.last_indexed_at)}</td>
                     <td className="px-3 py-3">
-                      <div className="flex items-center gap-2 justify-end">
+                      <div className="flex items-center gap-2 justify-end whitespace-nowrap">
                         <Button
                           size="sm"
                           variant="ghost"
