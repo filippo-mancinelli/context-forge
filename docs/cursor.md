@@ -6,8 +6,9 @@
 2. Open `http://localhost:3000`
 3. Complete setup with `SETUP_BOOTSTRAP_TOKEN`
 4. Verify the MCP endpoint at `http://localhost:4000/mcp`
+5. For remote servers: generate an MCP API key from the UI (Settings → API Keys)
 
-## Workspace config
+## Workspace config (current project only)
 
 Create or update `.cursor/mcp.json`:
 
@@ -21,7 +22,7 @@ Create or update `.cursor/mcp.json`:
 }
 ```
 
-## Global config
+## Global config (all projects)
 
 Create or update `~/.cursor/mcp.json`:
 
@@ -35,6 +36,23 @@ Create or update `~/.cursor/mcp.json`:
 }
 ```
 
+## Remote server with API key authentication
+
+For remote servers, add the `X-API-Key` header with your `forge_` API key:
+
+```json
+{
+  "mcpServers": {
+    "context-forge": {
+      "url": "https://your-server.example.com/mcp",
+      "headers": {
+        "X-API-Key": "forge_YOUR_API_KEY"
+      }
+    }
+  }
+}
+```
+
 ## Project instructions
 
 You can copy the generic agent instructions into a Cursor rules file:
@@ -43,22 +61,9 @@ You can copy the generic agent instructions into a Cursor rules file:
 cp templates/AGENTS.md /path/to/your/project/.cursor/rules/context-forge.md
 ```
 
-## Remote server
-
-Replace `localhost` with your server hostname or proxy URL:
-
-```json
-{
-  "mcpServers": {
-    "context-forge": {
-      "url": "http://your-server.example.com:4000/mcp"
-    }
-  }
-}
-```
-
-Security reminder:
+## Security reminder
 
 - The UI/API is authenticated after setup
-- The MCP endpoint still has no built-in authentication
-- Prefer private networking, a VPN, or a secure tunnel for remote MCP access
+- For remote servers, always use an MCP API key (`X-API-Key` header)
+- API keys can be managed from the UI under Settings → API Keys
+- Alternatively, prefer private networking, a VPN, or a secure tunnel for MCP access
