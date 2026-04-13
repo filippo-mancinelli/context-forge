@@ -65,17 +65,41 @@ const MCP_SNIPPETS = [
   {
     key: 'codex',
     title: 'Codex CLI',
-    value: `codex mcp add context-forge --url https://contextapi.edia.cloud/mcp --header "Authorization: Bearer YOUR_TOKEN"`,
+    value: `codex mcp add context-forge \\
+  --url https://contextapi.edia.cloud/mcp \\
+  --header "Authorization: Bearer YOUR_TOKEN"`,
   },
   {
     key: 'opencode',
     title: 'OpenCode',
-    value: `{"mcp":{"context-forge":{"type":"remote","url":"https://contextapi.edia.cloud/mcp","headers":{"Authorization":"Bearer YOUR_TOKEN"},"enabled":true}}}`,
+    value: `~/.opencode/config.json:
+{
+  "mcp": {
+    "context-forge": {
+      "type": "remote",
+      "url": "https://contextapi.edia.cloud/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_TOKEN"
+      },
+      "enabled": true
+    }
+  }
+}`,
   },
   {
     key: 'cursor',
     title: 'Cursor',
-    value: `{"mcpServers":{"context-forge":{"url":"https://contextapi.edia.cloud/mcp","headers":{"Authorization":"Bearer YOUR_TOKEN"}}}}`,
+    value: `.cursor/mcp.json:
+{
+  "mcpServers": {
+    "context-forge": {
+      "url": "https://contextapi.edia.cloud/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_TOKEN"
+      }
+    }
+  }
+}`,
   },
 ]
 
