@@ -121,7 +121,7 @@ export default function Setup({ mode, onCompleted }: SetupProps) {
   return (
     <div
       style={{ minHeight: '100vh', background: 'var(--surface)' }}
-      className="px-6 py-10"
+      className="px-4 sm:px-6 py-8 sm:py-10"
     >
       <div className="mx-auto" style={{ maxWidth: '860px' }}>
         <div className="mb-8">

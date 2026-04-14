@@ -204,14 +204,14 @@ function RepositoriesTab({ repos, onReload }: { repos: Repo[]; onReload: () => v
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-4">
         <div>
           <p className="text-sm text-muted">
             {repos.length} repositories configured.{' '}
             <Link to="/repos" className="text-accent">Open Repositories →</Link>
           </p>
         </div>
-        <Button variant="primary" size="sm" onClick={() => setShowAdd(true)}>
+        <Button variant="primary" size="sm" onClick={() => setShowAdd(true)} className="self-start">
           <Plus className="w-3.5 h-3.5" />
           Add repository
         </Button>
@@ -220,8 +220,8 @@ function RepositoriesTab({ repos, onReload }: { repos: Repo[]; onReload: () => v
       {repos.length === 0 ? (
         <p className="text-muted text-sm">No repositories configured yet.</p>
       ) : (
-        <div style={{ border: '1px solid var(--border)' }}>
-          <table className="w-full">
+        <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto">
+          <table className="w-full min-w-[500px]">
             <thead>
               <tr style={{ borderBottom: '2px solid var(--border)' }}>
                 <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-4 py-2">Repository</th>
@@ -563,9 +563,9 @@ function McpKeysTab() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-4">
         <p className="text-sm text-muted">API keys allow CLI agents to authenticate with this instance.</p>
-        <Button variant="primary" size="sm" onClick={() => setShowCreate(true)}>
+        <Button variant="primary" size="sm" onClick={() => setShowCreate(true)} className="self-start">
           <Plus className="w-3.5 h-3.5" />
           Generate key
         </Button>
@@ -586,8 +586,8 @@ function McpKeysTab() {
       ) : keys.length === 0 ? (
         <p className="text-muted text-sm">No API keys configured yet.</p>
       ) : (
-        <div style={{ border: '1px solid var(--border)' }}>
-          <table className="w-full">
+        <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto">
+          <table className="w-full min-w-[600px]">
             <thead>
               <tr style={{ borderBottom: '2px solid var(--border)' }}>
                 <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-4 py-2">Name</th>
@@ -749,14 +749,14 @@ export default function Settings() {
   if (!data) return <div className="p-8 text-danger text-sm">Unable to load settings.</div>
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-8">
       <div className="page-content">
-        <div className="flex items-start justify-between mb-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-6">
           <div>
             <h1>Settings</h1>
             <p className="text-muted text-sm">Runtime configuration — changes take effect immediately.</p>
           </div>
-          <Button variant="primary" onClick={handleSave} loading={saving} disabled={saving} className="mt-1">
+          <Button variant="primary" onClick={handleSave} loading={saving} disabled={saving} className="sm:mt-1 self-start">
             <Save className="w-3.5 h-3.5" />
             Save
           </Button>

@@ -64,7 +64,7 @@ function MemoryRow({ memory, onDelete }: { memory: MemoryItem; onDelete: (id: st
         <button
           onClick={handleDelete}
           disabled={deleting}
-          className="text-muted hover:text-danger transition-colors opacity-0 group-hover:opacity-100 disabled:opacity-50"
+          className="text-muted hover:text-danger transition-colors opacity-100 md:opacity-0 md:group-hover:opacity-100 disabled:opacity-50"
           title="Delete"
         >
           <Trash2 className="w-3.5 h-3.5" />
@@ -169,7 +169,7 @@ export default function Memory() {
   }
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-8">
       <div className="page-content">
         <div className="mb-6">
           <h1>Memory</h1>

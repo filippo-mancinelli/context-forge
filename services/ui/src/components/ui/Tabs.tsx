@@ -4,14 +4,16 @@ export const Tabs = RadixTabs.Root
 
 export function TabsList({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (
-    <RadixTabs.List
-      className={[
-        'flex border-b border-border gap-0 mb-6',
-        className,
-      ].join(' ')}
-    >
-      {children}
-    </RadixTabs.List>
+    <div className="overflow-x-auto scrollbar-thin mb-6">
+      <RadixTabs.List
+        className={[
+          'flex border-b border-border gap-0 min-w-max',
+          className,
+        ].join(' ')}
+      >
+        {children}
+      </RadixTabs.List>
+    </div>
   )
 }
 
