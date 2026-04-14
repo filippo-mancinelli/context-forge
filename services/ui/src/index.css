@@ -195,4 +195,11 @@
     max-width: 860px;
     width: 100%;
   }
+
+  .page-header-actions {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
 }

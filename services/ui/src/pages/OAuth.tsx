@@ -26,7 +26,6 @@ export default function OAuth() {
   }
 
   useEffect(() => {
-    // Check if user is authenticated
     const token = localStorage.getItem('auth_token')
     setIsAuthenticated(!!token)
   }, [])
@@ -47,7 +46,6 @@ export default function OAuth() {
         return
       }
 
-      // Call authorize endpoint
       const baseUrl = import.meta.env.VITE_API_URL || ''
       const response = await fetch(`${baseUrl}/mcp/oauth/authorize?${new URLSearchParams({
         client_id: params.client_id,
@@ -65,14 +63,12 @@ export default function OAuth() {
 
       if (!response.ok) {
         if (response.status === 401 && data.error === 'login_required') {
-          // Need to login first
           navigate('/login', { replace: true })
           return
         }
         throw new Error(data.detail || 'Authorization failed')
       }
 
-      // Redirect with authorization code
       if (data.authorization_url) {
         window.location.href = data.authorization_url
       } else {
@@ -86,7 +82,6 @@ export default function OAuth() {
   }
 
   const handleCancel = () => {
-    // Redirect back with error
     if (params.redirect_uri) {
       const url = new URL(params.redirect_uri)
       url.searchParams.set('error', 'access_denied')
@@ -101,10 +96,10 @@ export default function OAuth() {
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center p-4">
         <div className="text-center">
-          <h1 className="text-2xl font-bold mb-4">Authentication Required</h1>
-          <p className="text-muted mb-6">Please log in to authorize this application</p>
+          <h1 className="text-2xl font-semibold mb-4">Authentication Required</h1>
+          <p className="text-muted text-sm mb-6">Please log in to authorize this application</p>
           <Button onClick={() => navigate('/login')}>Go to Login</Button>
         </div>
       </div>
@@ -112,32 +107,41 @@ export default function OAuth() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-surface p-4">
-      <div className="max-w-md w-full bg-background border rounded-lg p-6 shadow-lg">
+    <div
+      style={{ minHeight: '100vh', background: 'var(--surface)' }}
+      className="flex items-center justify-center p-4"
+    >
+      <div
+        style={{ maxWidth: '420px', border: '1px solid var(--border)' }}
+        className="w-full bg-bg p-6 sm:p-8"
+      >
         <div className="text-center mb-6">
-          <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
-            <svg className="w-8 h-8 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div
+            style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
+            className="w-14 h-14 rounded-full flex items-center justify-center mx-auto mb-4"
+          >
+            <svg className="w-7 h-7 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold mb-2">Authorize Application</h1>
+          <h1 className="text-xl font-semibold mb-1">Authorize Application</h1>
           <p className="text-muted text-sm">
             An application wants to access your context-forge account
           </p>
         </div>
 
-        <div className="space-y-4 mb-6">
-          <div className="bg-surface rounded-lg p-4">
-            <div className="text-sm text-muted mb-1">Application</div>
-            <div className="font-medium">{params.client_id || 'Unknown'}</div>
+        <div className="space-y-3 mb-6">
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)' }} className="p-3">
+            <div className="text-xs text-muted mb-0.5 uppercase tracking-wide font-medium">Application</div>
+            <div className="text-sm font-medium">{params.client_id || 'Unknown'}</div>
           </div>
 
-          <div className="bg-surface rounded-lg p-4">
-            <div className="text-sm text-muted mb-1">Permissions Requested</div>
-            <div className="text-sm">
+          <div style={{ background: 'var(--surface)', border: '1px solid var(--border)' }} className="p-3">
+            <div className="text-xs text-muted mb-1.5 uppercase tracking-wide font-medium">Permissions Requested</div>
+            <div className="text-sm space-y-1">
               {params.scope?.split(',').map((s, i) => (
-                <div key={i} className="flex items-center gap-2 mb-1">
-                  <svg className="w-4 h-4 text-success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div key={i} className="flex items-center gap-2">
+                  <svg className="w-3.5 h-3.5 flex-shrink-0" style={{ color: 'var(--success)' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                   </svg>
                   <span className="capitalize">{s.trim()}</span>
@@ -147,7 +151,10 @@ export default function OAuth() {
           </div>
 
           {error && (
-            <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-lg">
+            <div
+              style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
+              className="text-sm p-3 bg-[#fef2f2]"
+            >
               {error}
             </div>
           )}
@@ -156,7 +163,7 @@ export default function OAuth() {
         <div className="flex gap-3">
           <Button
             variant="secondary"
-            className="flex-1"
+            className="flex-1 justify-center"
             onClick={handleCancel}
             disabled={loading}
           >
@@ -164,11 +171,12 @@ export default function OAuth() {
           </Button>
           <Button
             variant="primary"
-            className="flex-1"
+            className="flex-1 justify-center"
             onClick={handleAuthorize}
             disabled={loading}
+            loading={loading}
           >
-            {loading ? 'Authorizing...' : 'Authorize'}
+            Authorize
           </Button>
         </div>
 

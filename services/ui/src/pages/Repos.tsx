@@ -283,16 +283,16 @@ export default function Repos() {
   const indexedCount = repos.filter(r => r.status === 'indexed').length
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-8">
       <div className="page-content">
-        <div className="flex items-start justify-between mb-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-6">
           <div>
             <h1>Repositories</h1>
             <p className="text-muted text-sm">
               {repos.length} configured &middot; {indexedCount} indexed &middot; {totalChunks.toLocaleString()} chunks
             </p>
           </div>
-          <div className="flex items-center gap-2 mt-1">
+          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap sm:mt-1">
             <Select
               options={[
                 { value: 'github', label: 'GitHub' },
