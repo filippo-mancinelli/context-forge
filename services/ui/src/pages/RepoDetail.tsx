@@ -85,7 +85,7 @@ export default function RepoDetail() {
   }
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-8">
       <div className="page-content">
         <div className="mb-6">
           <p className="text-xs text-muted mb-2">

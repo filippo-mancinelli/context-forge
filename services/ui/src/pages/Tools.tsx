@@ -102,7 +102,7 @@ function QuickConnect() {
   const [expanded, setExpanded] = useState(false)
   const mcpUrl = (import.meta.env.VITE_API_URL || window.location.origin) + '/mcp'
   const raw = MCP_SNIPPETS.find(s => s.key === selectedKey) ?? MCP_SNIPPETS[0]
-  const selectedSnippet = { ...raw, value: raw.value.replaceAll('{MCP_URL}', mcpUrl) }
+  const selectedSnippet = { ...raw, value: raw.value.split('{MCP_URL}').join(mcpUrl) }
 
   return (
     <div style={{ border: '1px solid var(--border)' }} className="mb-8">
@@ -179,7 +179,7 @@ export default function Tools() {
   })
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-8">
       <div className="page-content">
         <div className="mb-6">
           <h1>MCP Tools</h1>
