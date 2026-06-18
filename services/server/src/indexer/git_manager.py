@@ -11,12 +11,19 @@ from ..config import RepoConfig, get_settings
 logger = logging.getLogger(__name__)
 
 
-def get_repo_local_path(repo: RepoConfig) -> str:
-    """Return the local filesystem path for a repo (inside the container)."""
+def get_repo_local_path(repo: RepoConfig, org_id: int | None = None) -> str:
+    """Return the local filesystem path for a repo (inside the container).
+
+    Remote repos are cached under a per-organization subdirectory so the same
+    repository name can be reused across organizations without colliding.
+    """
     if repo.type == "local":
         return repo.path or f"/repos/{repo.name}"
     settings = get_settings()
-    return str(Path(settings.repos_cache_dir) / repo.name)
+    base = Path(settings.repos_cache_dir)
+    if org_id is not None:
+        base = base / f"org_{org_id}"
+    return str(base / repo.name)
 
 
 def _inject_token(url: str, token: str) -> str:
@@ -40,12 +47,12 @@ async def _run_git(*args: str, cwd: str = None) -> tuple[int, str, str]:
     return proc.returncode, stdout.decode(), stderr.decode()
 
 
-async def ensure_repo_cloned(repo: RepoConfig) -> str:
+async def ensure_repo_cloned(repo: RepoConfig, org_id: int | None = None) -> str:
     """Clone a remote repo if not already present. Returns local path."""
     if repo.type == "local":
-        return get_repo_local_path(repo)
+        return get_repo_local_path(repo, org_id)
 
-    local_path = get_repo_local_path(repo)
+    local_path = get_repo_local_path(repo, org_id)
     path = Path(local_path)
 
     token = repo.token
@@ -83,12 +90,12 @@ async def ensure_repo_cloned(repo: RepoConfig) -> str:
     return local_path
 
 
-async def pull_all_repos(repos: list[RepoConfig]) -> None:
+async def pull_all_repos(repos: list[RepoConfig], org_id: int | None = None) -> None:
     """Pull updates for all remote repos concurrently."""
     remote_repos = [r for r in repos if r.type != "local"]
     if not remote_repos:
         return
-    tasks = [ensure_repo_cloned(r) for r in remote_repos]
+    tasks = [ensure_repo_cloned(r, org_id) for r in remote_repos]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for repo, result in zip(remote_repos, results):
         if isinstance(result, Exception):

@@ -188,7 +188,91 @@ ALTER TABLE repos         ADD COLUMN IF NOT EXISTS org_id  BIGINT;
 CREATE INDEX IF NOT EXISTS mcp_api_keys_org_idx ON mcp_api_keys (org_id);
 CREATE INDEX IF NOT EXISTS jobs_org_idx ON jobs (org_id);
 CREATE INDEX IF NOT EXISTS repos_org_idx ON repos (org_id);
+
+-- Per-organization runtime configuration (repos + indexing settings).
+-- Global infrastructure settings (providers, embeddings, LLM) stay in
+-- app_runtime_config.settings_overrides because they are tied to the shared
+-- vector store dimension.
+CREATE TABLE IF NOT EXISTS org_runtime_config (
+    org_id       BIGINT PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
+    forge_config JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Tenant scoping for indexed chunks and index requests.
+ALTER TABLE repo_chunks    ADD COLUMN IF NOT EXISTS org_id BIGINT;
+ALTER TABLE index_requests ADD COLUMN IF NOT EXISTS org_id BIGINT;
+
+CREATE INDEX IF NOT EXISTS repo_chunks_org_repo_idx ON repo_chunks (org_id, repo_name);
 """
+
+
+# Default constraint name Postgres assigns to UNIQUE (repo_name, file_path, chunk_index).
+_LEGACY_CHUNK_UNIQUE = "repo_chunks_repo_name_file_path_chunk_index_key"
+
+
+async def apply_tenant_repo_migration(default_org_id: int) -> None:
+    """Migrate repo storage to composite (org_id, name) identity.
+
+    Backfills org_id on repos/chunks/index_requests, then swaps the single-column
+    primary/unique keys for tenant-aware composite keys so repository names can be
+    reused across organizations. Idempotent.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Backfill org_id from the owning repo where possible, else default org.
+            await conn.execute(
+                """
+                UPDATE repo_chunks c SET org_id = r.org_id
+                FROM repos r WHERE c.repo_name = r.name AND c.org_id IS NULL
+                """
+            )
+            await conn.execute(
+                "UPDATE repo_chunks SET org_id = $1 WHERE org_id IS NULL", default_org_id
+            )
+            await conn.execute(
+                "UPDATE index_requests SET org_id = $1 WHERE org_id IS NULL", default_org_id
+            )
+            await conn.execute(
+                "UPDATE repos SET org_id = $1 WHERE org_id IS NULL", default_org_id
+            )
+
+            # Enforce NOT NULL now that data is backfilled.
+            await conn.execute("ALTER TABLE repos ALTER COLUMN org_id SET NOT NULL")
+            await conn.execute("ALTER TABLE repo_chunks ALTER COLUMN org_id SET NOT NULL")
+
+            # Swap the repos primary key (name) -> (org_id, name).
+            await conn.execute(
+                """
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint WHERE conname = 'repos_org_name_pkey'
+                    ) THEN
+                        ALTER TABLE repos DROP CONSTRAINT IF EXISTS repos_pkey;
+                        ALTER TABLE repos ADD CONSTRAINT repos_org_name_pkey PRIMARY KEY (org_id, name);
+                    END IF;
+                END $$;
+                """
+            )
+
+            # Swap the chunk uniqueness to include org_id.
+            await conn.execute(
+                f"""
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint WHERE conname = 'repo_chunks_org_unique'
+                    ) THEN
+                        ALTER TABLE repo_chunks DROP CONSTRAINT IF EXISTS {_LEGACY_CHUNK_UNIQUE};
+                        ALTER TABLE repo_chunks
+                            ADD CONSTRAINT repo_chunks_org_unique
+                            UNIQUE (org_id, repo_name, file_path, chunk_index);
+                    END IF;
+                END $$;
+                """
+            )
 
 
 async def get_pool() -> Pool:

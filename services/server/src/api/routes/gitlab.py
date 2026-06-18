@@ -5,12 +5,13 @@ from typing import Optional
 from urllib.parse import quote_plus
 
 import httpx
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
-from ...config import RepoConfig, get_forge_config, get_settings
+from ...config import RepoConfig, get_settings
 from ...indexer.indexer import sync_repos_config
-from ...runtime_state import persist_runtime_config
+from ...org_config import get_org_config, persist_org_config
+from ..deps import ActiveOrg, require_role
 from ..security import require_valid_token_or_raise
 
 router = APIRouter(prefix="/gitlab", tags=["gitlab"])
@@ -136,12 +137,10 @@ async def search_gitlab_repos(
 @router.post("/repos/add")
 async def add_gitlab_repo(
     req: AddGitLabRepoRequest,
-    authorization: str | None = Header(default=None),
+    org: ActiveOrg = Depends(require_role("member")),
 ):
-    """Add a GitLab repository to the runtime config."""
-    await require_valid_token_or_raise(authorization)
-
-    cfg = get_forge_config()
+    """Add a GitLab repository to the active organization's config."""
+    cfg = await get_org_config(org.org_id)
     repo_name = req.full_name.replace("/", "-")
     if any(repo.name == repo_name for repo in cfg.repos):
         raise HTTPException(status_code=400, detail="Repository already configured")
@@ -174,8 +173,8 @@ async def add_gitlab_repo(
         )
     )
 
-    await persist_runtime_config(cfg)
-    await sync_repos_config()
+    await persist_org_config(org.org_id, cfg)
+    await sync_repos_config(org.org_id)
 
     return {
         "status": "ok",

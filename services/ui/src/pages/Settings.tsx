@@ -33,6 +33,21 @@ interface SettingsData {
     github_token?: string
     gitlab_token?: string
   }
+  // Global model/provider settings are shared and only editable by org admins.
+  settings_overrides_editable?: boolean
+}
+
+function GlobalSettingsNotice() {
+  return (
+    <div
+      style={{ border: '1px solid var(--border)' }}
+      className="text-xs text-muted p-3 mb-4 bg-surface"
+    >
+      These are <span className="font-medium text-text">global</span> settings shared by every
+      organization (they are tied to the shared vector store). Only organization admins can change
+      them.
+    </div>
+  )
 }
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
@@ -279,11 +294,15 @@ function RepositoriesTab({ repos, onReload }: { repos: Repo[]; onReload: () => v
 function AccessTab({
   settings,
   onChange,
+  editable = true,
 }: {
   settings: SettingsData['settings_overrides']
   onChange: (key: keyof SettingsData['settings_overrides'], value: string) => void
+  editable?: boolean
 }) {
   return (
+    <fieldset disabled={!editable} className="contents">
+    {!editable && <GlobalSettingsNotice />}
     <div className="grid gap-6 lg:grid-cols-2">
       <section>
         <h3 className="text-sm font-semibold mb-3">LLM provider keys</h3>
@@ -301,6 +320,7 @@ function AccessTab({
         </div>
       </section>
     </div>
+    </fieldset>
   )
 }
 
@@ -308,13 +328,17 @@ function ModelsTab({
   settings,
   onChange,
   embeddingRisk,
+  editable = true,
 }: {
   settings: SettingsData['settings_overrides']
   onChange: (key: keyof SettingsData['settings_overrides'], value: string | number) => void
   embeddingRisk: { changed: boolean; dimsChanged: boolean }
+  editable?: boolean
 }) {
   return (
+    <fieldset disabled={!editable} className="contents">
     <div className="space-y-6">
+      {!editable && <GlobalSettingsNotice />}
       {embeddingRisk.changed && (
         <div style={{ border: '1px solid var(--warning)', color: 'var(--warning)' }} className="text-sm p-3 bg-[#fef9e7]">
           <p className="font-medium mb-1">Embedding changes require re-indexing</p>
@@ -388,6 +412,7 @@ function ModelsTab({
         </section>
       </div>
     </div>
+    </fieldset>
   )
 }
 
@@ -679,6 +704,7 @@ export default function Settings() {
   const [activeTab, setActiveTab] = useState<Tab>('repositories')
   const [data, setData] = useState<SettingsData | null>(null)
   const [baselineEmbedding, setBaselineEmbedding] = useState<ReturnType<typeof getEmbeddingSignature> | null>(null)
+  const [baselineOverrides, setBaselineOverrides] = useState<SettingsData['settings_overrides'] | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -690,6 +716,7 @@ export default function Settings() {
       const next = (await api.settings.get()) as SettingsData
       setData(next)
       setBaselineEmbedding(getEmbeddingSignature(next.settings_overrides))
+      setBaselineOverrides(next.settings_overrides)
       setError(null)
     } catch (e) {
       setError(String(e))
@@ -726,6 +753,8 @@ export default function Settings() {
     setData({ ...data, forge_config: nextConfig as SettingsData['forge_config'] })
   }
 
+  const overridesEditable = data?.settings_overrides_editable !== false
+
   const handleSave = async () => {
     if (!data) return
     if (embeddingRisk.dimsChanged && !window.confirm('Changing embedding dimensions requires resetting vector data and re-indexing. Save anyway?')) return
@@ -734,7 +763,11 @@ export default function Settings() {
     setSuccess(null)
     setWarnings([])
     try {
-      const result = await api.settings.update({ forge_config: data.forge_config, settings_overrides: data.settings_overrides })
+      // Non-admins cannot change global model/provider settings; submit the
+      // unchanged baseline so saving repos/indexing never trips a 403.
+      const overridesToSend =
+        overridesEditable || !baselineOverrides ? data.settings_overrides : baselineOverrides
+      const result = await api.settings.update({ forge_config: data.forge_config, settings_overrides: overridesToSend })
       setBaselineEmbedding(getEmbeddingSignature(data.settings_overrides))
       setSuccess('Settings saved.')
       setWarnings(result.warnings)
@@ -791,10 +824,10 @@ export default function Settings() {
             <RepositoriesTab repos={data.forge_config.repos} onReload={load} />
           </TabsContent>
           <TabsContent value="access">
-            <AccessTab settings={data.settings_overrides} onChange={updateOverride} />
+            <AccessTab settings={data.settings_overrides} onChange={updateOverride} editable={overridesEditable} />
           </TabsContent>
           <TabsContent value="models">
-            <ModelsTab settings={data.settings_overrides} onChange={updateOverride} embeddingRisk={embeddingRisk} />
+            <ModelsTab settings={data.settings_overrides} onChange={updateOverride} embeddingRisk={embeddingRisk} editable={overridesEditable} />
           </TabsContent>
           <TabsContent value="runtime">
             <RuntimeTab config={data.forge_config} onChange={updateForgeConfig} />
