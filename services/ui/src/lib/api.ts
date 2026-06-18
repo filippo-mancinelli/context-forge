@@ -1,5 +1,6 @@
 const BASE = import.meta.env.VITE_API_URL || ''
 const AUTH_TOKEN_KEY = 'cf_admin_token'
+const ACTIVE_ORG_KEY = 'cf_active_org'
 
 export function getAuthToken() {
   return localStorage.getItem(AUTH_TOKEN_KEY)
@@ -13,10 +14,22 @@ export function clearAuthToken() {
   localStorage.removeItem(AUTH_TOKEN_KEY)
 }
 
+export function getActiveOrgId(): number | null {
+  const raw = localStorage.getItem(ACTIVE_ORG_KEY)
+  return raw ? Number(raw) : null
+}
+
+export function setActiveOrgId(orgId: number | null) {
+  if (orgId === null) localStorage.removeItem(ACTIVE_ORG_KEY)
+  else localStorage.setItem(ACTIVE_ORG_KEY, String(orgId))
+}
+
 async function request<T>(path: string, options?: RequestInit, includeAuth = true): Promise<T> {
   const token = includeAuth ? getAuthToken() : null
+  const activeOrg = includeAuth ? getActiveOrgId() : null
   const headers: Record<string, string> = {
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(activeOrg ? { 'X-Org-Id': String(activeOrg) } : {}),
     ...((options?.headers as Record<string, string> | undefined) || {}),
   }
 
@@ -155,6 +168,46 @@ export interface MCPApiKeyCreateRequest {
   expires_days?: number
 }
 
+export type OrgRole = 'viewer' | 'member' | 'admin' | 'owner'
+
+export interface Organization {
+  id: number
+  name: string
+  slug: string
+  memory_namespace: string
+  created_at?: string
+  role?: OrgRole
+}
+
+export interface OrgMember {
+  user_id: number
+  username: string
+  email?: string
+  role: OrgRole
+  created_at?: string
+}
+
+export interface OrgInvitation {
+  id: number
+  org_id: number
+  email: string
+  role: OrgRole
+  expires_at?: string
+  accepted_at?: string
+  created_at?: string
+}
+
+export interface CurrentUser {
+  id: number
+  username: string
+  email?: string
+}
+
+export interface MeResponse {
+  user: CurrentUser
+  organizations: Organization[]
+}
+
 export interface SetupStatus {
   is_configured: boolean
   mode: 'configured' | 'admin' | 'full'
@@ -192,7 +245,59 @@ export const api = {
         false
       ),
     session: () => request<{ status: string }>('/api/auth/session'),
+    me: () => request<MeResponse>('/api/auth/me'),
     logout: () => request('/api/auth/logout', { method: 'POST' }),
+  },
+  organizations: {
+    list: () => request<{ organizations: Organization[] }>('/api/organizations'),
+    create: (name: string) =>
+      request<{ status: string; organization: Organization }>('/api/organizations', {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      }),
+    update: (orgId: number, name: string) =>
+      request<{ status: string; organization: Organization }>(`/api/organizations/${orgId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name }),
+      }),
+    delete: (orgId: number) =>
+      request<{ status: string }>(`/api/organizations/${orgId}`, { method: 'DELETE' }),
+    members: (orgId: number) =>
+      request<{ members: OrgMember[] }>(`/api/organizations/${orgId}/members`),
+    updateMember: (orgId: number, userId: number, role: OrgRole) =>
+      request<{ status: string }>(`/api/organizations/${orgId}/members/${userId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ role }),
+      }),
+    removeMember: (orgId: number, userId: number) =>
+      request<{ status: string }>(`/api/organizations/${orgId}/members/${userId}`, {
+        method: 'DELETE',
+      }),
+    invitations: (orgId: number) =>
+      request<{ invitations: OrgInvitation[] }>(`/api/organizations/${orgId}/invitations`),
+    invite: (orgId: number, email: string, role: OrgRole) =>
+      request<{ status: string; invitation?: OrgInvitation; invite_token?: string; added_existing_user?: boolean }>(
+        `/api/organizations/${orgId}/invitations`,
+        { method: 'POST', body: JSON.stringify({ email, role }) }
+      ),
+    revokeInvite: (orgId: number, invitationId: number) =>
+      request<{ status: string }>(`/api/organizations/${orgId}/invitations/${invitationId}`, {
+        method: 'DELETE',
+      }),
+  },
+  invitations: {
+    preview: (token: string) =>
+      request<{ email: string; role: OrgRole; org_name: string; expires_at?: string }>(
+        `/api/invitations/${encodeURIComponent(token)}`,
+        undefined,
+        false
+      ),
+    accept: (token: string, username: string, password: string) =>
+      request<{ status: string; token: string; token_type: string }>(
+        '/api/invitations/accept',
+        { method: 'POST', body: JSON.stringify({ token, username, password }) },
+        false
+      ),
   },
   repos: {
     list: () => request<Repo[]>('/api/repos'),
@@ -267,7 +372,7 @@ export const api = {
     get: (id: string) => request<Job>(`/api/jobs/${encodeURIComponent(id)}`),
   },
   settings: {
-    get: () => request<{ forge_config: Record<string, unknown>; settings_overrides: Record<string, unknown> }>('/api/settings'),
+    get: () => request<{ forge_config: Record<string, unknown>; settings_overrides: Record<string, unknown>; settings_overrides_editable?: boolean }>('/api/settings'),
     update: (payload: { forge_config: Record<string, unknown>; settings_overrides: Record<string, unknown> }) =>
       request<SettingsUpdateResponse>('/api/settings', { method: 'PUT', body: JSON.stringify(payload) }),
   },

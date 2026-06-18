@@ -3,13 +3,16 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from ... import tenancy
+from ..deps import get_current_user_id
 from ..security import (
     authenticate_admin,
     create_session,
     delete_session,
+    get_admin_user,
     is_configured,
     require_valid_token_or_raise,
 )
@@ -44,6 +47,29 @@ async def session(authorization: str | None = Header(default=None)):
     """Validate current bearer token."""
     await require_valid_token_or_raise(authorization)
     return {"status": "ok"}
+
+
+@router.get("/me")
+async def me(user_id: int = Depends(get_current_user_id)):
+    """Return the current user and the organizations they belong to."""
+    user = await get_admin_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    orgs = await tenancy.list_organizations_for_user(user_id)
+    if not orgs:
+        # Self-heal legacy installs that predate organizations.
+        await tenancy.ensure_default_org()
+        orgs = await tenancy.list_organizations_for_user(user_id)
+    serialized = []
+    for o in orgs:
+        item = dict(o)
+        if item.get("created_at") is not None and hasattr(item["created_at"], "isoformat"):
+            item["created_at"] = item["created_at"].isoformat()
+        serialized.append(item)
+    return {
+        "user": {"id": user["id"], "username": user["username"], "email": user.get("email")},
+        "organizations": serialized,
+    }
 
 
 @router.post("/logout")

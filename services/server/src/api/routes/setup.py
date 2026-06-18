@@ -68,6 +68,12 @@ async def setup_init(req: SetupInitRequest):
         await persist_runtime_config(forge, req.settings_overrides)
         created_runtime_config = True
 
+    # Provision the default organization with the first admin as owner and
+    # migrate repo storage to tenant-aware composite identity.
+    from ...tenancy import ensure_tenant_storage
+
+    await ensure_tenant_storage()
+
     reset_embedder_clients()
     reset_memory_client()
     await sync_repos_config()
