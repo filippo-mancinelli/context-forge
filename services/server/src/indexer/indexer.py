@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Iterator
 
-from ..config import IndexingConfig, RepoConfig, get_forge_config, get_settings
+from ..config import IndexingConfig, RepoConfig, get_settings
 from ..db import get_pool
 from .embedder import embed_batch
 from .git_manager import ensure_repo_cloned, get_repo_local_path
@@ -280,26 +280,29 @@ def _iter_repo_files(repo_path: str, config: IndexingConfig) -> Iterator[tuple[P
     logger.info("File scan complete for %s: scanned=%d indexable=%d", root.name, scanned, yielded)
 
 
-async def index_repo(repo: RepoConfig) -> None:
-    """Index a repository: parse, embed, and store chunks in pgvector."""
+async def index_repo(org_id: int, repo: RepoConfig, indexing_cfg: IndexingConfig | None = None) -> None:
+    """Index a repository for an organization: parse, embed, store chunks."""
     pool = await get_pool()
-    cfg = get_forge_config()
-    indexing_cfg = cfg.indexing
+    if indexing_cfg is None:
+        from ..org_config import get_org_config
+
+        indexing_cfg = (await get_org_config(org_id)).indexing
     settings = get_settings()
 
     # Update status to indexing
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE repos SET status='indexing', error_message=NULL WHERE name=$1",
+            "UPDATE repos SET status='indexing', error_message=NULL WHERE org_id=$1 AND name=$2",
+            org_id,
             repo.name,
         )
 
     try:
         # Ensure repo is available locally
         if repo.type != "local":
-            local_path = await ensure_repo_cloned(repo)
+            local_path = await ensure_repo_cloned(repo, org_id)
         else:
-            local_path = get_repo_local_path(repo)
+            local_path = get_repo_local_path(repo, org_id)
 
         if not Path(local_path).exists():
             raise FileNotFoundError(f"Repo path does not exist: {local_path}")
@@ -316,7 +319,9 @@ async def index_repo(repo: RepoConfig) -> None:
             logger.warning("No chunks found for repo %s", repo.name)
             async with pool.acquire() as conn:
                 await conn.execute(
-                    "UPDATE repos SET status='indexed', last_indexed_at=NOW(), total_chunks=0 WHERE name=$1",
+                    "UPDATE repos SET status='indexed', last_indexed_at=NOW(), total_chunks=0 "
+                    "WHERE org_id=$1 AND name=$2",
+                    org_id,
                     repo.name,
                 )
             return
@@ -349,21 +354,23 @@ async def index_repo(repo: RepoConfig) -> None:
 
         # Upsert into DB (delete old chunks for this repo first)
         async with pool.acquire() as conn:
-            await conn.execute("DELETE FROM repo_chunks WHERE repo_name=$1", repo.name)
+            await conn.execute(
+                "DELETE FROM repo_chunks WHERE org_id=$1 AND repo_name=$2", org_id, repo.name
+            )
             insert_batch_size = 500
             for start in range(0, len(all_chunks), insert_batch_size):
                 end = min(start + insert_batch_size, len(all_chunks))
                 await conn.executemany(
                     """
-                    INSERT INTO repo_chunks (repo_name, file_path, chunk_index, chunk_type, content, metadata, embedding)
-                    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::vector)
-                    ON CONFLICT (repo_name, file_path, chunk_index) DO UPDATE
+                    INSERT INTO repo_chunks (org_id, repo_name, file_path, chunk_index, chunk_type, content, metadata, embedding)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::vector)
+                    ON CONFLICT (org_id, repo_name, file_path, chunk_index) DO UPDATE
                     SET content=EXCLUDED.content, metadata=EXCLUDED.metadata,
                         embedding=EXCLUDED.embedding, indexed_at=NOW()
                     """,
                     [
                         (
-                            c["repo_name"], c["file_path"], c["chunk_index"],
+                            org_id, c["repo_name"], c["file_path"], c["chunk_index"],
                             c["chunk_type"], c["content"], c["metadata"],
                             _vector_to_pg(embeddings[idx]),
                         )
@@ -379,9 +386,10 @@ async def index_repo(repo: RepoConfig) -> None:
             await conn.execute(
                 """
                 UPDATE repos
-                SET status='indexed', last_indexed_at=NOW(), total_chunks=$2, error_message=NULL
-                WHERE name=$1
+                SET status='indexed', last_indexed_at=NOW(), total_chunks=$3, error_message=NULL
+                WHERE org_id=$1 AND name=$2
                 """,
+                org_id,
                 repo.name,
                 len(all_chunks),
             )
@@ -391,59 +399,83 @@ async def index_repo(repo: RepoConfig) -> None:
         logger.error("Indexing failed for %s: %s", repo.name, e)
         async with pool.acquire() as conn:
             await conn.execute(
-                "UPDATE repos SET status='error', error_message=$2 WHERE name=$1",
+                "UPDATE repos SET status='error', error_message=$3 WHERE org_id=$1 AND name=$2",
+                org_id,
                 repo.name,
                 str(e),
             )
 
 
-async def sync_repos_config() -> None:
-    """Sync repos from config into the DB repos table."""
-    cfg = get_forge_config()
+async def sync_repos_config(org_id: int | None = None) -> None:
+    """Sync repos from per-org config into the DB repos table.
+
+    When ``org_id`` is given only that organization is synced; otherwise every
+    organization is synced.
+    """
+    from ..org_config import get_org_config, iter_org_configs
+
+    if org_id is not None:
+        configs = [(org_id, await get_org_config(org_id))]
+    else:
+        configs = await iter_org_configs()
+
     pool = await get_pool()
     async with pool.acquire() as conn:
-        for repo in cfg.repos:
-            await conn.execute(
-                """
-                INSERT INTO repos (name, type, url, path, branch, language, status)
-                VALUES ($1, $2, $3, $4, $5, $6, 'pending')
-                ON CONFLICT (name) DO UPDATE
-                SET type=EXCLUDED.type, url=EXCLUDED.url, path=EXCLUDED.path,
-                    branch=EXCLUDED.branch, language=EXCLUDED.language
-                """,
-                repo.name,
-                repo.type,
-                repo.url,
-                repo.path,
-                repo.branch,
-                repo.language,
-            )
+        for oid, cfg in configs:
+            for repo in cfg.repos:
+                await conn.execute(
+                    """
+                    INSERT INTO repos (org_id, name, type, url, path, branch, language, status)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+                    ON CONFLICT (org_id, name) DO UPDATE
+                    SET type=EXCLUDED.type, url=EXCLUDED.url, path=EXCLUDED.path,
+                        branch=EXCLUDED.branch, language=EXCLUDED.language
+                    """,
+                    oid,
+                    repo.name,
+                    repo.type,
+                    repo.url,
+                    repo.path,
+                    repo.branch,
+                    repo.language,
+                )
 
 
 async def run_pending_index_requests() -> None:
     """Process index requests queued via the API or repo_index MCP tool."""
+    from ..org_config import get_org_config
+
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT id, repo_name FROM index_requests WHERE processed_at IS NULL ORDER BY requested_at LIMIT 10"
+            "SELECT id, org_id, repo_name FROM index_requests "
+            "WHERE processed_at IS NULL ORDER BY requested_at LIMIT 10"
         )
 
     if not rows:
         return
 
-    cfg = get_forge_config()
     for row in rows:
+        oid = row["org_id"]
         repo_name = row["repo_name"]
+        if oid is None:
+            # Legacy request with no org context — skip safely.
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE index_requests SET processed_at=NOW() WHERE id=$1", row["id"]
+                )
+            continue
+
+        cfg = await get_org_config(oid)
         if repo_name:
             repos_to_index = [r for r in cfg.repos if r.name == repo_name]
         else:
             repos_to_index = cfg.repos
 
         for repo in repos_to_index:
-            logger.info("Processing index request for %s", repo.name)
-            await index_repo(repo)
+            logger.info("Processing index request for org=%s repo=%s", oid, repo.name)
+            await index_repo(oid, repo, cfg.indexing)
 
-        pool = await get_pool()
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE index_requests SET processed_at=NOW() WHERE id=$1",

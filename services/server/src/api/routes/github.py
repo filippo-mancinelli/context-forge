@@ -4,12 +4,13 @@ from __future__ import annotations
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
-from ...config import RepoConfig, get_forge_config, get_settings
+from ...config import RepoConfig, get_settings
 from ...indexer.indexer import sync_repos_config
-from ...runtime_state import persist_runtime_config
+from ...org_config import get_org_config, persist_org_config
+from ..deps import ActiveOrg, require_role
 from ..security import require_valid_token_or_raise
 
 router = APIRouter(prefix="/github", tags=["github"])
@@ -96,23 +97,20 @@ async def list_github_repos(
 @router.post("/repos/add")
 async def add_github_repo(
     req: AddGitHubRepoRequest,
-    authorization: str | None = Header(default=None),
+    org: ActiveOrg = Depends(require_role("member")),
 ):
-    """Add a GitHub repository to the forge config."""
-    await require_valid_token_or_raise(authorization)
+    """Add a GitHub repository to the active organization's config."""
+    cfg = await get_org_config(org.org_id)
 
-    cfg = get_forge_config()
-    
-    # Check if repo already exists
+    # Check if repo already exists in this organization
     existing = next((r for r in cfg.repos if r.name == req.full_name.replace("/", "-")), None)
     if existing:
         raise HTTPException(status_code=400, detail="Repository already configured")
-    
+
     # Add new repo
     branch = req.branch or "main"
     repo_url = f"https://github.com/{req.full_name}"
-    
-    # Add to config (will be synced to DB)
+
     cfg.repos.append(RepoConfig(
         name=req.full_name.replace("/", "-"),
         type="github",
@@ -120,9 +118,9 @@ async def add_github_repo(
         branch=branch,
     ))
 
-    await persist_runtime_config(cfg)
-    await sync_repos_config()
-    
+    await persist_org_config(org.org_id, cfg)
+    await sync_repos_config(org.org_id)
+
     return {
         "status": "ok",
         "message": f"Repository {req.full_name} added",

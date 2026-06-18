@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+from ..deps import ActiveOrg, get_active_org
 
 router = APIRouter(prefix="/memory", tags=["memory"])
 
@@ -17,28 +19,26 @@ def _get_memory():
 class MemoryAddRequest(BaseModel):
     content: str
     metadata: Optional[dict[str, Any] | str] = None
-    user_id: Optional[str] = None
     infer: bool = True
 
 
 class MemorySearchRequest(BaseModel):
     query: str
     limit: int = 20
-    user_id: Optional[str] = None
 
 
 @router.post("")
-async def add_memory(req: MemoryAddRequest):
-    """Add a memory. Set infer=false to store the text directly without LLM extraction."""
-    from ...config import get_forge_config
-    uid = req.user_id or get_forge_config().memory.user_id
+async def add_memory(req: MemoryAddRequest, org: ActiveOrg = Depends(get_active_org)):
+    """Add a memory in the active organization's namespace.
+
+    Set infer=false to store the text directly without LLM extraction."""
     try:
         mem = _get_memory()
         from ...mcp.memory import _normalize_metadata
 
         result = mem.add(
             req.content,
-            user_id=uid,
+            user_id=org.namespace,
             metadata=_normalize_metadata(req.metadata),
             infer=req.infer,
         )
@@ -48,13 +48,11 @@ async def add_memory(req: MemoryAddRequest):
 
 
 @router.get("")
-async def list_memories(limit: int = 50, user_id: Optional[str] = None):
-    """List recent memories."""
-    from ...config import get_forge_config
-    uid = user_id or get_forge_config().memory.user_id
+async def list_memories(limit: int = 50, org: ActiveOrg = Depends(get_active_org)):
+    """List recent memories in the active organization's namespace."""
     try:
         mem = _get_memory()
-        results = mem.get_all(user_id=uid)
+        results = mem.get_all(user_id=org.namespace)
         memories = results.get("results", results) if isinstance(results, dict) else results
         return {"memories": memories[:limit], "count": len(memories[:limit])}
     except Exception as e:
@@ -62,13 +60,11 @@ async def list_memories(limit: int = 50, user_id: Optional[str] = None):
 
 
 @router.post("/search")
-async def search_memories(req: MemorySearchRequest):
-    """Search memories by semantic similarity."""
-    from ...config import get_forge_config
-    uid = req.user_id or get_forge_config().memory.user_id
+async def search_memories(req: MemorySearchRequest, org: ActiveOrg = Depends(get_active_org)):
+    """Search memories by semantic similarity within the active organization."""
     try:
         mem = _get_memory()
-        results = mem.search(req.query, user_id=uid, limit=req.limit)
+        results = mem.search(req.query, user_id=org.namespace, limit=req.limit)
         memories = results.get("results", results) if isinstance(results, dict) else results
         return {"memories": memories, "count": len(memories)}
     except Exception as e:

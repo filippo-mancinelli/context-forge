@@ -42,16 +42,38 @@ async def is_configured() -> bool:
     return await has_admin_user() and await has_runtime_config()
 
 
-async def create_admin_user(username: str, password: str) -> None:
+async def create_admin_user(username: str, password: str, email: Optional[str] = None) -> int:
     salt = secrets.token_hex(16)
     password_hash = _hash_password(password, salt)
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO admin_users (username, password_hash, salt) VALUES ($1, $2, $3)",
-            username,
-            password_hash,
-            salt,
+        return int(
+            await conn.fetchval(
+                "INSERT INTO admin_users (username, password_hash, salt, email) "
+                "VALUES ($1, $2, $3, $4) RETURNING id",
+                username,
+                password_hash,
+                salt,
+                email.lower().strip() if email else None,
+            )
+        )
+
+
+async def get_admin_user(user_id: int) -> Optional[dict]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, username, email, created_at FROM admin_users WHERE id = $1",
+            user_id,
+        )
+    return dict(row) if row else None
+
+
+async def get_user_id_by_email(email: str) -> Optional[int]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT id FROM admin_users WHERE lower(email) = lower($1)", email
         )
 
 
@@ -129,6 +151,20 @@ async def validate_session_token(token: str) -> bool:
     return row is not None
 
 
+async def resolve_session_user(token: str) -> Optional[int]:
+    """Return the user_id for a valid, unexpired session token (else None)."""
+    token_hash = hash_token(token)
+    now = datetime.now(timezone.utc)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT user_id FROM auth_sessions WHERE token_hash = $1 AND expires_at > $2",
+            token_hash,
+            now,
+        )
+    return int(row["user_id"]) if row else None
+
+
 async def require_valid_token_or_raise(auth_header: Optional[str]) -> None:
     if not auth_header or not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing bearer token")
@@ -139,7 +175,13 @@ async def require_valid_token_or_raise(auth_header: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
-async def create_mcp_api_key(name: str, scope: str = "read,write", created_by: Optional[int] = None, expires_days: Optional[int] = None) -> str:
+async def create_mcp_api_key(
+    name: str,
+    scope: str = "read,write",
+    created_by: Optional[int] = None,
+    expires_days: Optional[int] = None,
+    org_id: Optional[int] = None,
+) -> str:
     """Create a new MCP API key and return the raw key (only shown once)."""
     from datetime import timedelta
 
@@ -153,13 +195,14 @@ async def create_mcp_api_key(name: str, scope: str = "read,write", created_by: O
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            """INSERT INTO mcp_api_keys (name, key_hash, scope, created_by, expires_at)
-               VALUES ($1, $2, $3, $4, $5)""",
+            """INSERT INTO mcp_api_keys (name, key_hash, scope, created_by, expires_at, org_id)
+               VALUES ($1, $2, $3, $4, $5, $6)""",
             name,
             key_hash,
             scope,
             created_by,
             expires_at,
+            org_id,
         )
 
     return raw_key
@@ -176,7 +219,7 @@ async def validate_mcp_api_key(api_key: str) -> Optional[dict]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            """SELECT id, name, scope, expires_at
+            """SELECT id, name, scope, expires_at, org_id
                FROM mcp_api_keys
                WHERE key_hash = $1 AND (expires_at IS NULL OR expires_at > $2)""",
             key_hash,
@@ -194,30 +237,46 @@ async def validate_mcp_api_key(api_key: str) -> Optional[dict]:
     return dict(row) if row else None
 
 
-async def list_mcp_api_keys(user_id: Optional[int] = None) -> list[dict]:
-    """List all MCP API keys (optionally filtered by creator)."""
+async def list_mcp_api_keys(org_id: Optional[int] = None) -> list[dict]:
+    """List MCP API keys, optionally scoped to a single organization."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        if user_id:
+        if org_id is not None:
             rows = await conn.fetch(
-                """SELECT id, name, scope, created_at, last_used_at, expires_at, created_by
-                   FROM mcp_api_keys WHERE created_by = $1
+                """SELECT id, name, scope, created_at, last_used_at, expires_at, created_by, org_id
+                   FROM mcp_api_keys WHERE org_id = $1
                    ORDER BY created_at DESC""",
-                user_id,
+                org_id,
             )
         else:
             rows = await conn.fetch(
-                """SELECT id, name, scope, created_at, last_used_at, expires_at, created_by
+                """SELECT id, name, scope, created_at, last_used_at, expires_at, created_by, org_id
                    FROM mcp_api_keys ORDER BY created_at DESC"""
             )
     return [dict(row) for row in rows]
 
 
-async def revoke_mcp_api_key(key_id: int) -> bool:
-    """Revoke an MCP API key by ID."""
+async def get_mcp_api_key(key_id: int) -> Optional[dict]:
+    """Fetch a single API key's metadata (for ownership checks)."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        result = await conn.execute("DELETE FROM mcp_api_keys WHERE id = $1", key_id)
+        row = await conn.fetchrow(
+            "SELECT id, name, scope, created_by, org_id FROM mcp_api_keys WHERE id = $1",
+            key_id,
+        )
+    return dict(row) if row else None
+
+
+async def revoke_mcp_api_key(key_id: int, org_id: Optional[int] = None) -> bool:
+    """Revoke an MCP API key by ID, optionally constrained to an organization."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        if org_id is not None:
+            result = await conn.execute(
+                "DELETE FROM mcp_api_keys WHERE id = $1 AND org_id = $2", key_id, org_id
+            )
+        else:
+            result = await conn.execute("DELETE FROM mcp_api_keys WHERE id = $1", key_id)
         return result == "DELETE 1"
 
 

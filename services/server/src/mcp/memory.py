@@ -130,7 +130,8 @@ async def memory_add(
         dict with the created memory id and content
     """
     from ..config import get_forge_config
-    uid = user_id or get_forge_config().memory.user_id
+    from .context import get_current_namespace
+    uid = user_id or get_current_namespace() or get_forge_config().memory.user_id
     try:
         result = _get_memory().add(content, user_id=uid, metadata=_normalize_metadata(metadata))
         return {"status": "ok", "memory": result}
@@ -154,7 +155,8 @@ async def memory_search(query: str, limit: int = 10, user_id: Optional[str] = No
         dict with list of matching memories, each with id, content, score, and metadata
     """
     from ..config import get_forge_config
-    uid = user_id or get_forge_config().memory.user_id
+    from .context import get_current_namespace
+    uid = user_id or get_current_namespace() or get_forge_config().memory.user_id
     try:
         results = _get_memory().search(query, user_id=uid, limit=limit)
         memories = results.get("results", results) if isinstance(results, dict) else results
@@ -176,7 +178,8 @@ async def memory_list(limit: int = 20, user_id: Optional[str] = None) -> dict:
         dict with list of memories
     """
     from ..config import get_forge_config
-    uid = user_id or get_forge_config().memory.user_id
+    from .context import get_current_namespace
+    uid = user_id or get_current_namespace() or get_forge_config().memory.user_id
     try:
         results = _get_memory().get_all(user_id=uid)
         memories = results.get("results", results) if isinstance(results, dict) else results
