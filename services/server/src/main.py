@@ -36,10 +36,14 @@ async def main() -> None:
 
     settings = get_settings()
 
+    from .tenancy import ensure_default_org
+
     # Initialize DB
     logger.info("Initializing database...")
     await init_db()
     await ensure_runtime_state()
+    # Seed the default organization and attribute pre-existing data to it.
+    await ensure_default_org()
 
     # Initial indexing (background)
     logger.info("Starting initial repo sync...")

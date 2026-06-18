@@ -144,6 +144,50 @@ CREATE INDEX IF NOT EXISTS oauth_tokens_access_idx ON oauth_tokens(access_token)
 CREATE INDEX IF NOT EXISTS oauth_tokens_refresh_idx ON oauth_tokens(refresh_token);
 CREATE INDEX IF NOT EXISTS oauth_tokens_expires_idx ON oauth_tokens(expires_at);
 CREATE INDEX IF NOT EXISTS oauth_tokens_client_idx ON oauth_tokens(client_id);
+
+-- ===== Multi-tenancy: organizations, members, invitations =====
+CREATE TABLE IF NOT EXISTS organizations (
+    id                BIGSERIAL PRIMARY KEY,
+    name              TEXT NOT NULL,
+    slug              TEXT UNIQUE NOT NULL,
+    memory_namespace  TEXT UNIQUE NOT NULL,
+    created_at        TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS organization_members (
+    org_id     BIGINT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    user_id    BIGINT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+    role       TEXT NOT NULL DEFAULT 'member',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (org_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS org_members_user_idx ON organization_members (user_id);
+
+CREATE TABLE IF NOT EXISTS organization_invitations (
+    id          BIGSERIAL PRIMARY KEY,
+    org_id      BIGINT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    email       TEXT NOT NULL,
+    role        TEXT NOT NULL DEFAULT 'member',
+    token_hash  TEXT UNIQUE NOT NULL,
+    invited_by  BIGINT REFERENCES admin_users(id) ON DELETE SET NULL,
+    expires_at  TIMESTAMPTZ NOT NULL,
+    accepted_at TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS org_invitations_org_idx ON organization_invitations (org_id);
+CREATE INDEX IF NOT EXISTS org_invitations_token_idx ON organization_invitations (token_hash);
+
+-- Idempotent column migrations for tenant scoping on pre-existing tables.
+ALTER TABLE admin_users   ADD COLUMN IF NOT EXISTS email   TEXT;
+ALTER TABLE mcp_api_keys  ADD COLUMN IF NOT EXISTS org_id  BIGINT;
+ALTER TABLE jobs          ADD COLUMN IF NOT EXISTS org_id  BIGINT;
+ALTER TABLE repos         ADD COLUMN IF NOT EXISTS org_id  BIGINT;
+
+CREATE INDEX IF NOT EXISTS mcp_api_keys_org_idx ON mcp_api_keys (org_id);
+CREATE INDEX IF NOT EXISTS jobs_org_idx ON jobs (org_id);
+CREATE INDEX IF NOT EXISTS repos_org_idx ON repos (org_id);
 """
 
 
