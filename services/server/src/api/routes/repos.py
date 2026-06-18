@@ -9,28 +9,20 @@ from pydantic import BaseModel
 
 from ...db import get_pool
 from ...indexer.indexer import index_repo, sync_repos_config
-from ...runtime_state import persist_runtime_config
+from ...org_config import get_org_config, persist_org_config
 from ..deps import ActiveOrg, get_active_org, require_role
 
 router = APIRouter(prefix="/repos", tags=["repos"])
 
 
-async def _org_repo_names(conn, org_id: int) -> list[str]:
-    """Repo names visible to an organization (its own + unattributed legacy)."""
-    rows = await conn.fetch(
-        "SELECT name FROM repos WHERE org_id = $1 OR org_id IS NULL", org_id
-    )
-    return [r["name"] for r in rows]
-
-
 async def _assert_repo_in_org(repo_name: str, org_id: int) -> None:
-    """Raise 404 if the repo is not visible to the active organization."""
+    """Raise 404 if the repo does not belong to the active organization."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        owner = await conn.fetchrow(
-            "SELECT org_id FROM repos WHERE name = $1", repo_name
+        exists = await conn.fetchval(
+            "SELECT 1 FROM repos WHERE org_id = $1 AND name = $2", org_id, repo_name
         )
-    if owner is None or (owner["org_id"] is not None and owner["org_id"] != org_id):
+    if not exists:
         raise HTTPException(status_code=404, detail=f"Repo '{repo_name}' not found")
 
 
@@ -61,7 +53,7 @@ async def list_repos(org: ActiveOrg = Depends(get_active_org)):
         rows = await conn.fetch(
             "SELECT name, type, url, path, branch, language, status, "
             "last_indexed_at, total_chunks, error_message FROM repos "
-            "WHERE org_id = $1 OR org_id IS NULL ORDER BY name",
+            "WHERE org_id = $1 ORDER BY name",
             org.org_id,
         )
     result = []
@@ -90,24 +82,35 @@ async def search_repos(req: RepoSearchRequest, org: ActiveOrg = Depends(get_acti
     pool = await get_pool()
 
     async with pool.acquire() as conn:
-        allowed = set(await _org_repo_names(conn, org.org_id))
-        # Restrict the requested repos to those the org can see.
-        target_repos = [r for r in req.repos if r in allowed] if req.repos else list(allowed)
-        if not target_repos:
-            return {"results": [], "count": 0}
-        rows = await conn.fetch(
-            """
-            SELECT repo_name, file_path, chunk_type, content, metadata,
-                   1 - (embedding <=> $1::vector) AS score
-            FROM repo_chunks
-            WHERE repo_name = ANY($2)
-            ORDER BY embedding <=> $1::vector
-            LIMIT $3
-            """,
-            embedding_str,
-            target_repos,
-            req.limit,
-        )
+        if req.repos:
+            rows = await conn.fetch(
+                """
+                SELECT repo_name, file_path, chunk_type, content, metadata,
+                       1 - (embedding <=> $1::vector) AS score
+                FROM repo_chunks
+                WHERE org_id = $2 AND repo_name = ANY($3)
+                ORDER BY embedding <=> $1::vector
+                LIMIT $4
+                """,
+                embedding_str,
+                org.org_id,
+                req.repos,
+                req.limit,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT repo_name, file_path, chunk_type, content, metadata,
+                       1 - (embedding <=> $1::vector) AS score
+                FROM repo_chunks
+                WHERE org_id = $2
+                ORDER BY embedding <=> $1::vector
+                LIMIT $3
+                """,
+                embedding_str,
+                org.org_id,
+                req.limit,
+            )
 
     results = []
     for row in rows:
@@ -132,13 +135,12 @@ async def list_relationships(repo: Optional[str] = None, org: ActiveOrg = Depend
     """Get semantic relationships between repositories (org-scoped)."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        allowed = await _org_repo_names(conn, org.org_id)
         rows = await conn.fetch(
             """
             WITH centroids AS (
                 SELECT repo_name, avg(embedding) AS centroid, count(*) AS chunk_count
                 FROM repo_chunks
-                WHERE repo_name = ANY($2)
+                WHERE org_id = $2
                 GROUP BY repo_name
             )
             SELECT
@@ -155,7 +157,7 @@ async def list_relationships(repo: Optional[str] = None, org: ActiveOrg = Depend
             LIMIT 25
             """,
             repo,
-            allowed,
+            org.org_id,
         )
     return {"relationships": [dict(r) for r in rows], "count": len(rows)}
 
@@ -171,7 +173,8 @@ async def trigger_index(
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            "INSERT INTO index_requests (repo_name) VALUES ($1)",
+            "INSERT INTO index_requests (org_id, repo_name) VALUES ($1, $2)",
+            org.org_id,
             repo_name,
         )
     return {"status": "queued", "repo": repo_name}
@@ -182,10 +185,10 @@ async def trigger_index_all(org: ActiveOrg = Depends(require_role("member"))):
     """Queue all of the active organization's repos for re-indexing."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        names = await _org_repo_names(conn, org.org_id)
-        for name in names:
-            await conn.execute("INSERT INTO index_requests (repo_name) VALUES ($1)", name)
-    return {"status": "queued", "message": f"{len(names)} repos queued for indexing"}
+        await conn.execute(
+            "INSERT INTO index_requests (org_id, repo_name) VALUES ($1, NULL)", org.org_id
+        )
+    return {"status": "queued", "message": "All repos queued for indexing"}
 
 
 @router.get("/{repo_name}/files")
@@ -193,16 +196,15 @@ async def list_files(repo_name: str, path: str = "", org: ActiveOrg = Depends(ge
     """List files in a repo directory."""
     import os
     from pathlib import Path
-    from ...config import get_forge_config
     from ...indexer.git_manager import get_repo_local_path
 
     await _assert_repo_in_org(repo_name, org.org_id)
-    cfg = get_forge_config()
+    cfg = await get_org_config(org.org_id)
     repo_cfg = next((r for r in cfg.repos if r.name == repo_name), None)
     if not repo_cfg:
         raise HTTPException(status_code=404, detail=f"Repo '{repo_name}' not found")
 
-    repo_path = Path(get_repo_local_path(repo_cfg))
+    repo_path = Path(get_repo_local_path(repo_cfg, org.org_id))
     target = repo_path / path.lstrip("/") if path else repo_path
 
     if not target.exists():
@@ -229,8 +231,9 @@ async def repo_stats(repo_name: str, org: ActiveOrg = Depends(get_active_org)):
             """
             SELECT name, type, url, path, branch, language, status, last_indexed_at, total_chunks, error_message
             FROM repos
-            WHERE name=$1
+            WHERE org_id=$1 AND name=$2
             """,
+            org.org_id,
             repo_name,
         )
         if not repo_row:
@@ -240,10 +243,11 @@ async def repo_stats(repo_name: str, org: ActiveOrg = Depends(get_active_org)):
             """
             SELECT chunk_type, count(*) AS count
             FROM repo_chunks
-            WHERE repo_name=$1
+            WHERE org_id=$1 AND repo_name=$2
             GROUP BY chunk_type
             ORDER BY count DESC
             """,
+            org.org_id,
             repo_name,
         )
 
@@ -253,11 +257,12 @@ async def repo_stats(repo_name: str, org: ActiveOrg = Depends(get_active_org)):
                 lower(split_part(file_path, '.', array_length(string_to_array(file_path, '.'), 1))) AS extension,
                 count(*) AS count
             FROM repo_chunks
-            WHERE repo_name=$1 AND position('.' in file_path) > 0
+            WHERE org_id=$1 AND repo_name=$2 AND position('.' in file_path) > 0
             GROUP BY extension
             ORDER BY count DESC
             LIMIT 8
             """,
+            org.org_id,
             repo_name,
         )
 
@@ -290,33 +295,26 @@ class CreateRepoRequest(BaseModel):
 @router.post("")
 async def create_repo(req: CreateRepoRequest, org: ActiveOrg = Depends(require_role("member"))):
     """Add a new repository to the active organization."""
-    from ...config import RepoConfig, get_forge_config
+    from ...config import RepoConfig
 
-    cfg = get_forge_config()
+    cfg = await get_org_config(org.org_id)
 
-    # Repo names are globally unique (single shared indexing config).
+    # Repo names are unique within an organization (but reusable across orgs).
     if any(r.name == req.name for r in cfg.repos):
         raise HTTPException(status_code=400, detail=f"Repository '{req.name}' already exists")
 
-    # Get the RepoConfig class from config
-    # Create new repo config
-    new_repo = RepoConfig(
-        name=req.name,
-        type=req.type,
-        url=req.url,
-        path=req.path,
-        branch=req.branch,
-        language=req.language or "auto",
+    cfg.repos.append(
+        RepoConfig(
+            name=req.name,
+            type=req.type,
+            url=req.url,
+            path=req.path,
+            branch=req.branch,
+            language=req.language or "auto",
+        )
     )
-
-    cfg.repos.append(new_repo)
-    await persist_runtime_config(cfg)
-    await sync_repos_config()
-
-    # Attribute the new repo to the active organization.
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("UPDATE repos SET org_id = $1 WHERE name = $2", org.org_id, req.name)
+    await persist_org_config(org.org_id, cfg)
+    await sync_repos_config(org.org_id)
 
     return {"status": "ok", "repo": {"name": req.name, "type": req.type}}
 
@@ -324,21 +322,19 @@ async def create_repo(req: CreateRepoRequest, org: ActiveOrg = Depends(require_r
 @router.put("/{repo_name}")
 async def update_repo(repo_name: str, req: CreateRepoRequest, org: ActiveOrg = Depends(require_role("member"))):
     """Update an existing repository configuration."""
-    from ...config import RepoConfig, get_forge_config
+    from ...config import RepoConfig
 
     await _assert_repo_in_org(repo_name, org.org_id)
-    cfg = get_forge_config()
+    cfg = await get_org_config(org.org_id)
 
-    # Find the repo
     repo_idx = next((i for i, r in enumerate(cfg.repos) if r.name == repo_name), None)
     if repo_idx is None:
         raise HTTPException(status_code=404, detail=f"Repository '{repo_name}' not found")
-    
-    # Can't rename to another existing repo
+
+    # Can't rename to another existing repo in the same org
     if req.name != repo_name and any(r.name == req.name for r in cfg.repos):
         raise HTTPException(status_code=400, detail=f"Repository '{req.name}' already exists")
-    
-    # Update repo config
+
     cfg.repos[repo_idx] = RepoConfig(
         name=req.name,
         type=req.type,
@@ -347,54 +343,58 @@ async def update_repo(repo_name: str, req: CreateRepoRequest, org: ActiveOrg = D
         branch=req.branch,
         language=req.language or cfg.repos[repo_idx].language,
     )
-    
-    await persist_runtime_config(cfg)
-    await sync_repos_config()
+    await persist_org_config(org.org_id, cfg)
 
-    # Preserve org attribution across renames.
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute("UPDATE repos SET org_id = $1 WHERE name = $2", org.org_id, req.name)
+    # If renamed, drop the old repo row (and its chunks) for this org.
+    if req.name != repo_name:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM repo_chunks WHERE org_id=$1 AND repo_name=$2", org.org_id, repo_name
+            )
+            await conn.execute(
+                "DELETE FROM repos WHERE org_id=$1 AND name=$2", org.org_id, repo_name
+            )
+    await sync_repos_config(org.org_id)
 
     return {"status": "ok", "repo": {"name": req.name, "type": req.type}}
 
 
 @router.delete("/{repo_name}")
 async def delete_repo(repo_name: str, org: ActiveOrg = Depends(require_role("member"))):
-    """Remove a repository from the configuration."""
-    from ...config import get_forge_config, get_settings
+    """Remove a repository from the active organization's configuration."""
+    from ...indexer.git_manager import get_repo_local_path
     import shutil
     from pathlib import Path
 
     await _assert_repo_in_org(repo_name, org.org_id)
-    cfg = get_forge_config()
+    cfg = await get_org_config(org.org_id)
 
-    # Find and remove the repo
     repo_idx = next((i for i, r in enumerate(cfg.repos) if r.name == repo_name), None)
     if repo_idx is None:
         raise HTTPException(status_code=404, detail=f"Repository '{repo_name}' not found")
-    
+
     repo = cfg.repos[repo_idx]
-    
-    # Remove from config
     cfg.repos.pop(repo_idx)
-    await persist_runtime_config(cfg)
-    
-    # Clean up cached repo data
+    await persist_org_config(org.org_id, cfg)
+
+    # Clean up cached repo data for this organization.
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM repo_chunks WHERE repo_name=$1", repo_name)
-        await conn.execute("DELETE FROM repos WHERE name=$1", repo_name)
-    
-    # Try to remove cloned repo directory if it exists
-    if repo.type in ('github', 'gitlab') and repo.url:
-        cache_dir = Path(get_settings().repos_cache_dir) / repo_name
+        await conn.execute(
+            "DELETE FROM repo_chunks WHERE org_id=$1 AND repo_name=$2", org.org_id, repo_name
+        )
+        await conn.execute(
+            "DELETE FROM repos WHERE org_id=$1 AND name=$2", org.org_id, repo_name
+        )
+
+    # Try to remove the cloned repo directory if it exists.
+    if repo.type in ("github", "gitlab") and repo.url:
+        cache_dir = Path(get_repo_local_path(repo, org.org_id))
         if cache_dir.exists():
             try:
                 shutil.rmtree(cache_dir)
             except Exception:
                 pass  # Ignore cleanup errors
-    
-    await sync_repos_config()
-    
+
     return {"status": "ok", "message": f"Repository '{repo_name}' removed"}

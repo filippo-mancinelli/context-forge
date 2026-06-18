@@ -24,11 +24,15 @@ async def repo_list() -> dict:
     Returns:
         dict with list of repos, each including name, type, status, last_indexed_at, and total_chunks
     """
+    from .context import resolve_org_id
+
+    org_id = await resolve_org_id()
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT name, type, url, path, branch, status, last_indexed_at, total_chunks, error_message "
-            "FROM repos ORDER BY name"
+            "FROM repos WHERE org_id=$1 ORDER BY name",
+            org_id,
         )
     repos = [dict(r) for r in rows]
     # Convert datetime to ISO string
@@ -58,6 +62,9 @@ async def repo_search(
         dict with list of results, each with repo_name, file_path, content, chunk_type, score
     """
     from ..indexer.embedder import embed_text
+    from .context import resolve_org_id
+
+    org_id = await resolve_org_id()
 
     try:
         embedding = await embed_text(query)
@@ -75,11 +82,12 @@ async def repo_search(
                 SELECT repo_name, file_path, chunk_type, content, metadata,
                        1 - (embedding <=> $1::vector) AS score
                 FROM repo_chunks
-                WHERE repo_name = ANY($2)
+                WHERE org_id = $2 AND repo_name = ANY($3)
                 ORDER BY embedding <=> $1::vector
-                LIMIT $3
+                LIMIT $4
                 """,
                 embedding_str,
+                org_id,
                 repos,
                 limit,
             )
@@ -89,10 +97,12 @@ async def repo_search(
                 SELECT repo_name, file_path, chunk_type, content, metadata,
                        1 - (embedding <=> $1::vector) AS score
                 FROM repo_chunks
+                WHERE org_id = $2
                 ORDER BY embedding <=> $1::vector
-                LIMIT $2
+                LIMIT $3
                 """,
                 embedding_str,
+                org_id,
                 limit,
             )
 
@@ -123,15 +133,17 @@ async def repo_get_file(repo: str, path: str) -> dict:
     Returns:
         dict with file content and metadata, or error if not found
     """
-    from ..config import get_forge_config
     from ..indexer.git_manager import get_repo_local_path
+    from ..org_config import get_org_config
+    from .context import resolve_org_id
 
-    cfg = get_forge_config()
+    org_id = await resolve_org_id()
+    cfg = await get_org_config(org_id)
     repo_cfg = next((r for r in cfg.repos if r.name == repo), None)
     if not repo_cfg:
         return {"status": "error", "error": f"Repository '{repo}' not found in runtime settings"}
 
-    repo_path = get_repo_local_path(repo_cfg)
+    repo_path = get_repo_local_path(repo_cfg, org_id)
     file_path = Path(repo_path) / path.lstrip("/")
 
     if not file_path.exists():
@@ -163,10 +175,14 @@ async def repo_index(repo: Optional[str] = None) -> dict:
     Returns:
         dict with status and list of repos queued for indexing
     """
+    from .context import resolve_org_id
+
+    org_id = await resolve_org_id()
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            "INSERT INTO index_requests (repo_name) VALUES ($1)",
+            "INSERT INTO index_requests (org_id, repo_name) VALUES ($1, $2)",
+            org_id,
             repo,
         )
     return {
@@ -188,6 +204,9 @@ async def repo_relationships(repo: Optional[str] = None) -> dict:
     Returns:
         dict with list of related repo pairs and their similarity scores
     """
+    from .context import resolve_org_id
+
+    org_id = await resolve_org_id()
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -197,6 +216,7 @@ async def repo_relationships(repo: Optional[str] = None) -> dict:
                        avg(embedding) AS centroid,
                        count(*) AS chunk_count
                 FROM repo_chunks
+                WHERE org_id = $2
                 GROUP BY repo_name
             )
             SELECT
@@ -213,6 +233,7 @@ async def repo_relationships(repo: Optional[str] = None) -> dict:
             LIMIT 20
             """,
             repo,
+            org_id,
         )
 
     relationships = [dict(r) for r in rows]

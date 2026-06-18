@@ -330,8 +330,32 @@ async def ensure_default_org() -> Optional[int]:
             await conn.execute("UPDATE jobs SET org_id = $1 WHERE org_id IS NULL", org_id)
             await conn.execute("UPDATE mcp_api_keys SET org_id = $1 WHERE org_id IS NULL", org_id)
 
+        # Seed the default org's config from the existing global bootstrap config
+        # so its repositories and indexing settings carry over unchanged.
+        try:
+            from .config import get_forge_config
+            from .org_config import seed_org_config_if_absent
+
+            await seed_org_config_if_absent(int(org_id), get_forge_config())
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("Could not seed default org config: %s", e)
+
         logger.info("Created default organization (id=%s, namespace=%s)", org_id, namespace)
         return int(org_id)
+
+
+async def ensure_tenant_storage() -> Optional[int]:
+    """Ensure the default org exists and tenant-aware storage is migrated.
+
+    Idempotent. Returns the default organization id, or None pre-setup.
+    """
+    default_org_id = await ensure_default_org()
+    if default_org_id is None:
+        return None
+    from .db import apply_tenant_repo_migration
+
+    await apply_tenant_repo_migration(default_org_id)
+    return default_org_id
 
 
 async def get_namespace_for_org(org_id: int) -> Optional[str]:

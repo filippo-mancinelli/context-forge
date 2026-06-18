@@ -372,7 +372,7 @@ export const api = {
     get: (id: string) => request<Job>(`/api/jobs/${encodeURIComponent(id)}`),
   },
   settings: {
-    get: () => request<{ forge_config: Record<string, unknown>; settings_overrides: Record<string, unknown> }>('/api/settings'),
+    get: () => request<{ forge_config: Record<string, unknown>; settings_overrides: Record<string, unknown>; settings_overrides_editable?: boolean }>('/api/settings'),
     update: (payload: { forge_config: Record<string, unknown>; settings_overrides: Record<string, unknown> }) =>
       request<SettingsUpdateResponse>('/api/settings', { method: 'PUT', body: JSON.stringify(payload) }),
   },

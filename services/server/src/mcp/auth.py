@@ -10,22 +10,22 @@ from starlette.responses import JSONResponse
 
 from ..api.security import validate_mcp_api_key, validate_oauth_token
 from ..config import get_settings
-from .context import set_current_namespace
+from .context import set_current_namespace, set_current_org_id
 
 logger = logging.getLogger(__name__)
 
 
-async def _resolve_namespace(org_id, user_id=None):
-    """Resolve the memory namespace for an authenticated MCP request."""
+async def _resolve_org(org_id, user_id=None):
+    """Resolve (org_id, memory namespace) for an authenticated MCP request."""
     from .. import tenancy
 
     if org_id is not None:
-        return await tenancy.get_namespace_for_org(org_id)
+        return org_id, await tenancy.get_namespace_for_org(org_id)
     if user_id is not None:
         orgs = await tenancy.list_organizations_for_user(user_id)
         if orgs:
-            return orgs[0]["memory_namespace"]
-    return None
+            return orgs[0]["id"], orgs[0]["memory_namespace"]
+    return None, None
 
 
 class MCPAuthMiddleware(BaseHTTPMiddleware):
@@ -52,9 +52,9 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
             if token_info:
                 # Valid OAuth token
                 request.state.mcp_auth_info = {"type": "oauth", **token_info}
-                set_current_namespace(
-                    await _resolve_namespace(token_info.get("org_id"), token_info.get("user_id"))
-                )
+                oid, ns = await _resolve_org(token_info.get("org_id"), token_info.get("user_id"))
+                set_current_org_id(oid)
+                set_current_namespace(ns)
                 return await call_next(request)
             else:
                 logger.warning(f"MCP request with invalid OAuth token from {request.client.host}")
@@ -70,7 +70,9 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
             if key_info:
                 # Valid API key
                 request.state.mcp_auth_info = {"type": "api_key", **key_info}
-                set_current_namespace(await _resolve_namespace(key_info.get("org_id")))
+                oid, ns = await _resolve_org(key_info.get("org_id"))
+                set_current_org_id(oid)
+                set_current_namespace(ns)
                 return await call_next(request)
             else:
                 logger.warning(f"MCP request with invalid API key from {request.client.host}")

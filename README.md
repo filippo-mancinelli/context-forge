@@ -229,9 +229,15 @@ On upgrade, a `Default` organization is created automatically and all existing
 admins, repositories, memories, jobs, and API keys are attributed to it, so
 existing setups keep working unchanged.
 
-> Note: repository names are globally unique because indexing shares a single
-> configuration, so a repo name cannot be reused across organizations in this
-> release.
+**Per-organization configuration.** Each organization owns its own repository
+list and indexing settings (schedule, exclude patterns, chunk sizes), stored
+independently and indexed on its own scheduled job. Repository names only need
+to be unique *within* an organization, so the same name can be reused across
+organizations without collisions (remote clones are cached per organization).
+
+Model and provider settings — embeddings provider/model/dimensions, LLM, and
+provider tokens — remain **global** because they are bound to the shared vector
+store dimension, and can only be changed by an organization admin.
 
 ## Agent connection guides
 
