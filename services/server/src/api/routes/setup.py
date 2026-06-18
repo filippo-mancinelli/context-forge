@@ -68,6 +68,11 @@ async def setup_init(req: SetupInitRequest):
         await persist_runtime_config(forge, req.settings_overrides)
         created_runtime_config = True
 
+    # Provision the default organization with the first admin as owner.
+    from ...tenancy import ensure_default_org
+
+    await ensure_default_org()
+
     reset_embedder_clients()
     reset_memory_client()
     await sync_repos_config()

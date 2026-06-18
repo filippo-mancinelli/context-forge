@@ -199,8 +199,39 @@ Main pages:
 - `Repositories`: home page for repo browsing, import, indexing, and drill-down
 - `Settings`: runtime config for providers, tokens, indexing, and manual repo entries
 - `Memory`
+- `Organization`: members, roles, and invitations for the active organization
 - `MCP Tools`
 - `Async Jobs`
+
+## Organizations & roles (multi-tenancy)
+
+context-forge is multi-tenant. Every user belongs to one or more **organizations**,
+and each organization is an isolation boundary: it has its own memory namespace,
+API keys, jobs, and repositories. Switch the active organization from the
+selector in the sidebar; the active organization travels with each request via
+the `X-Org-Id` header.
+
+**Roles** (highest to lowest): `owner` › `admin` › `member` › `viewer`.
+
+- `viewer` — read-only access to repos, memory, and search.
+- `member` — can also create/index repos and create API keys.
+- `admin` — can also manage members and invitations and rename the organization.
+- `owner` — full control, including deleting the organization. An organization
+  always keeps at least one owner.
+
+**Inviting people.** Admins invite by email from the `Organization` page. If the
+email already has an account they are added immediately; otherwise an invite link
+is generated (self-hosted deployments send no email, so share the link directly).
+The invitee opens the link, picks a username and password, and joins with the
+assigned role.
+
+On upgrade, a `Default` organization is created automatically and all existing
+admins, repositories, memories, jobs, and API keys are attributed to it, so
+existing setups keep working unchanged.
+
+> Note: repository names are globally unique because indexing shares a single
+> configuration, so a repo name cannot be reused across organizations in this
+> release.
 
 ## Agent connection guides
 

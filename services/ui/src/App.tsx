@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom'
-import { GitBranch, Brain, Wrench, Activity, SlidersHorizontal, Menu, X } from 'lucide-react'
+import { GitBranch, Brain, Wrench, Activity, SlidersHorizontal, Menu, X, Building2 } from 'lucide-react'
 import Repos from './pages/Repos'
 import Memory from './pages/Memory'
 import Tools from './pages/Tools'
@@ -8,18 +8,71 @@ import Jobs from './pages/Jobs'
 import Search from './pages/Search'
 import RepoDetail from './pages/RepoDetail'
 import Settings from './pages/Settings'
+import Organization from './pages/Organization'
 import Setup from './pages/Setup'
 import Login from './pages/Login'
+import AcceptInvite from './pages/AcceptInvite'
 import OAuth from './pages/OAuth'
+import { api } from './lib/api'
 import { useAppStore } from './store'
 
 const navLinks = [
   { to: '/repos', icon: GitBranch, label: 'Repositories' },
   { to: '/memory', icon: Brain, label: 'Memory' },
   { to: '/settings', icon: SlidersHorizontal, label: 'Settings' },
+  { to: '/organization', icon: Building2, label: 'Organization' },
   { to: '/tools', icon: Wrench, label: 'MCP Tools' },
   { to: '/jobs', icon: Activity, label: 'Async Jobs' },
 ]
+
+function OrgSwitcher() {
+  const organizations = useAppStore((s) => s.organizations)
+  const activeOrgId = useAppStore((s) => s.activeOrgId)
+  const setActiveOrg = useAppStore((s) => s.setActiveOrg)
+
+  if (organizations.length === 0) return null
+
+  const onSwitch = (value: string) => {
+    if (value === '__new__') {
+      const name = window.prompt('New organization name')
+      if (name && name.trim()) {
+        api.organizations
+          .create(name.trim())
+          .then((res) => {
+            setActiveOrg(res.organization.id)
+            window.location.reload()
+          })
+          .catch((e) => window.alert(String(e)))
+      }
+      return
+    }
+    const id = Number(value)
+    if (id !== activeOrgId) {
+      setActiveOrg(id)
+      // Reload so every page refetches with the new organization scope.
+      window.location.reload()
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <Building2 className="w-3.5 h-3.5 text-muted flex-shrink-0" />
+      <select
+        value={activeOrgId ?? ''}
+        onChange={(e) => onSwitch(e.target.value)}
+        className="flex-1 min-w-0 text-xs bg-bg text-text border border-border rounded px-1.5 py-1 focus:outline-none focus:border-accent"
+        aria-label="Active organization"
+      >
+        {organizations.map((o) => (
+          <option key={o.id} value={o.id}>
+            {o.name}
+          </option>
+        ))}
+        <option value="__new__">+ New organization…</option>
+      </select>
+    </div>
+  )
+}
 
 function NavItems({ onNavigate }: { onNavigate?: () => void }) {
   const logout = useAppStore((s) => s.logout)
@@ -65,9 +118,10 @@ function Sidebar() {
     >
       <div
         style={{ borderBottom: '1px solid var(--border)' }}
-        className="px-4 py-3"
+        className="px-4 py-3 space-y-2"
       >
-        <span className="font-semibold text-text text-sm tracking-tight">context-forge</span>
+        <span className="font-semibold text-text text-sm tracking-tight block">context-forge</span>
+        <OrgSwitcher />
       </div>
       <NavItems />
     </aside>
@@ -117,16 +171,19 @@ function Drawer({ open, onClose }: { open: boolean; onClose: () => void }) {
       >
         <div
           style={{ borderBottom: '1px solid var(--border)' }}
-          className="px-4 py-3 flex items-center justify-between"
+          className="px-4 py-3 space-y-2"
         >
-          <span className="font-semibold text-text text-sm tracking-tight">context-forge</span>
-          <button
-            onClick={onClose}
-            className="text-muted hover:text-text transition-colors p-1"
-            aria-label="Close menu"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center justify-between">
+            <span className="font-semibold text-text text-sm tracking-tight">context-forge</span>
+            <button
+              onClick={onClose}
+              className="text-muted hover:text-text transition-colors p-1"
+              aria-label="Close menu"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <OrgSwitcher />
         </div>
         <NavItems onNavigate={onClose} />
       </div>
@@ -138,12 +195,26 @@ export default function App() {
   const authState = useAppStore((s) => s.authState)
   const setupMode = useAppStore((s) => s.setupMode)
   const setAuthState = useAppStore((s) => s.setAuthState)
+  const completeLogin = useAppStore((s) => s.completeLogin)
   const bootstrap = useAppStore((s) => s.bootstrap)
   const [drawerOpen, setDrawerOpen] = useState(false)
 
   useEffect(() => {
     bootstrap()
   }, [bootstrap])
+
+  // Public invite-acceptance link, reachable without an existing session.
+  const inviteMatch = window.location.pathname.match(/^\/invite\/(.+)$/)
+  if (inviteMatch) {
+    return (
+      <AcceptInvite
+        token={decodeURIComponent(inviteMatch[1])}
+        onAccepted={() => {
+          window.location.href = '/'
+        }}
+      />
+    )
+  }
 
   if (authState === 'loading') {
     return (
@@ -161,7 +232,7 @@ export default function App() {
   }
 
   if (authState === 'login') {
-    return <Login onLoggedIn={() => setAuthState('ready')} />
+    return <Login onLoggedIn={() => completeLogin()} />
   }
 
   return (
@@ -179,6 +250,7 @@ export default function App() {
               <Route path="/repos/:repoName" element={<RepoDetail />} />
               <Route path="/memory" element={<Memory />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/organization" element={<Organization />} />
               <Route path="/tools" element={<Tools />} />
               <Route path="/jobs" element={<Jobs />} />
               <Route path="/oauth" element={<OAuth />} />

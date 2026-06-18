@@ -4,14 +4,34 @@ from __future__ import annotations
 import json
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
 from ...db import get_pool
 from ...indexer.indexer import index_repo, sync_repos_config
 from ...runtime_state import persist_runtime_config
+from ..deps import ActiveOrg, get_active_org, require_role
 
 router = APIRouter(prefix="/repos", tags=["repos"])
+
+
+async def _org_repo_names(conn, org_id: int) -> list[str]:
+    """Repo names visible to an organization (its own + unattributed legacy)."""
+    rows = await conn.fetch(
+        "SELECT name FROM repos WHERE org_id = $1 OR org_id IS NULL", org_id
+    )
+    return [r["name"] for r in rows]
+
+
+async def _assert_repo_in_org(repo_name: str, org_id: int) -> None:
+    """Raise 404 if the repo is not visible to the active organization."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        owner = await conn.fetchrow(
+            "SELECT org_id FROM repos WHERE name = $1", repo_name
+        )
+    if owner is None or (owner["org_id"] is not None and owner["org_id"] != org_id):
+        raise HTTPException(status_code=404, detail=f"Repo '{repo_name}' not found")
 
 
 class RepoOut(BaseModel):
@@ -34,13 +54,15 @@ class RepoSearchRequest(BaseModel):
 
 
 @router.get("", response_model=list[RepoOut])
-async def list_repos():
-    """List all repos and their indexing status."""
+async def list_repos(org: ActiveOrg = Depends(get_active_org)):
+    """List repos visible to the active organization and their indexing status."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT name, type, url, path, branch, language, status, "
-            "last_indexed_at, total_chunks, error_message FROM repos ORDER BY name"
+            "last_indexed_at, total_chunks, error_message FROM repos "
+            "WHERE org_id = $1 OR org_id IS NULL ORDER BY name",
+            org.org_id,
         )
     result = []
     for r in rows:
@@ -52,8 +74,8 @@ async def list_repos():
 
 
 @router.post("/search")
-async def search_repos(req: RepoSearchRequest):
-    """Search indexed repository chunks by semantic similarity."""
+async def search_repos(req: RepoSearchRequest, org: ActiveOrg = Depends(get_active_org)):
+    """Search indexed repository chunks by semantic similarity (org-scoped)."""
     from ...indexer.embedder import embed_text
 
     def _vector_to_pg(embedding: list[float]) -> str:
@@ -68,32 +90,24 @@ async def search_repos(req: RepoSearchRequest):
     pool = await get_pool()
 
     async with pool.acquire() as conn:
-        if req.repos:
-            rows = await conn.fetch(
-                """
-                SELECT repo_name, file_path, chunk_type, content, metadata,
-                       1 - (embedding <=> $1::vector) AS score
-                FROM repo_chunks
-                WHERE repo_name = ANY($2)
-                ORDER BY embedding <=> $1::vector
-                LIMIT $3
-                """,
-                embedding_str,
-                req.repos,
-                req.limit,
-            )
-        else:
-            rows = await conn.fetch(
-                """
-                SELECT repo_name, file_path, chunk_type, content, metadata,
-                       1 - (embedding <=> $1::vector) AS score
-                FROM repo_chunks
-                ORDER BY embedding <=> $1::vector
-                LIMIT $2
-                """,
-                embedding_str,
-                req.limit,
-            )
+        allowed = set(await _org_repo_names(conn, org.org_id))
+        # Restrict the requested repos to those the org can see.
+        target_repos = [r for r in req.repos if r in allowed] if req.repos else list(allowed)
+        if not target_repos:
+            return {"results": [], "count": 0}
+        rows = await conn.fetch(
+            """
+            SELECT repo_name, file_path, chunk_type, content, metadata,
+                   1 - (embedding <=> $1::vector) AS score
+            FROM repo_chunks
+            WHERE repo_name = ANY($2)
+            ORDER BY embedding <=> $1::vector
+            LIMIT $3
+            """,
+            embedding_str,
+            target_repos,
+            req.limit,
+        )
 
     results = []
     for row in rows:
@@ -114,15 +128,17 @@ async def search_repos(req: RepoSearchRequest):
 
 
 @router.get("/relationships")
-async def list_relationships(repo: Optional[str] = None):
-    """Get semantic relationships between repositories."""
+async def list_relationships(repo: Optional[str] = None, org: ActiveOrg = Depends(get_active_org)):
+    """Get semantic relationships between repositories (org-scoped)."""
     pool = await get_pool()
     async with pool.acquire() as conn:
+        allowed = await _org_repo_names(conn, org.org_id)
         rows = await conn.fetch(
             """
             WITH centroids AS (
                 SELECT repo_name, avg(embedding) AS centroid, count(*) AS chunk_count
                 FROM repo_chunks
+                WHERE repo_name = ANY($2)
                 GROUP BY repo_name
             )
             SELECT
@@ -139,19 +155,20 @@ async def list_relationships(repo: Optional[str] = None):
             LIMIT 25
             """,
             repo,
+            allowed,
         )
     return {"relationships": [dict(r) for r in rows], "count": len(rows)}
 
 
 @router.post("/{repo_name}/index")
-async def trigger_index(repo_name: str, background_tasks: BackgroundTasks):
+async def trigger_index(
+    repo_name: str,
+    background_tasks: BackgroundTasks,
+    org: ActiveOrg = Depends(require_role("member")),
+):
     """Queue a repo for re-indexing."""
+    await _assert_repo_in_org(repo_name, org.org_id)
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        exists = await conn.fetchval("SELECT name FROM repos WHERE name=$1", repo_name)
-    if not exists:
-        raise HTTPException(status_code=404, detail=f"Repo '{repo_name}' not found")
-
     async with pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO index_requests (repo_name) VALUES ($1)",
@@ -161,22 +178,25 @@ async def trigger_index(repo_name: str, background_tasks: BackgroundTasks):
 
 
 @router.post("/index-all")
-async def trigger_index_all():
-    """Queue all repos for re-indexing."""
+async def trigger_index_all(org: ActiveOrg = Depends(require_role("member"))):
+    """Queue all of the active organization's repos for re-indexing."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute("INSERT INTO index_requests (repo_name) VALUES (NULL)")
-    return {"status": "queued", "message": "All repos queued for indexing"}
+        names = await _org_repo_names(conn, org.org_id)
+        for name in names:
+            await conn.execute("INSERT INTO index_requests (repo_name) VALUES ($1)", name)
+    return {"status": "queued", "message": f"{len(names)} repos queued for indexing"}
 
 
 @router.get("/{repo_name}/files")
-async def list_files(repo_name: str, path: str = ""):
+async def list_files(repo_name: str, path: str = "", org: ActiveOrg = Depends(get_active_org)):
     """List files in a repo directory."""
     import os
     from pathlib import Path
     from ...config import get_forge_config
     from ...indexer.git_manager import get_repo_local_path
 
+    await _assert_repo_in_org(repo_name, org.org_id)
     cfg = get_forge_config()
     repo_cfg = next((r for r in cfg.repos if r.name == repo_name), None)
     if not repo_cfg:
@@ -200,8 +220,9 @@ async def list_files(repo_name: str, path: str = ""):
 
 
 @router.get("/{repo_name}/stats")
-async def repo_stats(repo_name: str):
+async def repo_stats(repo_name: str, org: ActiveOrg = Depends(get_active_org)):
     """Get repository-level analytics for drill-down view."""
+    await _assert_repo_in_org(repo_name, org.org_id)
     pool = await get_pool()
     async with pool.acquire() as conn:
         repo_row = await conn.fetchrow(
@@ -267,16 +288,16 @@ class CreateRepoRequest(BaseModel):
 
 
 @router.post("")
-async def create_repo(req: CreateRepoRequest):
-    """Add a new repository to the configuration."""
+async def create_repo(req: CreateRepoRequest, org: ActiveOrg = Depends(require_role("member"))):
+    """Add a new repository to the active organization."""
     from ...config import RepoConfig, get_forge_config
-    
+
     cfg = get_forge_config()
-    
-    # Check if repo name already exists
+
+    # Repo names are globally unique (single shared indexing config).
     if any(r.name == req.name for r in cfg.repos):
         raise HTTPException(status_code=400, detail=f"Repository '{req.name}' already exists")
-    
+
     # Get the RepoConfig class from config
     # Create new repo config
     new_repo = RepoConfig(
@@ -287,21 +308,27 @@ async def create_repo(req: CreateRepoRequest):
         branch=req.branch,
         language=req.language or "auto",
     )
-    
+
     cfg.repos.append(new_repo)
     await persist_runtime_config(cfg)
     await sync_repos_config()
-    
+
+    # Attribute the new repo to the active organization.
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE repos SET org_id = $1 WHERE name = $2", org.org_id, req.name)
+
     return {"status": "ok", "repo": {"name": req.name, "type": req.type}}
 
 
 @router.put("/{repo_name}")
-async def update_repo(repo_name: str, req: CreateRepoRequest):
+async def update_repo(repo_name: str, req: CreateRepoRequest, org: ActiveOrg = Depends(require_role("member"))):
     """Update an existing repository configuration."""
     from ...config import RepoConfig, get_forge_config
-    
+
+    await _assert_repo_in_org(repo_name, org.org_id)
     cfg = get_forge_config()
-    
+
     # Find the repo
     repo_idx = next((i for i, r in enumerate(cfg.repos) if r.name == repo_name), None)
     if repo_idx is None:
@@ -323,19 +350,25 @@ async def update_repo(repo_name: str, req: CreateRepoRequest):
     
     await persist_runtime_config(cfg)
     await sync_repos_config()
-    
+
+    # Preserve org attribution across renames.
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("UPDATE repos SET org_id = $1 WHERE name = $2", org.org_id, req.name)
+
     return {"status": "ok", "repo": {"name": req.name, "type": req.type}}
 
 
 @router.delete("/{repo_name}")
-async def delete_repo(repo_name: str):
+async def delete_repo(repo_name: str, org: ActiveOrg = Depends(require_role("member"))):
     """Remove a repository from the configuration."""
     from ...config import get_forge_config, get_settings
     import shutil
     from pathlib import Path
-    
+
+    await _assert_repo_in_org(repo_name, org.org_id)
     cfg = get_forge_config()
-    
+
     # Find and remove the repo
     repo_idx = next((i for i, r in enumerate(cfg.repos) if r.name == repo_name), None)
     if repo_idx is None:

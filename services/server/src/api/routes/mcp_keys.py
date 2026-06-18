@@ -1,11 +1,14 @@
-"""MCP API key management routes."""
+"""MCP API key management routes (scoped to the active organization)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from ... import tenancy
+from ..deps import ActiveOrg, get_active_org, get_current_user_id, require_role
 from ..security import (
     create_mcp_api_key,
+    get_mcp_api_key,
     list_mcp_api_keys,
     revoke_mcp_api_key,
     validate_mcp_api_key,
@@ -29,20 +32,22 @@ class CreateKeyResponse(BaseModel):
 
 
 @router.post("", response_model=CreateKeyResponse)
-async def create_key(req: CreateKeyRequest, user_id: int = 1):
-    """Create a new MCP API key. The key is shown only once."""
-    # TODO: Get real user_id from session after auth is implemented
+async def create_key(
+    req: CreateKeyRequest,
+    user_id: int = Depends(get_current_user_id),
+    org: ActiveOrg = Depends(require_role("member")),
+):
+    """Create a new MCP API key for the active organization. Shown only once."""
     raw_key = await create_mcp_api_key(
         name=req.name,
         scope=req.scope,
         created_by=user_id,
         expires_days=req.expires_days,
+        org_id=org.org_id,
     )
 
-    # Get the created key's ID and metadata
-    keys = await list_mcp_api_keys(user_id)
+    keys = await list_mcp_api_keys(org_id=org.org_id)
     key_info = next((k for k in keys if k["name"] == req.name), None)
-
     if not key_info:
         raise HTTPException(status_code=500, detail="Failed to create key")
 
@@ -56,25 +61,33 @@ async def create_key(req: CreateKeyRequest, user_id: int = 1):
 
 
 @router.get("")
-async def list_keys(user_id: int = 1):
-    """List all MCP API keys for the current user."""
-    # TODO: Get real user_id from session after auth is implemented
-    keys = await list_mcp_api_keys(user_id)
+async def list_keys(org: ActiveOrg = Depends(get_active_org)):
+    """List MCP API keys for the active organization."""
+    keys = await list_mcp_api_keys(org_id=org.org_id)
     for key in keys:
-        if key.get("created_at"):
-            key["created_at"] = key["created_at"].isoformat()
-        if key.get("last_used_at"):
-            key["last_used_at"] = key["last_used_at"].isoformat()
-        if key.get("expires_at"):
-            key["expires_at"] = key["expires_at"].isoformat()
+        for field in ("created_at", "last_used_at", "expires_at"):
+            if key.get(field):
+                key[field] = key[field].isoformat()
     return {"keys": keys}
 
 
 @router.delete("/{key_id}")
-async def revoke_key(key_id: int, user_id: int = 1):
-    """Revoke an MCP API key."""
-    # TODO: Verify ownership before revoking
-    success = await revoke_mcp_api_key(key_id)
+async def revoke_key(
+    key_id: int,
+    user_id: int = Depends(get_current_user_id),
+    org: ActiveOrg = Depends(get_active_org),
+):
+    """Revoke an MCP API key. Requires it to belong to the active organization,
+    and either admin role or ownership of the key."""
+    key = await get_mcp_api_key(key_id)
+    if not key or key.get("org_id") != org.org_id:
+        raise HTTPException(status_code=404, detail="Key not found")
+
+    is_owner = key.get("created_by") == user_id
+    if not is_owner and not tenancy.role_at_least(org.role, "admin"):
+        raise HTTPException(status_code=403, detail="Only the key creator or an org admin can revoke this key")
+
+    success = await revoke_mcp_api_key(key_id, org_id=org.org_id)
     if not success:
         raise HTTPException(status_code=404, detail="Key not found")
     return {"status": "ok"}
