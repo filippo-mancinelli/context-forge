@@ -52,7 +52,7 @@ async def list_memories(limit: int = 50, org: ActiveOrg = Depends(get_active_org
     """List recent memories in the active organization's namespace."""
     try:
         mem = _get_memory()
-        results = mem.get_all(filters={"user_id": org.namespace})
+        results = mem.get_all(user_id=org.namespace)
         memories = results.get("results", results) if isinstance(results, dict) else results
         return {"memories": memories[:limit], "count": len(memories[:limit])}
     except Exception as e:
@@ -64,7 +64,7 @@ async def search_memories(req: MemorySearchRequest, org: ActiveOrg = Depends(get
     """Search memories by semantic similarity within the active organization."""
     try:
         mem = _get_memory()
-        results = mem.search(req.query, filters={"user_id": org.namespace}, limit=req.limit)
+        results = mem.search(req.query, user_id=org.namespace, limit=req.limit)
         memories = results.get("results", results) if isinstance(results, dict) else results
         return {"memories": memories, "count": len(memories)}
     except Exception as e:

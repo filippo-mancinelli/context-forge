@@ -158,7 +158,7 @@ async def memory_search(query: str, limit: int = 10, user_id: Optional[str] = No
     from .context import get_current_namespace
     uid = user_id or get_current_namespace() or get_forge_config().memory.user_id
     try:
-        results = _get_memory().search(query, filters={"user_id": uid}, limit=limit)
+        results = _get_memory().search(query, user_id=uid, limit=limit)
         memories = results.get("results", results) if isinstance(results, dict) else results
         return {"status": "ok", "memories": memories, "count": len(memories)}
     except Exception as e:
@@ -181,7 +181,7 @@ async def memory_list(limit: int = 20, user_id: Optional[str] = None) -> dict:
     from .context import get_current_namespace
     uid = user_id or get_current_namespace() or get_forge_config().memory.user_id
     try:
-        results = _get_memory().get_all(filters={"user_id": uid})
+        results = _get_memory().get_all(user_id=uid)
         memories = results.get("results", results) if isinstance(results, dict) else results
         return {"status": "ok", "memories": memories[:limit], "count": len(memories[:limit])}
     except Exception as e:
