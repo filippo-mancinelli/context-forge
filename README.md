@@ -1,275 +1,62 @@
 # context-forge
 
-Runtime-first agent context infrastructure for Claude Code, Codex, Cursor, and other MCP clients.
+Self-hosted context infrastructure for AI coding agents. Exposes a single MCP endpoint that gives Claude Code, Codex, Cursor, and other MCP clients three capabilities: persistent memory, semantic code search across repositories, and async job execution. Multi-tenant by design, managed from a web UI.
 
-context-forge provides:
+## Features
 
-- Persistent memory with Mem0 + pgvector
-- Semantic repository search across local, GitHub, and GitLab repos
-- Async HTTP jobs for slow downstream services
-- One MCP endpoint plus a web UI for runtime administration
+- **Persistent memory** — long-term memory with Mem0 + pgvector, scoped per organization.
+- **Semantic repository search** — index and query local, GitHub, and GitLab repos using tree-sitter parsing and vector embeddings.
+- **Async jobs** — offload slow downstream calls without hitting client timeouts.
+- **Multi-tenancy** — organizations as isolation boundaries with `owner / admin / member / viewer` roles and email invitations.
+- **Runtime-first config** — manage repositories, providers, tokens, and indexing from the UI; `.env` and YAML are only for bootstrap.
+- **Pluggable providers** — OpenAI, Jina, OpenAI-compatible, or fully local embeddings.
 
-## Runtime-first model
+## Architecture
 
-After bootstrap, the source of truth is the runtime configuration stored in Postgres.
+| Service | Stack | Ports |
+|---|---|---|
+| `context-forge` | Python 3.11, FastAPI (REST), FastMCP (MCP) | `8000/api`, `4000/mcp` |
+| `postgres` | PostgreSQL 16 + pgvector | `5432` |
+| `ui` | React 18, TypeScript, Vite, TailwindCSS | `3000` |
 
-- Use the web UI to manage repositories, providers, tokens, indexing, and memory defaults
-- Keep `.env` for bootstrap and infrastructure secrets
-- Keep `context-forge.yml` only for bootstrap defaults, disaster recovery, or legacy import
-
-On startup, if runtime config is missing but bootstrap config contains meaningful values, context-forge imports that configuration into the database automatically.
-
-## Services
-
-- `postgres`: PostgreSQL 16 + pgvector
-- `context-forge`: MCP on `:4000/mcp`, REST API on `:8000/api`
-- `ui`: React app on `:3000`
-
-The primary landing page in the UI is now `Repositories`.
+Indexing uses tree-sitter (Python, JS/TS, Go, Java), with scheduled re-indexing via APScheduler.
 
 ## Quick start
 
-### 1. Bootstrap files
-
-Run the setup script or create the files manually.
-
-Linux or macOS:
-
 ```bash
-bash setup.sh
+bash setup.sh            # or: .\setup.ps1 on Windows
+docker compose up -d
 ```
 
-Windows PowerShell:
+Then open the UI at `http://localhost:3000` and complete setup with your `SETUP_BOOTSTRAP_TOKEN`.
 
-```powershell
-.\setup.ps1
-```
-
-Manual bootstrap:
-
-```bash
-cp .env.example .env
-cp context-forge.yml.example context-forge.yml
-cp docker-compose.override.yml.example docker-compose.override.yml
-```
-
-What the bootstrap files are for:
-
-- `.env`: Docker/runtime secrets and first-boot defaults
-- `context-forge.yml`: optional baseline repo/indexing config for import
-- `docker-compose.override.yml`: local repo mounts only
-
-### 2. Required environment variables
-
-At minimum set:
+Minimum environment variables:
 
 ```env
 POSTGRES_PASSWORD=...
 SETUP_BOOTSTRAP_TOKEN=...
+OPENAI_API_KEY=...        # or another configured provider
 ```
 
-Optional provider defaults:
-
-```env
-OPENAI_API_KEY=...
-ANTHROPIC_API_KEY=...
-DEEPSEEK_API_KEY=...
-GITHUB_TOKEN=...
-GITLAB_TOKEN=...
-
-LLM_PROVIDER=openai
-LLM_MODEL=gpt-4o-mini
-
-EMBEDDINGS_PROVIDER=openai
-EMBEDDINGS_MODEL=text-embedding-3-small
-EMBEDDINGS_DIMS=1536
-EMBEDDINGS_API_KEY=
-EMBEDDINGS_BASE_URL=
-```
-
-Supported embedding providers in the app:
-
-- `openai`
-- `jina`
-- `openai-compatible`
-- `local`
-
-### 3. Start the stack
-
-```bash
-docker compose up -d
-```
-
-### 4. Complete setup in the UI
-
-Open:
-
-- UI: [http://localhost:3000](http://localhost:3000)
-- API health: [http://localhost:8000/api/health](http://localhost:8000/api/health)
-
-Setup behavior:
-
-- Fresh install: enter bootstrap token, admin account, and optional initial runtime config
-- Legacy install: if bootstrap files were auto-imported, create only the admin account and continue
-
-After login:
-
-- `Repositories` is the operational home page
-- `Settings` is the runtime control plane
-
-## Local repositories
-
-For local repositories, mount them into the server container through `docker-compose.override.yml`.
-
-Example:
-
-```yaml
-services:
-  context-forge:
-    volumes:
-      - /home/user/projects/my-backend:/repos/my-backend:ro
-      # Windows:
-      # - C:/Users/user/projects/my-backend:/repos/my-backend:ro
-```
-
-Then add the mounted path from the UI or place it in `context-forge.yml` for first import.
-
-## Hosted embedding examples
-
-OpenAI:
-
-```env
-EMBEDDINGS_PROVIDER=openai
-EMBEDDINGS_MODEL=text-embedding-3-small
-EMBEDDINGS_DIMS=1536
-OPENAI_API_KEY=...
-```
-
-OpenAI-compatible provider:
-
-```env
-EMBEDDINGS_PROVIDER=openai-compatible
-EMBEDDINGS_MODEL=<provider-model>
-EMBEDDINGS_DIMS=<provider-dims>
-EMBEDDINGS_API_KEY=...
-EMBEDDINGS_BASE_URL=https://provider.example/v1
-```
-
-Jina:
-
-```env
-EMBEDDINGS_PROVIDER=jina
-EMBEDDINGS_MODEL=jina-embeddings-v3
-EMBEDDINGS_DIMS=1024
-EMBEDDINGS_API_KEY=...
-```
-
-Important:
-
-- Changing embeddings provider or model requires repository re-indexing
-- Changing `EMBEDDINGS_DIMS` requires resetting vector-backed data and then re-indexing
+See `.env.example` for the full list.
 
 ## MCP tools
 
-Memory:
+- **Memory:** `memory_add`, `memory_search`, `memory_list`, `memory_delete`
+- **Repositories:** `repo_list`, `repo_search`, `repo_get_file`, `repo_index`, `repo_relationships`
+- **Jobs:** `job_submit`, `job_status`, `job_result`
 
-- `memory_add`
-- `memory_search`
-- `memory_list`
-- `memory_delete`
+## Agent setup
 
-Repositories:
+Connection guides per client:
 
-- `repo_list`
-- `repo_search`
-- `repo_get_file`
-- `repo_index`
-- `repo_relationships`
+- [Claude Code](docs/claude-code.md)
+- [Codex](docs/codex.md)
+- [Cursor](docs/cursor.md)
 
-Jobs:
+## Security
 
-- `job_submit`
-- `job_status`
-- `job_result`
-
-## Web UI
-
-Main pages:
-
-- `Repositories`: home page for repo browsing, import, indexing, and drill-down
-- `Settings`: runtime config for providers, tokens, indexing, and manual repo entries
-- `Memory`
-- `Organization`: members, roles, and invitations for the active organization
-- `MCP Tools`
-- `Async Jobs`
-
-## Organizations & roles (multi-tenancy)
-
-context-forge is multi-tenant. Every user belongs to one or more **organizations**,
-and each organization is an isolation boundary: it has its own memory namespace,
-API keys, jobs, and repositories. Switch the active organization from the
-selector in the sidebar; the active organization travels with each request via
-the `X-Org-Id` header.
-
-**Roles** (highest to lowest): `owner` › `admin` › `member` › `viewer`.
-
-- `viewer` — read-only access to repos, memory, and search.
-- `member` — can also create/index repos and create API keys.
-- `admin` — can also manage members and invitations and rename the organization.
-- `owner` — full control, including deleting the organization. An organization
-  always keeps at least one owner.
-
-**Inviting people.** Admins invite by email from the `Organization` page. If the
-email already has an account they are added immediately; otherwise an invite link
-is generated (self-hosted deployments send no email, so share the link directly).
-The invitee opens the link, picks a username and password, and joins with the
-assigned role.
-
-On upgrade, a `Default` organization is created automatically and all existing
-admins, repositories, memories, jobs, and API keys are attributed to it, so
-existing setups keep working unchanged.
-
-**Per-organization configuration.** Each organization owns its own repository
-list and indexing settings (schedule, exclude patterns, chunk sizes), stored
-independently and indexed on its own scheduled job. Repository names only need
-to be unique *within* an organization, so the same name can be reused across
-organizations without collisions (remote clones are cached per organization).
-
-Model and provider settings — embeddings provider/model/dimensions, LLM, and
-provider tokens — remain **global** because they are bound to the shared vector
-store dimension, and can only be changed by an organization admin.
-
-## Agent connection guides
-
-- [docs/claude-code.md](docs/claude-code.md)
-- [docs/codex.md](docs/codex.md)
-- [docs/cursor.md](docs/cursor.md)
-
-## Useful commands
-
-```bash
-docker compose logs -f context-forge
-docker compose restart context-forge
-docker compose down
-docker compose down -v && docker compose up -d
-curl http://localhost:8000/api/health
-```
-
-## Deployment notes
-
-For remote deployments:
-
-1. Copy the repository to the server
-2. Create `.env`
-3. Optionally create `context-forge.yml` and `docker-compose.override.yml`
-4. Run `docker compose up -d`
-5. Open the UI and complete setup with `SETUP_BOOTSTRAP_TOKEN`
-
-Security notes:
-
-- The REST UI/API has admin auth after setup
-- The MCP endpoint currently has no built-in authentication
-- Expose MCP only on trusted networks or behind a secure proxy/VPN
+The REST API/UI is authenticated after setup. The MCP endpoint has no built-in auth — expose it only on trusted networks or behind a secure proxy/VPN.
 
 ## License
 
