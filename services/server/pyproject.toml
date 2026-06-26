@@ -21,7 +21,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.0",
 
     # Memory
-    "mem0ai>=0.1.0",
+    "mem0ai>=1.0.11,<2.0.0",
 
     # Embeddings
     "openai>=1.50.0",
