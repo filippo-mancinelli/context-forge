@@ -23,8 +23,10 @@ export default function RepoDetail() {
   const [stats, setStats] = useState<RepoStats | null>(null)
   const [path, setPath] = useState('')
   const [entries, setEntries] = useState<{ name: string; type: string; size?: number; path: string }[]>([])
+  const [filesAvailable, setFilesAvailable] = useState(true)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [filesError, setFilesError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [searching, setSearching] = useState(false)
   const [results, setResults] = useState<RepoSearchResult[]>([])
@@ -41,6 +43,7 @@ export default function RepoDetail() {
       const data = await api.repos.files(repoName, nextPath)
       setPath(data.path)
       setEntries(data.entries)
+      setFilesAvailable(data.available !== false)
     },
     [repoName]
   )
@@ -49,16 +52,13 @@ export default function RepoDetail() {
     let mounted = true
     async function load() {
       setLoading(true)
-      try {
-        await Promise.all([loadStats(), loadFiles('')])
-        if (!mounted) return
-        setError(null)
-      } catch (e) {
-        if (!mounted) return
-        setError(String(e))
-      } finally {
-        if (mounted) setLoading(false)
-      }
+      // Load stats and files independently so a failure in one (e.g. the
+      // working tree isn't cached on this server) doesn't blank the whole page.
+      const [statsRes, filesRes] = await Promise.allSettled([loadStats(), loadFiles('')])
+      if (!mounted) return
+      setError(statsRes.status === 'rejected' ? String(statsRes.reason) : null)
+      setFilesError(filesRes.status === 'rejected' ? String(filesRes.reason) : null)
+      setLoading(false)
     }
     load()
     return () => { mounted = false }
@@ -162,21 +162,27 @@ export default function RepoDetail() {
                       key={entry.path}
                       onClick={() => entry.type === 'directory' && loadFiles(entry.path)}
                       style={{ borderBottom: '1px solid var(--border)' }}
-                      className="w-full text-left flex items-center justify-between px-4 py-2 hover:bg-surface transition-colors last:border-b-0"
+                      className="w-full text-left flex items-center justify-between gap-2 px-4 py-2 hover:bg-surface transition-colors last:border-b-0"
                     >
-                      <span className="inline-flex items-center gap-2 text-sm">
+                      <span className="inline-flex items-center gap-2 text-sm min-w-0">
                         {entry.type === 'directory'
-                          ? <Folder className="w-3.5 h-3.5 text-accent" />
-                          : <FileCode2 className="w-3.5 h-3.5 text-muted" />}
-                        {entry.name}
+                          ? <Folder className="w-3.5 h-3.5 text-accent flex-shrink-0" />
+                          : <FileCode2 className="w-3.5 h-3.5 text-muted flex-shrink-0" />}
+                        <span className="truncate">{entry.name}</span>
                       </span>
-                      <span className="text-xs text-muted">
+                      <span className="text-xs text-muted flex-shrink-0">
                         {entry.type === 'directory' ? '/' : formatBytes(entry.size)}
                       </span>
                     </button>
                   ))}
                   {entries.length === 0 && (
-                    <p className="text-sm text-muted px-4 py-3">No files in this folder.</p>
+                    <p className="text-sm text-muted px-4 py-3">
+                      {filesError
+                        ? 'Could not load files for this repository.'
+                        : !filesAvailable
+                          ? 'Source files are not cached on this server. The repository is indexed, but its working tree is not available here.'
+                          : 'No files in this folder.'}
+                    </p>
                   )}
                 </div>
               </div>
@@ -266,10 +272,10 @@ export default function RepoDetail() {
                         style={{ border: '1px solid var(--border)' }}
                         className="p-3"
                       >
-                        <p className="text-xs text-muted font-mono mb-1">
+                        <p className="text-xs text-muted font-mono mb-1 break-all">
                           {result.file_path} · {result.chunk_type} · score {result.score.toFixed(3)}
                         </p>
-                        <p className="text-sm">{snippet(result.content)}</p>
+                        <p className="text-sm break-words">{snippet(result.content)}</p>
                       </div>
                     ))}
                   </div>
