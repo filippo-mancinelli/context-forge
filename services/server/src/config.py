@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     mcp_port: int = 4000
     api_port: int = 8000
     repos_cache_dir: str = "/data/repos-cache"
+    kb_data_dir: str = "/data/kb"
     log_level: str = "INFO"
     config_path: str = "/app/context-forge.yml"
     setup_bootstrap_token: str = ""

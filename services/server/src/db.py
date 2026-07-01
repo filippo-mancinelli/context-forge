@@ -204,6 +204,48 @@ ALTER TABLE repo_chunks    ADD COLUMN IF NOT EXISTS org_id BIGINT;
 ALTER TABLE index_requests ADD COLUMN IF NOT EXISTS org_id BIGINT;
 
 CREATE INDEX IF NOT EXISTS repo_chunks_org_repo_idx ON repo_chunks (org_id, repo_name);
+
+-- ===== Knowledge base: uploaded documents + their embedded chunks =====
+CREATE TABLE IF NOT EXISTS kb_documents (
+    id            BIGSERIAL PRIMARY KEY,
+    org_id        BIGINT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    title         TEXT NOT NULL,
+    filename      TEXT NOT NULL,
+    content_type  TEXT,
+    extension     TEXT,
+    size_bytes    BIGINT DEFAULT 0,
+    sha256        TEXT,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    total_chunks  INTEGER DEFAULT 0,
+    char_count    INTEGER DEFAULT 0,
+    error_message TEXT,
+    stored_path   TEXT,
+    metadata      JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    uploaded_at   TIMESTAMPTZ DEFAULT NOW(),
+    processed_at  TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS kb_documents_org_idx ON kb_documents (org_id);
+CREATE INDEX IF NOT EXISTS kb_documents_status_idx ON kb_documents (status);
+
+CREATE TABLE IF NOT EXISTS kb_chunks (
+    id            BIGSERIAL PRIMARY KEY,
+    org_id        BIGINT NOT NULL,
+    document_id   BIGINT NOT NULL REFERENCES kb_documents(id) ON DELETE CASCADE,
+    chunk_index   INTEGER NOT NULL,
+    content       TEXT NOT NULL,
+    metadata      JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    embedding     vector({dims}),
+    indexed_at    TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (document_id, chunk_index)
+);
+
+CREATE INDEX IF NOT EXISTS kb_chunks_embedding_idx
+    ON kb_chunks USING ivfflat (embedding vector_cosine_ops)
+    WITH (lists = 100);
+
+CREATE INDEX IF NOT EXISTS kb_chunks_org_idx ON kb_chunks (org_id);
+CREATE INDEX IF NOT EXISTS kb_chunks_doc_idx ON kb_chunks (document_id);
 """
 
 
