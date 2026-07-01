@@ -48,6 +48,38 @@ async function request<T>(path: string, options?: RequestInit, includeAuth = tru
   return res.json()
 }
 
+function authHeaders(): Record<string, string> {
+  const token = getAuthToken()
+  const activeOrg = getActiveOrgId()
+  return {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(activeOrg ? { 'X-Org-Id': String(activeOrg) } : {}),
+  }
+}
+
+async function uploadRequest<T>(path: string, formData: FormData): Promise<T> {
+  // Note: do NOT set Content-Type — the browser adds the multipart boundary.
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: formData,
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`${res.status} ${res.statusText}: ${text}`)
+  }
+  return res.json()
+}
+
+async function downloadRequest(path: string): Promise<Blob> {
+  const res = await fetch(`${BASE}${path}`, { headers: authHeaders() })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`${res.status} ${res.statusText}: ${text}`)
+  }
+  return res.blob()
+}
+
 export interface Repo {
   name: string
   type: 'local' | 'github' | 'gitlab'
@@ -121,6 +153,41 @@ export interface RepoStats {
   repo: Repo
   chunk_types: { chunk_type: string; count: number }[]
   by_extension: { extension: string; count: number }[]
+}
+
+export type KbDocumentStatus = 'pending' | 'processing' | 'ready' | 'error'
+
+export interface KbDocument {
+  id: number
+  title: string
+  filename: string
+  content_type?: string
+  extension?: string
+  size_bytes: number
+  status: KbDocumentStatus
+  total_chunks: number
+  char_count: number
+  error_message?: string
+  metadata?: Record<string, unknown>
+  uploaded_at?: string
+  processed_at?: string
+}
+
+export interface KbUploadResult {
+  status: string
+  created: { id: number; title: string; filename: string; extension?: string; size_bytes: number; status: string; supported?: boolean }[]
+  rejected: { filename: string; reason: string }[]
+}
+
+export interface KbSearchResult {
+  document_id: number
+  title: string
+  filename: string
+  extension?: string
+  chunk_index: number
+  content: string
+  metadata?: Record<string, unknown> | null
+  score: number
 }
 
 export interface Memory {
@@ -363,6 +430,30 @@ export const api = {
         body: JSON.stringify({ query, limit }),
       }),
     delete: (id: string) => request(`/api/memory/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  },
+  kb: {
+    formats: () => request<{ extensions: string[] }>('/api/kb/formats'),
+    list: () => request<KbDocument[]>('/api/kb/documents'),
+    get: (id: number) => request<KbDocument>(`/api/kb/documents/${id}`),
+    chunks: (id: number, limit = 50) =>
+      request<{ document_id: number; chunks: { chunk_index: number; content: string }[]; count: number }>(
+        `/api/kb/documents/${id}/chunks?limit=${limit}`
+      ),
+    upload: (files: File[]) => {
+      const form = new FormData()
+      for (const file of files) form.append('files', file, file.name)
+      return uploadRequest<KbUploadResult>('/api/kb/documents', form)
+    },
+    reprocess: (id: number) =>
+      request<{ status: string; id: number }>(`/api/kb/documents/${id}/reprocess`, { method: 'POST' }),
+    delete: (id: number) =>
+      request<{ status: string; deleted: number }>(`/api/kb/documents/${id}`, { method: 'DELETE' }),
+    download: (id: number) => downloadRequest(`/api/kb/documents/${id}/download`),
+    search: (query: string, limit = 10) =>
+      request<{ results: KbSearchResult[]; count: number }>('/api/kb/search', {
+        method: 'POST',
+        body: JSON.stringify({ query, limit }),
+      }),
   },
   tools: {
     list: () => request<{ tools: Tool[]; count: number }>('/api/tools'),

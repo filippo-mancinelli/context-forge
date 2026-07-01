@@ -43,9 +43,11 @@ services:
       - MCP_PORT=4000
       - API_PORT=8000
       - REPOS_CACHE_DIR=/data/repos-cache
+      - KB_DATA_DIR=/data/kb
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - repos_cache:/data/repos-cache
+      - kb_data:/data/kb
       - ./context-forge.yml:/app/context-forge.yml:ro
     depends_on:
       postgres:
@@ -67,3 +69,4 @@ services:
 volumes:
   postgres_data:
   repos_cache:
+  kb_data:

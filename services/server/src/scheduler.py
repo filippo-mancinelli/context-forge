@@ -72,6 +72,13 @@ async def _check_index_requests() -> None:
     await run_pending_index_requests()
 
 
+async def _check_kb_documents() -> None:
+    """Process knowledge-base documents left in the pending state."""
+    from .kb.store import process_pending_documents
+
+    await process_pending_documents()
+
+
 async def start_scheduler() -> None:
     global _scheduler
     _scheduler = AsyncIOScheduler()
@@ -79,6 +86,11 @@ async def start_scheduler() -> None:
     # Check for pending index requests every 10 seconds.
     _scheduler.add_job(
         _check_index_requests, "interval", seconds=10, id="index_requests", replace_existing=True
+    )
+
+    # Safety-net for knowledge-base documents whose background task didn't run.
+    _scheduler.add_job(
+        _check_kb_documents, "interval", seconds=20, id="kb_documents", replace_existing=True
     )
 
     _scheduler.start()
