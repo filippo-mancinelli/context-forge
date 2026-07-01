@@ -42,12 +42,12 @@ function MemoryRow({ memory, onDelete }: { memory: MemoryItem; onDelete: (id: st
 
   return (
     <tr style={{ borderBottom: '1px solid var(--border)' }} className="last:border-b-0 group">
-      <td className="py-3 px-4 align-top">
-        <p className="text-sm">{memory.memory}</p>
+      <td className="py-3 px-4 align-top min-w-0">
+        <p className="text-sm break-words">{memory.memory}</p>
         {memory.metadata && Object.keys(memory.metadata).length > 0 && (
-          <div className="flex flex-wrap gap-1 mt-1.5">
+          <div className="flex flex-wrap gap-1 mt-1.5 min-w-0">
             {Object.entries(memory.metadata).slice(0, 4).map(([key, value]) => (
-              <code key={key} className="text-xs font-mono text-muted bg-surface border border-border px-1.5 py-0.5">
+              <code key={key} className="text-xs font-mono text-muted bg-surface border border-border px-1.5 py-0.5 break-all max-w-full">
                 {key}: {String(value)}
               </code>
             ))}
@@ -259,7 +259,7 @@ export default function Memory() {
             {isSearchMode ? 'No memories match your query.' : 'No memories stored yet.'}
           </p>
         ) : (
-          <div style={{ border: '1px solid var(--border)' }}>
+          <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto">
             <table className="w-full">
               <tbody>
                 {memories.map(memory => (

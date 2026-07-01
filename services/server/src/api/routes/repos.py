@@ -205,8 +205,15 @@ async def list_files(repo_name: str, path: str = "", org: ActiveOrg = Depends(ge
         raise HTTPException(status_code=404, detail=f"Repo '{repo_name}' not found")
 
     repo_path = Path(get_repo_local_path(repo_cfg, org.org_id))
-    target = repo_path / path.lstrip("/") if path else repo_path
 
+    # A repo can be indexed while its working tree is not cached on this server
+    # (e.g. the clone lives on ephemeral storage that was cleared, or indexing
+    # ran on a different worker). Surface an empty, "unavailable" listing rather
+    # than a hard 404 so the repo detail page still renders its analytics.
+    if not repo_path.exists():
+        return {"path": "", "entries": [], "available": False}
+
+    target = repo_path / path.lstrip("/") if path else repo_path
     if not target.exists():
         raise HTTPException(status_code=404, detail="Path not found")
 
@@ -218,7 +225,7 @@ async def list_files(repo_name: str, path: str = "", org: ActiveOrg = Depends(ge
             "size": entry.stat().st_size if entry.is_file() else None,
             "path": str(entry.relative_to(repo_path)),
         })
-    return {"path": path, "entries": entries}
+    return {"path": path, "entries": entries, "available": True}
 
 
 @router.get("/{repo_name}/stats")
