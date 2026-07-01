@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from ..config import get_settings
 from .routes import repos as repos_routes
 from .routes import memory as memory_routes
+from .routes import knowledge as knowledge_routes
 from .routes import jobs as jobs_routes
 from .routes import setup as setup_routes
 from .routes import auth as auth_routes
@@ -62,6 +63,7 @@ else:
 
 api.include_router(repos_routes.router, prefix="/api")
 api.include_router(memory_routes.router, prefix="/api")
+api.include_router(knowledge_routes.router, prefix="/api")
 api.include_router(jobs_routes.router, prefix="/api")
 api.include_router(setup_routes.router, prefix="/api")
 api.include_router(auth_routes.router, prefix="/api")
@@ -134,6 +136,9 @@ async def list_tools():
             {"name": "memory_search", "description": "Search memories semantically."},
             {"name": "memory_list", "description": "List recent memories."},
             {"name": "memory_delete", "description": "Delete a specific memory by its ID."},
+            {"name": "kb_search", "description": "Search uploaded knowledge-base documents by semantic similarity."},
+            {"name": "kb_list", "description": "List documents in the knowledge base and their processing status."},
+            {"name": "kb_get_document", "description": "Retrieve the full extracted text of a knowledge-base document."},
             {"name": "repo_list", "description": "List all configured repositories and their indexing status."},
             {"name": "repo_search", "description": "Search across indexed repositories using semantic similarity."},
             {"name": "repo_get_file", "description": "Read the full content of a file from an indexed repository."},

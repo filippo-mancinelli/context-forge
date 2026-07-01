@@ -6,11 +6,13 @@ FROM public.ecr.aws/docker/library/python:3.11-slim
 
 WORKDIR /app
 
-# System deps: git for cloning repos, build tools for tree-sitter bindings
+# System deps: git for cloning repos, build tools for tree-sitter bindings,
+# tesseract-ocr for extracting text from uploaded images (knowledge base).
 RUN apt-get update && apt-get install -y \
     git \
     build-essential \
     curl \
+    tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
@@ -28,7 +30,7 @@ RUN if [ "$EMBEDDINGS_PROVIDER" = "local" ]; then \
 
 COPY src/ ./src/
 
-# Create data directory for repo cache
-RUN mkdir -p /data/repos-cache
+# Create data directories for repo cache and knowledge-base uploads
+RUN mkdir -p /data/repos-cache /data/kb
 
 CMD ["python", "-m", "src.main"]
