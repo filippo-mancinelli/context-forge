@@ -393,7 +393,7 @@ export const api = {
     indexAll: () => request('/api/repos/index-all', { method: 'POST' }),
     stats: (name: string) => request<RepoStats>(`/api/repos/${encodeURIComponent(name)}/stats`),
     files: (name: string, path = '') =>
-      request<{ path: string; entries: { name: string; type: string; size?: number; path: string }[] }>(
+      request<{ path: string; entries: { name: string; type: string; size?: number; path: string }[]; available?: boolean }>(
         `/api/repos/${encodeURIComponent(name)}/files?path=${encodeURIComponent(path)}`
       ),
   },
