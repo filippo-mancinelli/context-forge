@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { GitBranch, Brain, Library, ChevronDown, ChevronRight, AlertCircle } from 'lucide-react'
 import { api, type ChatMessage, type ChatToolCall } from '../lib/api'
 import { Button, Textarea } from '../components/ui'
+import { Markdown } from '../components/Markdown'
 
 interface AssistantTurn {
   role: 'assistant'
@@ -218,7 +219,7 @@ export default function Chat() {
             turn.role === 'user' ? (
               <div key={idx} className="flex justify-end">
                 <div
-                  className="max-w-[80%] rounded px-3 py-2 text-sm bg-[#eaf4fb] whitespace-pre-wrap"
+                  className="max-w-[85%] sm:max-w-[80%] rounded px-3 py-2 text-sm bg-[#eaf4fb] whitespace-pre-wrap break-words"
                   style={{ border: '1px solid var(--border)' }}
                 >
                   {turn.content}
@@ -235,10 +236,14 @@ export default function Chat() {
                   </div>
                 )}
                 <div
-                  className="rounded px-3 py-2 text-sm bg-surface whitespace-pre-wrap"
+                  className="rounded px-3 py-2 text-sm bg-surface overflow-hidden"
                   style={{ border: '1px solid var(--border)' }}
                 >
-                  {turn.content || <span className="text-muted italic">(no answer)</span>}
+                  {turn.content ? (
+                    <Markdown content={turn.content} />
+                  ) : (
+                    <span className="text-muted italic">(no answer)</span>
+                  )}
                 </div>
                 {turn.model && (
                   <p className="text-[11px] text-muted">via {turn.model}</p>
