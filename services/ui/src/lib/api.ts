@@ -210,6 +210,27 @@ export interface Tool {
   description: string
 }
 
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface ChatToolCall {
+  tool: string
+  source: 'repositories' | 'memory' | 'knowledge_base'
+  query: string
+  result_count: number
+  results: Record<string, unknown>[]
+  error?: string | null
+}
+
+export interface ChatResponse {
+  reply: string
+  tool_calls: ChatToolCall[]
+  sources_used: { repositories: boolean; memory: boolean; knowledge_base: boolean }
+  model: string
+}
+
 export interface Job {
   id: string
   tool: string
@@ -457,6 +478,13 @@ export const api = {
   },
   tools: {
     list: () => request<{ tools: Tool[]; count: number }>('/api/tools'),
+  },
+  chat: {
+    send: (messages: ChatMessage[]) =>
+      request<ChatResponse>('/api/chat', {
+        method: 'POST',
+        body: JSON.stringify({ messages }),
+      }),
   },
   jobs: {
     list: (limit = 50) => request<{ jobs: Job[]; count: number }>(`/api/jobs?limit=${limit}`),
