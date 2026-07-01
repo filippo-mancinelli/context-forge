@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom'
-import { GitBranch, Brain, Wrench, Activity, SlidersHorizontal, Menu, X, Building2, Library } from 'lucide-react'
+import { GitBranch, Brain, Wrench, Activity, SlidersHorizontal, Menu, X, Building2, Library, MessagesSquare } from 'lucide-react'
 import Repos from './pages/Repos'
+import Chat from './pages/Chat'
 import Memory from './pages/Memory'
 import Knowledge from './pages/Knowledge'
 import Tools from './pages/Tools'
@@ -18,6 +19,7 @@ import { api } from './lib/api'
 import { useAppStore } from './store'
 
 const navLinks = [
+  { to: '/chat', icon: MessagesSquare, label: 'Agent Chat' },
   { to: '/repos', icon: GitBranch, label: 'Repositories' },
   { to: '/knowledge', icon: Library, label: 'Knowledge Base' },
   { to: '/memory', icon: Brain, label: 'Memory' },
@@ -248,6 +250,7 @@ export default function App() {
             <Routes>
               <Route path="/" element={<Navigate to="/repos" replace />} />
               <Route path="/search" element={<Search />} />
+              <Route path="/chat" element={<Chat />} />
               <Route path="/repos" element={<Repos />} />
               <Route path="/repos/:repoName" element={<RepoDetail />} />
               <Route path="/knowledge" element={<Knowledge />} />

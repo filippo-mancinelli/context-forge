@@ -8,6 +8,7 @@ Self-hosted context infrastructure for AI coding agents. Exposes a single MCP en
 - **Knowledge base** — upload documents (PDF, Word, Excel, PowerPoint, images with OCR, text, and more) via drag-and-drop; they're extracted, chunked, embedded, and made semantically searchable.
 - **Semantic repository search** — index and query local, GitHub, and GitLab repos using tree-sitter parsing and vector embeddings.
 - **Async jobs** — offload slow downstream calls without hitting client timeouts.
+- **Agent chat** — a built-in chat page where a tool-using agent searches your repos, memory, and knowledge base, showing every retrieval inline so you can verify context is surfaced correctly.
 - **Multi-tenancy** — organizations as isolation boundaries with `owner / admin / member / viewer` roles and email invitations.
 - **Runtime-first config** — manage repositories, providers, tokens, and indexing from the UI; `.env` and YAML are only for bootstrap.
 - **Pluggable providers** — OpenAI, Jina, OpenAI-compatible, or fully local embeddings.
