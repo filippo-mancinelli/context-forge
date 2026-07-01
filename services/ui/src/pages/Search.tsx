@@ -181,8 +181,8 @@ export default function Search() {
             {relationships.length > 0 && (
               <section>
                 <h2 className="text-base font-semibold mb-3">Repository relationships</h2>
-                <div style={{ border: '1px solid var(--border)' }}>
-                  <table className="w-full">
+                <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto">
+                  <table className="w-full min-w-[420px]">
                     <tbody>
                       {relationships.map(edge => (
                         <tr

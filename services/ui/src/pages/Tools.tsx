@@ -47,6 +47,36 @@ function ToolRow({ tool }: { tool: Tool }) {
   )
 }
 
+function ToolCard({ tool }: { tool: Tool }) {
+  const [copied, setCopied] = useState(false)
+  const group = getGroup(tool.name)
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(tool.name)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+
+  return (
+    <div style={{ border: '1px solid var(--border)' }} className="p-3">
+      <div className="flex items-start justify-between gap-2">
+        <code className="text-sm font-mono text-text break-all">{tool.name}()</code>
+        <button
+          onClick={handleCopy}
+          className="text-muted hover:text-text transition-colors flex-shrink-0 mt-0.5"
+          title="Copy tool name"
+        >
+          {copied ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
+        </button>
+      </div>
+      {group && <span className="text-xs text-muted">{group[1].label}</span>}
+      {tool.description && (
+        <p className="text-sm text-muted mt-1 break-words">{tool.description}</p>
+      )}
+    </div>
+  )
+}
+
 const MCP_SNIPPETS = [
   {
     key: 'claude',
@@ -210,8 +240,13 @@ export default function Tools() {
                   <h2 className="text-base font-semibold mb-3">
                     {meta?.label ?? 'Other'} tools
                   </h2>
-                  <div style={{ border: '1px solid var(--border)' }}>
-                    <table className="w-full">
+                  {/* Mobile: stacked cards */}
+                  <div className="space-y-3 md:hidden">
+                    {items.map(t => <ToolCard key={t.name} tool={t} />)}
+                  </div>
+                  {/* Desktop: table */}
+                  <div style={{ border: '1px solid var(--border)' }} className="hidden md:block overflow-x-auto">
+                    <table className="w-full min-w-[480px]">
                       <tbody>
                         {items.map(t => <ToolRow key={t.name} tool={t} />)}
                       </tbody>
