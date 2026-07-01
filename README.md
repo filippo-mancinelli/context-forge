@@ -5,6 +5,7 @@ Self-hosted context infrastructure for AI coding agents. Exposes a single MCP en
 ## Features
 
 - **Persistent memory** — long-term memory with Mem0 + pgvector, scoped per organization.
+- **Knowledge base** — upload documents (PDF, Word, Excel, PowerPoint, images with OCR, text, and more) via drag-and-drop; they're extracted, chunked, embedded, and made semantically searchable.
 - **Semantic repository search** — index and query local, GitHub, and GitLab repos using tree-sitter parsing and vector embeddings.
 - **Async jobs** — offload slow downstream calls without hitting client timeouts.
 - **Multi-tenancy** — organizations as isolation boundaries with `owner / admin / member / viewer` roles and email invitations.
@@ -43,6 +44,7 @@ See `.env.example` for the full list.
 ## MCP tools
 
 - **Memory:** `memory_add`, `memory_search`, `memory_list`, `memory_delete`
+- **Knowledge base:** `kb_search`, `kb_list`, `kb_get_document`
 - **Repositories:** `repo_list`, `repo_search`, `repo_get_file`, `repo_index`, `repo_relationships`
 - **Jobs:** `job_submit`, `job_status`, `job_result`
 
