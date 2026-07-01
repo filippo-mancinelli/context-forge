@@ -1,7 +1,6 @@
 """MCP tools for repository search and navigation."""
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Optional
@@ -10,11 +9,6 @@ from .server import mcp
 from ..db import get_pool
 
 logger = logging.getLogger(__name__)
-
-
-def _vector_to_pg(embedding: list[float]) -> str:
-    """Convert an embedding list to pgvector literal string format."""
-    return "[" + ",".join(f"{float(v):.10f}" for v in embedding) + "]"
 
 
 @mcp.tool()
@@ -61,64 +55,16 @@ async def repo_search(
     Returns:
         dict with list of results, each with repo_name, file_path, content, chunk_type, score
     """
-    from ..indexer.embedder import embed_text
+    from ..search import search_repo_chunks
     from .context import resolve_org_id
 
     org_id = await resolve_org_id()
 
     try:
-        embedding = await embed_text(query)
-    except Exception as e:
-        return {"status": "error", "error": f"Embedding failed: {e}"}
+        results = await search_repo_chunks(org_id, query, repos=repos, limit=limit)
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "error": f"Search failed: {e}"}
 
-    # asyncpg does not natively encode Python lists as pgvector; pass as a vector literal string
-    embedding_str = _vector_to_pg(embedding)
-
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        if repos:
-            rows = await conn.fetch(
-                """
-                SELECT repo_name, file_path, chunk_type, content, metadata,
-                       1 - (embedding <=> $1::vector) AS score
-                FROM repo_chunks
-                WHERE org_id = $2 AND repo_name = ANY($3)
-                ORDER BY embedding <=> $1::vector
-                LIMIT $4
-                """,
-                embedding_str,
-                org_id,
-                repos,
-                limit,
-            )
-        else:
-            rows = await conn.fetch(
-                """
-                SELECT repo_name, file_path, chunk_type, content, metadata,
-                       1 - (embedding <=> $1::vector) AS score
-                FROM repo_chunks
-                WHERE org_id = $2
-                ORDER BY embedding <=> $1::vector
-                LIMIT $3
-                """,
-                embedding_str,
-                org_id,
-                limit,
-            )
-
-    results = []
-    for r in rows:
-        meta = r["metadata"]
-        if isinstance(meta, str):
-            meta = json.loads(meta)
-        results.append({
-            "repo_name": r["repo_name"],
-            "file_path": r["file_path"],
-            "chunk_type": r["chunk_type"],
-            "content": r["content"],
-            "metadata": meta,
-            "score": round(float(r["score"]), 4),
-        })
     return {"status": "ok", "results": results, "count": len(results)}
 
 

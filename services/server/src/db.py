@@ -246,6 +246,19 @@ CREATE INDEX IF NOT EXISTS kb_chunks_embedding_idx
 
 CREATE INDEX IF NOT EXISTS kb_chunks_org_idx ON kb_chunks (org_id);
 CREATE INDEX IF NOT EXISTS kb_chunks_doc_idx ON kb_chunks (document_id);
+
+-- ===== Hybrid search: lexical full-text vectors alongside dense embeddings =====
+-- A generated tsvector column lets us rank chunks by exact-token relevance
+-- (identifiers, error strings, config keys) and fuse that ranking with vector
+-- similarity via RRF. The two-argument to_tsvector(regconfig, text) form is
+-- IMMUTABLE, which is required for use in a STORED generated column.
+ALTER TABLE repo_chunks ADD COLUMN IF NOT EXISTS
+    content_tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
+ALTER TABLE kb_chunks ADD COLUMN IF NOT EXISTS
+    content_tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
+
+CREATE INDEX IF NOT EXISTS repo_chunks_tsv_idx ON repo_chunks USING GIN (content_tsv);
+CREATE INDEX IF NOT EXISTS kb_chunks_tsv_idx ON kb_chunks USING GIN (content_tsv);
 """
 
 

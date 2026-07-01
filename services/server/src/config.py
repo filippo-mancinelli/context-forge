@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     cors_origins: str = ""
     # MCP authentication mode: "disabled", "enabled", "transition"
     mcp_auth_mode: str = "disabled"
+    # Hybrid retrieval: fuse dense vector similarity with lexical full-text
+    # ranking (RRF). Set SEARCH_HYBRID=false to fall back to vector-only search.
+    search_hybrid: bool = True
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
