@@ -16,7 +16,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ...config import get_settings
-from ...db import get_pool
 from ..deps import ActiveOrg, get_active_org
 
 logger = logging.getLogger(__name__)
@@ -45,39 +44,19 @@ SYSTEM_PROMPT = (
 # Retrieval helpers (org-scoped). These mirror the REST search endpoints but
 # are callable directly so the agent loop can invoke them as tools.
 # --------------------------------------------------------------------------- #
-def _vector_to_pg(embedding: list[float]) -> str:
-    return "[" + ",".join(f"{float(v):.10f}" for v in embedding) + "]"
-
-
 async def _search_repositories(org: ActiveOrg, query: str, limit: int = 8) -> list[dict[str, Any]]:
-    from ...indexer.embedder import embed_text
+    from ...search import search_repo_chunks
 
-    embedding = await embed_text(query)
-    embedding_str = _vector_to_pg(embedding)
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT repo_name, file_path, chunk_type, content,
-                   1 - (embedding <=> $1::vector) AS score
-            FROM repo_chunks
-            WHERE org_id = $2
-            ORDER BY embedding <=> $1::vector
-            LIMIT $3
-            """,
-            embedding_str,
-            org.org_id,
-            limit,
-        )
+    results = await search_repo_chunks(org.org_id, query, limit=limit)
     return [
         {
             "repo_name": r["repo_name"],
             "file_path": r["file_path"],
             "chunk_type": r["chunk_type"],
             "content": r["content"],
-            "score": round(float(r["score"]), 4),
+            "score": r["score"],
         }
-        for r in rows
+        for r in results
     ]
 
 
