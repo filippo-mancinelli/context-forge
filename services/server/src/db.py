@@ -184,6 +184,8 @@ ALTER TABLE admin_users   ADD COLUMN IF NOT EXISTS email   TEXT;
 ALTER TABLE mcp_api_keys  ADD COLUMN IF NOT EXISTS org_id  BIGINT;
 ALTER TABLE jobs          ADD COLUMN IF NOT EXISTS org_id  BIGINT;
 ALTER TABLE repos         ADD COLUMN IF NOT EXISTS org_id  BIGINT;
+-- Git commit a repo was last indexed at; enables diff-based incremental re-indexing.
+ALTER TABLE repos         ADD COLUMN IF NOT EXISTS indexed_commit TEXT;
 
 CREATE INDEX IF NOT EXISTS mcp_api_keys_org_idx ON mcp_api_keys (org_id);
 CREATE INDEX IF NOT EXISTS jobs_org_idx ON jobs (org_id);
