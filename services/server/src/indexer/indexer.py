@@ -11,10 +11,16 @@ import time
 from pathlib import Path
 from typing import Iterator
 
-from ..config import IndexingConfig, RepoConfig, get_settings
+from ..config import IndexingConfig, RepoConfig
 from ..db import get_pool
 from .embedder import embed_batch
-from .git_manager import ensure_repo_cloned, get_repo_local_path
+from .git_manager import (
+    commit_exists,
+    ensure_repo_cloned,
+    get_changed_files,
+    get_head_commit,
+    get_repo_local_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +152,50 @@ def _sliding_window_chunks(content: str, chunk_size: int, overlap: int) -> list[
     return chunks
 
 
+def _chunk_file(
+    repo_name: str,
+    file_path: Path,
+    rel_path: str,
+    indexing_cfg: "IndexingConfig",
+    language: str | None,
+) -> list[dict]:
+    """Read and chunk a single file. Returns chunk dicts ready for insertion."""
+    try:
+        content = file_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return []
+
+    detected_lang = language or _detect_language(file_path)
+    suffix = file_path.suffix.lower()
+    chunks: list[dict] = []
+
+    if suffix in PARSEABLE_EXTENSIONS:
+        ts_chunks = _extract_chunks_treesitter(content, detected_lang, indexing_cfg)
+        if ts_chunks:
+            for i, c in enumerate(ts_chunks):
+                chunks.append({
+                    "repo_name": repo_name,
+                    "file_path": rel_path,
+                    "chunk_index": i,
+                    "chunk_type": c["type"],
+                    "content": c["content"],
+                    "metadata": json.dumps({"name": c.get("name"), "start_line": c.get("start_line")}),
+                })
+            return chunks
+
+    sw_chunks = _sliding_window_chunks(content, indexing_cfg.chunk_size, indexing_cfg.chunk_overlap)
+    for i, c in enumerate(sw_chunks):
+        chunks.append({
+            "repo_name": repo_name,
+            "file_path": rel_path,
+            "chunk_index": i,
+            "chunk_type": c["type"],
+            "content": c["content"],
+            "metadata": json.dumps({"start_line": c.get("start_line", 0)}),
+        })
+    return chunks
+
+
 def _collect_chunks_sync(
     repo_name: str,
     local_path: str,
@@ -154,44 +204,12 @@ def _collect_chunks_sync(
 ) -> list[dict]:
     """Collect and parse all chunks from a repo synchronously (run in thread pool)."""
     all_chunks: list[dict] = []
-    root = Path(local_path)
     files_processed = 0
     started_at = time.monotonic()
 
     for file_path, rel_path in _iter_repo_files(local_path, indexing_cfg):
         files_processed += 1
-        try:
-            content = file_path.read_text(encoding="utf-8", errors="replace")
-        except Exception:
-            continue
-
-        detected_lang = language or _detect_language(file_path)
-        suffix = file_path.suffix.lower()
-
-        if suffix in PARSEABLE_EXTENSIONS:
-            ts_chunks = _extract_chunks_treesitter(content, detected_lang, indexing_cfg)
-            if ts_chunks:
-                for i, c in enumerate(ts_chunks):
-                    all_chunks.append({
-                        "repo_name": repo_name,
-                        "file_path": rel_path,
-                        "chunk_index": i,
-                        "chunk_type": c["type"],
-                        "content": c["content"],
-                        "metadata": json.dumps({"name": c.get("name"), "start_line": c.get("start_line")}),
-                    })
-                continue
-
-        sw_chunks = _sliding_window_chunks(content, indexing_cfg.chunk_size, indexing_cfg.chunk_overlap)
-        for i, c in enumerate(sw_chunks):
-            all_chunks.append({
-                "repo_name": repo_name,
-                "file_path": rel_path,
-                "chunk_index": i,
-                "chunk_type": c["type"],
-                "content": c["content"],
-                "metadata": json.dumps({"start_line": c.get("start_line", 0)}),
-            })
+        all_chunks.extend(_chunk_file(repo_name, file_path, rel_path, indexing_cfg, language))
 
         if files_processed % 200 == 0:
             logger.info(
@@ -213,6 +231,36 @@ def _collect_chunks_sync(
     return all_chunks
 
 
+def _collect_changed_chunks_sync(
+    repo_name: str,
+    local_path: str,
+    indexing_cfg: "IndexingConfig",
+    language: str | None,
+    changed_paths: list[str],
+) -> tuple[list[dict], list[str]]:
+    """Chunk only the given changed paths (run in thread pool).
+
+    Returns ``(chunks, indexed_paths)`` where ``indexed_paths`` are the paths that
+    still exist and are indexable — i.e. produced at least one chunk. A changed
+    path that was deleted, is no longer indexable, or yields no chunks is simply
+    omitted (its stale chunks are removed separately by the caller).
+    """
+    root = Path(local_path)
+    chunks: list[dict] = []
+    indexed_paths: list[str] = []
+
+    for rel in changed_paths:
+        file_path = root / rel
+        if not file_path.is_file() or not _is_indexable(rel, file_path, indexing_cfg):
+            continue
+        file_chunks = _chunk_file(repo_name, file_path, rel, indexing_cfg, language)
+        if file_chunks:
+            chunks.extend(file_chunks)
+            indexed_paths.append(rel)
+
+    return chunks, indexed_paths
+
+
 def _should_exclude(rel_path: str, patterns: list[str]) -> bool:
     for pattern in patterns:
         if fnmatch.fnmatch(rel_path, pattern) or fnmatch.fnmatch(f"/{rel_path}", pattern):
@@ -225,10 +273,28 @@ def _should_exclude(rel_path: str, patterns: list[str]) -> bool:
     return False
 
 
+def _is_indexable(rel_path: str, file_path: Path, config: IndexingConfig) -> bool:
+    """Return True if a single file should be indexed under the given config.
+
+    Shared by the full-tree walk and the incremental (changed-files) path so both
+    apply identical exclude/size/extension rules.
+    """
+    if _should_exclude(rel_path, config.exclude):
+        return False
+    suffix = file_path.suffix.lower()
+    if suffix in BINARY_EXTENSIONS:
+        return False
+    try:
+        if file_path.stat().st_size > config.max_file_size_kb * 1024:
+            return False
+    except OSError:
+        return False
+    return suffix in PARSEABLE_EXTENSIONS or suffix in TEXT_EXTENSIONS
+
+
 def _iter_repo_files(repo_path: str, config: IndexingConfig) -> Iterator[tuple[Path, str]]:
     """Yield (absolute_path, relative_path) for all indexable files in a repo."""
     root = Path(repo_path)
-    max_size = config.max_file_size_kb * 1024
     scanned = 0
     yielded = 0
 
@@ -251,20 +317,7 @@ def _iter_repo_files(repo_path: str, config: IndexingConfig) -> Iterator[tuple[P
             file_path = current_path / filename
             rel = file_path.relative_to(root).as_posix()
 
-            if _should_exclude(rel, config.exclude):
-                continue
-
-            suffix = file_path.suffix.lower()
-            if suffix in BINARY_EXTENSIONS:
-                continue
-
-            try:
-                if file_path.stat().st_size > max_size:
-                    continue
-            except OSError:
-                continue
-
-            if suffix not in PARSEABLE_EXTENSIONS and suffix not in TEXT_EXTENSIONS:
+            if not _is_indexable(rel, file_path, config):
                 continue
 
             yielded += 1
@@ -280,25 +333,79 @@ def _iter_repo_files(repo_path: str, config: IndexingConfig) -> Iterator[tuple[P
     logger.info("File scan complete for %s: scanned=%d indexable=%d", root.name, scanned, yielded)
 
 
-async def index_repo(org_id: int, repo: RepoConfig, indexing_cfg: IndexingConfig | None = None) -> None:
-    """Index a repository for an organization: parse, embed, store chunks."""
+async def _embed_chunks(chunks: list[dict], repo_name: str) -> list[list[float]]:
+    """Embed chunk contents in batches, logging progress. Returns one vector per chunk."""
+    texts = [c["content"] for c in chunks]
+    batch_size = 20
+    embeddings: list[list[float]] = []
+    started_at = time.monotonic()
+    total_batches = (len(texts) + batch_size - 1) // batch_size
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        logger.info(
+            "Embedding progress for %s: batch=%d/%d size=%d",
+            repo_name, (i // batch_size) + 1, total_batches, len(batch),
+        )
+        embeddings.extend(await embed_batch(batch))
+    logger.info(
+        "Embedding complete for %s: vectors=%d elapsed=%.1fs",
+        repo_name, len(embeddings), time.monotonic() - started_at,
+    )
+    return embeddings
+
+
+def _chunk_rows(org_id: int, chunks: list[dict], embeddings: list[list[float]]) -> list[tuple]:
+    """Build asyncpg parameter tuples for a batch of chunks."""
+    return [
+        (
+            org_id, c["repo_name"], c["file_path"], c["chunk_index"],
+            c["chunk_type"], c["content"], c["metadata"], _vector_to_pg(embeddings[idx]),
+        )
+        for idx, c in enumerate(chunks)
+    ]
+
+
+_INSERT_CHUNK_SQL = """
+INSERT INTO repo_chunks (org_id, repo_name, file_path, chunk_index, chunk_type, content, metadata, embedding)
+VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::vector)
+ON CONFLICT (org_id, repo_name, file_path, chunk_index) DO UPDATE
+SET content=EXCLUDED.content, metadata=EXCLUDED.metadata,
+    embedding=EXCLUDED.embedding, indexed_at=NOW()
+"""
+
+
+async def index_repo(
+    org_id: int,
+    repo: RepoConfig,
+    indexing_cfg: IndexingConfig | None = None,
+    *,
+    force_full: bool = False,
+) -> None:
+    """Index a repository for an organization: parse, embed, store chunks.
+
+    When the repo is a git checkout that was previously indexed at a known
+    commit, only the files changed since then are re-processed (incremental).
+    Otherwise — first index, non-git repo, unavailable base commit, or
+    ``force_full`` — the whole tree is re-indexed.
+    """
     pool = await get_pool()
     if indexing_cfg is None:
         from ..org_config import get_org_config
 
         indexing_cfg = (await get_org_config(org_id)).indexing
-    settings = get_settings()
 
-    # Update status to indexing
     async with pool.acquire() as conn:
+        prev = await conn.fetchrow(
+            "SELECT status, indexed_commit, total_chunks FROM repos WHERE org_id=$1 AND name=$2",
+            org_id, repo.name,
+        )
         await conn.execute(
             "UPDATE repos SET status='indexing', error_message=NULL WHERE org_id=$1 AND name=$2",
-            org_id,
-            repo.name,
+            org_id, repo.name,
         )
 
     try:
-        # Ensure repo is available locally
+        # Ensure repo is available locally (this pulls remotes to the latest commit).
         if repo.type != "local":
             local_path = await ensure_repo_cloned(repo, org_id)
         else:
@@ -307,103 +414,169 @@ async def index_repo(org_id: int, repo: RepoConfig, indexing_cfg: IndexingConfig
         if not Path(local_path).exists():
             raise FileNotFoundError(f"Repo path does not exist: {local_path}")
 
-        # Collect files and their chunks in a thread pool to keep event loop free
         language = repo.language if repo.language != "auto" else None
-        loop = asyncio.get_running_loop()
-        logger.info("Scanning and parsing files for %s ...", repo.name)
-        all_chunks = await loop.run_in_executor(
-            None, _collect_chunks_sync, repo.name, local_path, indexing_cfg, language
+        is_git = (Path(local_path) / ".git").exists()
+        new_commit = await get_head_commit(local_path) if is_git else None
+
+        can_incremental = (
+            not force_full
+            and is_git
+            and new_commit is not None
+            and prev is not None
+            and prev["status"] == "indexed"
+            and prev["indexed_commit"]
+            and (prev["total_chunks"] or 0) > 0
+            and await commit_exists(local_path, prev["indexed_commit"])
         )
 
-        if not all_chunks:
-            logger.warning("No chunks found for repo %s", repo.name)
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE repos SET status='indexed', last_indexed_at=NOW(), total_chunks=0 "
-                    "WHERE org_id=$1 AND name=$2",
-                    org_id,
-                    repo.name,
-                )
-            return
+        if can_incremental:
+            handled = await _index_repo_incremental(
+                pool, org_id, repo, indexing_cfg, language,
+                local_path, prev["indexed_commit"], new_commit,
+            )
+            if handled:
+                return
+            logger.info("Incremental indexing unavailable for %s; running full index", repo.name)
 
-        # Embed in batches
-        logger.info("Embedding %d chunks for %s", len(all_chunks), repo.name)
-        texts = [c["content"] for c in all_chunks]
-        batch_size = 20
-        embeddings = []
-        embed_started_at = time.monotonic()
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-            current_batch = (i // batch_size) + 1
-            total_batches = (len(texts) + batch_size - 1) // batch_size
-            logger.info(
-                "Embedding progress for %s: batch=%d/%d size=%d",
-                repo.name,
-                current_batch,
-                total_batches,
-                len(batch),
-            )
-            batch_embeddings = await embed_batch(batch)
-            embeddings.extend(batch_embeddings)
-        logger.info(
-            "Embedding complete for %s: vectors=%d elapsed=%.1fs",
-            repo.name,
-            len(embeddings),
-            time.monotonic() - embed_started_at,
-        )
-
-        # Upsert into DB (delete old chunks for this repo first)
-        async with pool.acquire() as conn:
-            await conn.execute(
-                "DELETE FROM repo_chunks WHERE org_id=$1 AND repo_name=$2", org_id, repo.name
-            )
-            insert_batch_size = 500
-            for start in range(0, len(all_chunks), insert_batch_size):
-                end = min(start + insert_batch_size, len(all_chunks))
-                await conn.executemany(
-                    """
-                    INSERT INTO repo_chunks (org_id, repo_name, file_path, chunk_index, chunk_type, content, metadata, embedding)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::vector)
-                    ON CONFLICT (org_id, repo_name, file_path, chunk_index) DO UPDATE
-                    SET content=EXCLUDED.content, metadata=EXCLUDED.metadata,
-                        embedding=EXCLUDED.embedding, indexed_at=NOW()
-                    """,
-                    [
-                        (
-                            org_id, c["repo_name"], c["file_path"], c["chunk_index"],
-                            c["chunk_type"], c["content"], c["metadata"],
-                            _vector_to_pg(embeddings[idx]),
-                        )
-                        for idx, c in enumerate(all_chunks[start:end], start=start)
-                    ],
-                )
-                logger.info(
-                    "DB write progress for %s: inserted=%d/%d",
-                    repo.name,
-                    end,
-                    len(all_chunks),
-                )
-            await conn.execute(
-                """
-                UPDATE repos
-                SET status='indexed', last_indexed_at=NOW(), total_chunks=$3, error_message=NULL
-                WHERE org_id=$1 AND name=$2
-                """,
-                org_id,
-                repo.name,
-                len(all_chunks),
-            )
-        logger.info("Indexed %d chunks for %s", len(all_chunks), repo.name)
+        await _index_repo_full(pool, org_id, repo, indexing_cfg, language, local_path, new_commit)
 
     except Exception as e:
         logger.error("Indexing failed for %s: %s", repo.name, e)
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE repos SET status='error', error_message=$3 WHERE org_id=$1 AND name=$2",
-                org_id,
-                repo.name,
-                str(e),
+                org_id, repo.name, str(e),
             )
+
+
+async def _index_repo_full(
+    pool,
+    org_id: int,
+    repo: RepoConfig,
+    indexing_cfg: IndexingConfig,
+    language: str | None,
+    local_path: str,
+    new_commit: str | None,
+) -> None:
+    """Full re-index: scan the whole tree, replace all of the repo's chunks."""
+    loop = asyncio.get_running_loop()
+    logger.info("Scanning and parsing files for %s ...", repo.name)
+    all_chunks = await loop.run_in_executor(
+        None, _collect_chunks_sync, repo.name, local_path, indexing_cfg, language
+    )
+
+    if not all_chunks:
+        logger.warning("No chunks found for repo %s", repo.name)
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE repos SET status='indexed', last_indexed_at=NOW(), total_chunks=0, "
+                "indexed_commit=$3 WHERE org_id=$1 AND name=$2",
+                org_id, repo.name, new_commit,
+            )
+        return
+
+    logger.info("Embedding %d chunks for %s", len(all_chunks), repo.name)
+    embeddings = await _embed_chunks(all_chunks, repo.name)
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM repo_chunks WHERE org_id=$1 AND repo_name=$2", org_id, repo.name
+        )
+        insert_batch_size = 500
+        for start in range(0, len(all_chunks), insert_batch_size):
+            end = min(start + insert_batch_size, len(all_chunks))
+            await conn.executemany(
+                _INSERT_CHUNK_SQL,
+                _chunk_rows(org_id, all_chunks[start:end], embeddings[start:end]),
+            )
+            logger.info("DB write progress for %s: inserted=%d/%d", repo.name, end, len(all_chunks))
+        await conn.execute(
+            """
+            UPDATE repos
+            SET status='indexed', last_indexed_at=NOW(), total_chunks=$3,
+                indexed_commit=$4, error_message=NULL
+            WHERE org_id=$1 AND name=$2
+            """,
+            org_id, repo.name, len(all_chunks), new_commit,
+        )
+    logger.info("Indexed %d chunks for %s (full)", len(all_chunks), repo.name)
+
+
+async def _index_repo_incremental(
+    pool,
+    org_id: int,
+    repo: RepoConfig,
+    indexing_cfg: IndexingConfig,
+    language: str | None,
+    local_path: str,
+    old_commit: str,
+    new_commit: str,
+) -> bool:
+    """Re-index only files changed between two commits.
+
+    Returns True if the incremental update was applied, or False if the diff
+    could not be computed (caller should fall back to a full re-index).
+    """
+    diff = await get_changed_files(local_path, old_commit, new_commit)
+    if diff is None:
+        return False
+    changed, deleted = diff
+
+    # Every touched path — modified, deleted, or renamed away — has its existing
+    # chunks removed; freshly chunked paths are then re-inserted. Deleting first
+    # also cleans up files that became non-indexable (grew too large, newly
+    # excluded, or converted to a binary type).
+    stale_paths = sorted(changed | deleted)
+
+    if not changed and not deleted:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE repos SET status='indexed', last_indexed_at=NOW(), "
+                "indexed_commit=$3, error_message=NULL WHERE org_id=$1 AND name=$2",
+                org_id, repo.name, new_commit,
+            )
+        logger.info("No changes for %s since %s; index up to date", repo.name, old_commit[:8])
+        return True
+
+    loop = asyncio.get_running_loop()
+    chunks, indexed_paths = await loop.run_in_executor(
+        None, _collect_changed_chunks_sync, repo.name, local_path, indexing_cfg, language, sorted(changed)
+    )
+
+    embeddings = await _embed_chunks(chunks, repo.name) if chunks else []
+
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            if stale_paths:
+                await conn.execute(
+                    "DELETE FROM repo_chunks WHERE org_id=$1 AND repo_name=$2 AND file_path = ANY($3)",
+                    org_id, repo.name, stale_paths,
+                )
+            insert_batch_size = 500
+            for start in range(0, len(chunks), insert_batch_size):
+                end = min(start + insert_batch_size, len(chunks))
+                await conn.executemany(
+                    _INSERT_CHUNK_SQL,
+                    _chunk_rows(org_id, chunks[start:end], embeddings[start:end]),
+                )
+            total = await conn.fetchval(
+                "SELECT count(*) FROM repo_chunks WHERE org_id=$1 AND repo_name=$2",
+                org_id, repo.name,
+            )
+            await conn.execute(
+                """
+                UPDATE repos
+                SET status='indexed', last_indexed_at=NOW(), total_chunks=$3,
+                    indexed_commit=$4, error_message=NULL
+                WHERE org_id=$1 AND name=$2
+                """,
+                org_id, repo.name, total, new_commit,
+            )
+    logger.info(
+        "Indexed %s (incremental): changed=%d deleted=%d reindexed_files=%d new_chunks=%d total=%d",
+        repo.name, len(changed), len(deleted), len(indexed_paths), len(chunks), total,
+    )
+    return True
 
 
 async def sync_repos_config(org_id: int | None = None) -> None:

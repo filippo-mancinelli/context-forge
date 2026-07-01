@@ -21,7 +21,7 @@ Self-hosted context infrastructure for AI coding agents. Exposes a single MCP en
 | `postgres` | PostgreSQL 16 + pgvector | `5432` |
 | `ui` | React 18, TypeScript, Vite, TailwindCSS | `3000` |
 
-Indexing uses tree-sitter (Python, JS/TS, Go, Java), with scheduled re-indexing via APScheduler.
+Indexing uses tree-sitter (Python, JS/TS, Go, Java), with scheduled re-indexing via APScheduler. Re-indexing is **incremental**: for git-backed repos, only files changed since the last indexed commit are re-parsed and re-embedded. Pushes can trigger it immediately via the `/api/webhooks/index` endpoint (set `WEBHOOK_SECRET`; supports GitHub, GitLab, and generic callers).
 
 ## Quick start
 
