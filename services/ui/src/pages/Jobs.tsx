@@ -69,7 +69,37 @@ export default function Jobs() {
         ) : jobs.length === 0 ? (
           <p className="text-muted text-sm">No jobs yet.</p>
         ) : (
-          <div style={{ border: '1px solid var(--border)' }}>
+          <>
+          {/* Mobile: stacked cards */}
+          <div className="space-y-3 md:hidden">
+            {jobs.map(job => (
+              <div
+                key={job.id}
+                style={{ border: '1px solid var(--border)' }}
+                className="p-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <code className="font-mono text-xs break-all">{job.tool}</code>
+                  <Badge variant={jobBadgeVariant(job.status)}>{job.status}</Badge>
+                </div>
+                {job.error_message && (
+                  <p className="text-xs text-danger mt-1 break-words">{job.error_message}</p>
+                )}
+                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-muted">
+                  <span className="font-mono">{job.id.slice(0, 8)}&hellip;</span>
+                  <span>{duration(job.created_at, job.updated_at)}</span>
+                  <span>
+                    {new Date(job.created_at).toLocaleString(undefined, {
+                      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                    })}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop: table */}
+          <div style={{ border: '1px solid var(--border)' }} className="hidden md:block">
             <Table>
               <Thead>
                 <Tr>
@@ -113,6 +143,7 @@ export default function Jobs() {
               </Tbody>
             </Table>
           </div>
+          </>
         )}
       </div>
     </div>
