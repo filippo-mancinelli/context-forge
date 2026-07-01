@@ -9,6 +9,7 @@ from ..config import get_settings
 from .routes import repos as repos_routes
 from .routes import memory as memory_routes
 from .routes import knowledge as knowledge_routes
+from .routes import chat as chat_routes
 from .routes import jobs as jobs_routes
 from .routes import setup as setup_routes
 from .routes import auth as auth_routes
@@ -64,6 +65,7 @@ else:
 api.include_router(repos_routes.router, prefix="/api")
 api.include_router(memory_routes.router, prefix="/api")
 api.include_router(knowledge_routes.router, prefix="/api")
+api.include_router(chat_routes.router, prefix="/api")
 api.include_router(jobs_routes.router, prefix="/api")
 api.include_router(setup_routes.router, prefix="/api")
 api.include_router(auth_routes.router, prefix="/api")
