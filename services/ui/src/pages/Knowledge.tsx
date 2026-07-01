@@ -292,6 +292,87 @@ function DocumentRow({
   )
 }
 
+function DocumentCard({
+  doc,
+  onDelete,
+  onReprocess,
+  onDownload,
+}: {
+  doc: KbDocument
+  onDelete: (id: number) => void
+  onReprocess: (id: number) => void
+  onDownload: (doc: KbDocument) => void
+}) {
+  const [busy, setBusy] = useState(false)
+
+  const wrap = (fn: () => Promise<void> | void) => async () => {
+    setBusy(true)
+    try {
+      await fn()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div style={{ border: '1px solid var(--border)' }} className="p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-start gap-2 min-w-0">
+          <div className="mt-0.5 flex-shrink-0">
+            <DocIcon ext={doc.extension} />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-text break-words" title={doc.filename}>
+              {doc.title || doc.filename}
+            </p>
+            <p className="text-xs text-muted break-all">{doc.filename}</p>
+          </div>
+        </div>
+        <Badge variant={STATUS_VARIANT[doc.status]}>{STATUS_LABEL[doc.status]}</Badge>
+      </div>
+      {doc.status === 'error' && doc.error_message && (
+        <p className="text-xs text-danger flex items-start gap-1 mt-2">
+          <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
+          <span className="break-words">{doc.error_message}</span>
+        </p>
+      )}
+      <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs text-muted">
+        <span>{doc.status === 'ready' ? `${doc.total_chunks} chunks` : '—'}</span>
+        <span>{formatBytes(doc.size_bytes)}</span>
+        <span>{formatDate(doc.uploaded_at)}</span>
+      </div>
+      <div
+        style={{ borderTop: '1px solid var(--border)' }}
+        className="flex items-center gap-4 mt-3 pt-3"
+      >
+        <button
+          onClick={wrap(() => onDownload(doc))}
+          disabled={busy}
+          className="text-muted hover:text-accent transition-colors disabled:opacity-50 inline-flex items-center gap-1 text-xs"
+        >
+          <Download className="w-3.5 h-3.5" /> Download
+        </button>
+        {doc.status === 'error' && (
+          <button
+            onClick={wrap(() => onReprocess(doc.id))}
+            disabled={busy}
+            className="text-muted hover:text-accent transition-colors disabled:opacity-50 inline-flex items-center gap-1 text-xs"
+          >
+            <RefreshCw className="w-3.5 h-3.5" /> Retry
+          </button>
+        )}
+        <button
+          onClick={wrap(() => onDelete(doc.id))}
+          disabled={busy}
+          className="text-muted hover:text-danger transition-colors disabled:opacity-50 inline-flex items-center gap-1 text-xs"
+        >
+          <Trash2 className="w-3.5 h-3.5" /> Delete
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function Knowledge() {
   const [documents, setDocuments] = useState<KbDocument[]>([])
   const [loading, setLoading] = useState(true)
@@ -431,8 +512,23 @@ export default function Knowledge() {
         ) : documents.length === 0 ? (
           <p className="text-muted text-sm">No documents yet. Upload your first file above.</p>
         ) : (
-          <div style={{ border: '1px solid var(--border)' }}>
-            <table className="w-full">
+          <>
+          {/* Mobile: stacked cards */}
+          <div className="space-y-3 md:hidden">
+            {documents.map((doc) => (
+              <DocumentCard
+                key={doc.id}
+                doc={doc}
+                onDelete={handleDelete}
+                onReprocess={handleReprocess}
+                onDownload={handleDownload}
+              />
+            ))}
+          </div>
+
+          {/* Desktop: table */}
+          <div style={{ border: '1px solid var(--border)' }} className="hidden md:block overflow-x-auto">
+            <table className="w-full min-w-[640px]">
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border)' }} className="text-left">
                   <th className="py-2 px-4 text-xs font-medium text-muted">Document</th>
@@ -456,6 +552,7 @@ export default function Knowledge() {
               </tbody>
             </table>
           </div>
+          </>
         )}
       </div>
     </div>

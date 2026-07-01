@@ -336,8 +336,70 @@ export default function Repos() {
             </p>
           </div>
         ) : (
-          <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto">
-            <table className="w-full table-fixed">
+          <>
+          {/* Mobile: stacked cards use the full width instead of a squished table */}
+          <div className="space-y-3 md:hidden">
+            {repos.map(repo => (
+              <div
+                key={repo.name}
+                style={{ border: '1px solid var(--border)' }}
+                className="p-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-2 min-w-0">
+                    <span className="mt-0.5 flex-shrink-0"><TypeIcon type={repo.type} /></span>
+                    <div className="min-w-0">
+                      <Link
+                        to={`/repos/${encodeURIComponent(repo.name)}`}
+                        className="text-sm font-medium text-text hover:text-accent break-words"
+                      >
+                        {repo.name}
+                      </Link>
+                      <div className="text-xs text-muted font-mono break-all">
+                        {repo.url || repo.path || '—'}
+                      </div>
+                    </div>
+                  </div>
+                  <Badge variant={repoBadgeVariant(repo.status)}>{repo.status}</Badge>
+                </div>
+                {repo.error_message && (
+                  <p className="text-xs text-danger mt-2 break-words" title={repo.error_message}>
+                    {repo.error_message}
+                  </p>
+                )}
+                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs text-muted">
+                  <span>branch <code className="font-mono text-text">{repo.branch}</code></span>
+                  <span>{repo.total_chunks > 0 ? `${repo.total_chunks.toLocaleString()} chunks` : 'no chunks'}</span>
+                  <span>{formatDate(repo.last_indexed_at)}</span>
+                </div>
+                <div
+                  style={{ borderTop: '1px solid var(--border)' }}
+                  className="flex items-center gap-3 mt-3 pt-3"
+                >
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleIndex(repo.name)}
+                    disabled={indexingRepo === repo.name || repo.status === 'indexing'}
+                    loading={indexingRepo === repo.name}
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    Index
+                  </Button>
+                  <Link
+                    to={`/repos/${encodeURIComponent(repo.name)}`}
+                    className="text-xs text-accent hover:underline"
+                  >
+                    Open
+                  </Link>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Desktop: full table */}
+          <div style={{ border: '1px solid var(--border)' }} className="hidden md:block overflow-x-auto">
+            <table className="w-full table-fixed min-w-[600px]">
               <colgroup>
                 <col className="w-[40%]" />
                 <col className="w-[10%]" />
@@ -421,6 +483,7 @@ export default function Repos() {
               </tbody>
             </table>
           </div>
+          </>
         )}
       </div>
 
