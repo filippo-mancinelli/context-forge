@@ -1,7 +1,6 @@
 """REST API routes for repository management."""
 from __future__ import annotations
 
-import json
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -67,66 +66,16 @@ async def list_repos(org: ActiveOrg = Depends(get_active_org)):
 
 @router.post("/search")
 async def search_repos(req: RepoSearchRequest, org: ActiveOrg = Depends(get_active_org)):
-    """Search indexed repository chunks by semantic similarity (org-scoped)."""
-    from ...indexer.embedder import embed_text
-
-    def _vector_to_pg(embedding: list[float]) -> str:
-        return "[" + ",".join(f"{float(v):.10f}" for v in embedding) + "]"
+    """Search indexed repository chunks (hybrid vector + full-text, org-scoped)."""
+    from ...search import search_repo_chunks
 
     try:
-        embedding = await embed_text(req.query)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Embedding failed: {e}")
-
-    embedding_str = _vector_to_pg(embedding)
-    pool = await get_pool()
-
-    async with pool.acquire() as conn:
-        if req.repos:
-            rows = await conn.fetch(
-                """
-                SELECT repo_name, file_path, chunk_type, content, metadata,
-                       1 - (embedding <=> $1::vector) AS score
-                FROM repo_chunks
-                WHERE org_id = $2 AND repo_name = ANY($3)
-                ORDER BY embedding <=> $1::vector
-                LIMIT $4
-                """,
-                embedding_str,
-                org.org_id,
-                req.repos,
-                req.limit,
-            )
-        else:
-            rows = await conn.fetch(
-                """
-                SELECT repo_name, file_path, chunk_type, content, metadata,
-                       1 - (embedding <=> $1::vector) AS score
-                FROM repo_chunks
-                WHERE org_id = $2
-                ORDER BY embedding <=> $1::vector
-                LIMIT $3
-                """,
-                embedding_str,
-                org.org_id,
-                req.limit,
-            )
-
-    results = []
-    for row in rows:
-        metadata = row["metadata"]
-        if isinstance(metadata, str):
-            metadata = json.loads(metadata)
-        results.append(
-            {
-                "repo_name": row["repo_name"],
-                "file_path": row["file_path"],
-                "chunk_type": row["chunk_type"],
-                "content": row["content"],
-                "metadata": metadata,
-                "score": round(float(row["score"]), 4),
-            }
+        results = await search_repo_chunks(
+            org.org_id, req.query, repos=req.repos, limit=req.limit
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Search failed: {e}")
+
     return {"results": results, "count": len(results)}
 
 
