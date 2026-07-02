@@ -47,6 +47,61 @@ async def _run_git(*args: str, cwd: str = None) -> tuple[int, str, str]:
     return proc.returncode, stdout.decode(), stderr.decode()
 
 
+async def get_head_commit(local_path: str) -> str | None:
+    """Return the current HEAD commit SHA, or None if not a resolvable git repo."""
+    code, out, _ = await _run_git("rev-parse", "HEAD", cwd=local_path)
+    if code != 0:
+        return None
+    sha = out.strip()
+    return sha or None
+
+
+async def commit_exists(local_path: str, sha: str) -> bool:
+    """Return True if ``sha`` resolves to a commit object present in the repo."""
+    if not sha:
+        return False
+    code, _, _ = await _run_git("cat-file", "-e", f"{sha}^{{commit}}", cwd=local_path)
+    return code == 0
+
+
+async def get_changed_files(
+    local_path: str, old_sha: str, new_sha: str
+) -> tuple[set[str], set[str]] | None:
+    """Diff two commits and return ``(changed_paths, deleted_paths)``.
+
+    ``changed_paths`` are added/modified/type-changed files that must be
+    re-chunked; ``deleted_paths`` are removed files whose chunks should be
+    dropped. Renames are decomposed into a delete + an add (``--no-renames``) so
+    the caller can treat every path uniformly. Returns ``None`` if the diff
+    cannot be computed (e.g. a missing commit object), signalling the caller to
+    fall back to a full re-index. ``core.quotePath=false`` keeps non-ASCII paths
+    literal rather than octal-escaped.
+    """
+    code, out, err = await _run_git(
+        "-c", "core.quotePath=false",
+        "diff", "--name-status", "--no-renames", old_sha, new_sha,
+        cwd=local_path,
+    )
+    if code != 0:
+        logger.warning("git diff %s..%s failed in %s: %s", old_sha, new_sha, local_path, err.strip())
+        return None
+
+    changed: set[str] = set()
+    deleted: set[str] = set()
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        status, path = parts[0], parts[-1]
+        if status.startswith("D"):
+            deleted.add(path)
+        else:  # A, M, T, and anything else that leaves a file in the tree
+            changed.add(path)
+    return changed, deleted
+
+
 async def ensure_repo_cloned(repo: RepoConfig, org_id: int | None = None) -> str:
     """Clone a remote repo if not already present. Returns local path."""
     if repo.type == "local":

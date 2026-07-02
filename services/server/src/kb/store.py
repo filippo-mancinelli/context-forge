@@ -296,76 +296,15 @@ async def delete_document(org_id: int, doc_id: int) -> bool:
     return True
 
 
-def _vector_to_pg_query(embedding: list[float]) -> str:
-    return _vector_to_pg(embedding)
-
-
 async def search_documents(
     org_id: int,
     query: str,
     limit: int = 10,
     document_ids: Optional[list[int]] = None,
 ) -> list[dict[str, Any]]:
-    """Semantic search across a tenant's knowledge-base chunks."""
-    from ..indexer.embedder import embed_text
+    """Search a tenant's knowledge-base chunks (hybrid vector + full-text)."""
+    from ..search import search_kb_chunks
 
-    embedding = await embed_text(query)
-    embedding_str = _vector_to_pg(embedding)
-
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        if document_ids:
-            rows = await conn.fetch(
-                """
-                SELECT c.document_id, c.chunk_index, c.content, c.metadata,
-                       d.title, d.filename, d.extension,
-                       1 - (c.embedding <=> $1::vector) AS score
-                FROM kb_chunks c
-                JOIN kb_documents d ON d.id = c.document_id
-                WHERE c.org_id = $2 AND c.document_id = ANY($3)
-                ORDER BY c.embedding <=> $1::vector
-                LIMIT $4
-                """,
-                embedding_str,
-                org_id,
-                document_ids,
-                limit,
-            )
-        else:
-            rows = await conn.fetch(
-                """
-                SELECT c.document_id, c.chunk_index, c.content, c.metadata,
-                       d.title, d.filename, d.extension,
-                       1 - (c.embedding <=> $1::vector) AS score
-                FROM kb_chunks c
-                JOIN kb_documents d ON d.id = c.document_id
-                WHERE c.org_id = $2
-                ORDER BY c.embedding <=> $1::vector
-                LIMIT $3
-                """,
-                embedding_str,
-                org_id,
-                limit,
-            )
-
-    results = []
-    for r in rows:
-        meta = r["metadata"]
-        if isinstance(meta, str):
-            try:
-                meta = json.loads(meta)
-            except Exception:
-                meta = {}
-        results.append(
-            {
-                "document_id": int(r["document_id"]),
-                "title": r["title"],
-                "filename": r["filename"],
-                "extension": r["extension"],
-                "chunk_index": r["chunk_index"],
-                "content": r["content"],
-                "metadata": meta,
-                "score": round(float(r["score"]), 4),
-            }
-        )
-    return results
+    return await search_kb_chunks(
+        org_id, query, document_ids=document_ids, limit=limit
+    )

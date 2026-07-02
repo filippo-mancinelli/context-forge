@@ -79,6 +79,13 @@ class Settings(BaseSettings):
     cors_origins: str = ""
     # MCP authentication mode: "disabled", "enabled", "transition"
     mcp_auth_mode: str = "disabled"
+    # Hybrid retrieval: fuse dense vector similarity with lexical full-text
+    # ranking (RRF). Set SEARCH_HYBRID=false to fall back to vector-only search.
+    search_hybrid: bool = True
+    # Shared secret for the /api/webhooks/index push endpoint. Empty disables it.
+    # GitHub: HMAC-SHA256 (X-Hub-Signature-256); GitLab: X-Gitlab-Token; generic:
+    # X-Webhook-Secret. Set WEBHOOK_SECRET to enable push-triggered indexing.
+    webhook_secret: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

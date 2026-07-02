@@ -6,7 +6,7 @@ Self-hosted context infrastructure for AI coding agents. Exposes a single MCP en
 
 - **Persistent memory** — long-term memory with Mem0 + pgvector, scoped per organization.
 - **Knowledge base** — upload documents (PDF, Word, Excel, PowerPoint, images with OCR, text, and more) via drag-and-drop; they're extracted, chunked, embedded, and made semantically searchable.
-- **Semantic repository search** — index and query local, GitHub, and GitLab repos using tree-sitter parsing and vector embeddings.
+- **Hybrid repository search** — index and query local, GitHub, and GitLab repos using tree-sitter parsing. Retrieval fuses dense vector embeddings with lexical full-text ranking (Reciprocal Rank Fusion) so exact identifiers, error strings, and rare tokens surface alongside semantic matches. Set `SEARCH_HYBRID=false` to fall back to vector-only.
 - **Async jobs** — offload slow downstream calls without hitting client timeouts.
 - **Agent chat** — a built-in chat page where a tool-using agent searches your repos, memory, and knowledge base, showing every retrieval inline so you can verify context is surfaced correctly.
 - **Multi-tenancy** — organizations as isolation boundaries with `owner / admin / member / viewer` roles and email invitations.
@@ -21,7 +21,7 @@ Self-hosted context infrastructure for AI coding agents. Exposes a single MCP en
 | `postgres` | PostgreSQL 16 + pgvector | `5432` |
 | `ui` | React 18, TypeScript, Vite, TailwindCSS | `3000` |
 
-Indexing uses tree-sitter (Python, JS/TS, Go, Java), with scheduled re-indexing via APScheduler.
+Indexing uses tree-sitter (Python, JS/TS, Go, Java), with scheduled re-indexing via APScheduler. Re-indexing is **incremental**: for git-backed repos, only files changed since the last indexed commit are re-parsed and re-embedded. Pushes can trigger it immediately via the `/api/webhooks/index` endpoint (set `WEBHOOK_SECRET`; supports GitHub, GitLab, and generic callers).
 
 ## Quick start
 
