@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 _pool: Pool | None = None
 
 DDL = """
+-- Bump maintenance_work_mem for this session so building the ivfflat vector
+-- index below has enough memory (default 64MB is just under what it needs).
+SET maintenance_work_mem = '256MB';
+
 CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS repos (
