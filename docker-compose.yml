@@ -59,7 +59,10 @@ services:
       context: ./services/ui
       dockerfile: Dockerfile
       args:
-        - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
+        # Empty → same-origin /api, proxied by nginx to the backend below.
+        - VITE_API_URL=${VITE_API_URL:-}
+    environment:
+      - BACKEND_UPSTREAM=${BACKEND_UPSTREAM:-http://context-forge:8000}
     ports:
       - "3000:80"
     depends_on:

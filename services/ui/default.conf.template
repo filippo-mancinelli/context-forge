@@ -1,0 +1,40 @@
+# Rendered at container start by nginx's envsubst entrypoint.
+# ${BACKEND_UPSTREAM} defaults to the compose service; override via env on Dokploy.
+server {
+    listen 80;
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Proxy API calls to the backend so the SPA can use same-origin /api paths
+    # (works behind any domain / reverse proxy — no CORS, no 405 from this nginx).
+    location /api/ {
+        # Resolve the backend at request time via Docker's embedded DNS. Using a
+        # variable defers resolution so nginx boots even if the backend is down,
+        # and picks up a new IP when the backend container restarts.
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $backend ${BACKEND_UPSTREAM};
+        proxy_pass $backend$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_read_timeout 600s;
+        client_max_body_size 100m;
+    }
+
+    # Cache static assets
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # React SPA routing
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/xml;
+}
