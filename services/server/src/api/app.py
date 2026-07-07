@@ -22,6 +22,8 @@ from .routes import organizations as organizations_routes
 from .routes import invitations as invitations_routes
 from .routes import webhooks as webhooks_routes
 from .routes import datasources as datasources_routes
+from .routes import contracts as contracts_routes
+from .routes import ci as ci_routes
 
 api = FastAPI(
     title="context-forge API",
@@ -80,6 +82,8 @@ api.include_router(organizations_routes.router, prefix="/api")
 api.include_router(invitations_routes.router, prefix="/api")
 api.include_router(webhooks_routes.router, prefix="/api")
 api.include_router(datasources_routes.router, prefix="/api")
+api.include_router(contracts_routes.router, prefix="/api")
+api.include_router(ci_routes.router, prefix="/api")
 
 
 @api.middleware("http")
@@ -155,6 +159,11 @@ async def list_tools():
             {"name": "db_schema", "description": "Get the schema overview of an external database (tables, views, row estimates)."},
             {"name": "db_describe", "description": "Describe a table in depth: columns, keys, indexes, curated descriptions."},
             {"name": "db_query", "description": "Run a validated read-only SQL query against an external database."},
+            {"name": "api_list", "description": "List ingested API contracts (OpenAPI specs / GraphQL schemas)."},
+            {"name": "api_endpoints", "description": "List or search API operations across ingested contracts."},
+            {"name": "api_get_endpoint", "description": "Get one API operation's parameters, request body, and responses."},
+            {"name": "ci_runs", "description": "List recent CI runs (GitHub Actions / GitLab CI) for a repository."},
+            {"name": "ci_failure", "description": "Get why a CI run failed: failed jobs/steps and error log tails."},
             {"name": "job_submit", "description": "Submit a long-running HTTP request as an async background job."},
             {"name": "job_status", "description": "Check the status of a submitted async job."},
             {"name": "job_result", "description": "Retrieve the result of a completed async job."},
