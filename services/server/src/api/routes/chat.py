@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -39,10 +40,23 @@ SYSTEM_PROMPT = (
     "- query_database: run a single read-only SQL query on a configured "
     "database connection.\n\n"
     "For any question that could benefit from stored context, call the "
-    "relevant tool(s) before answering — prefer searching over guessing. For "
-    "database questions, inspect the schema with get_database_schema before "
-    "writing SQL, and use the exact table/column names it returns. When "
-    "you use results, cite where they came from (repo/file, memory, "
+    "relevant tool(s) before answering — prefer searching over guessing.\n\n"
+    "Survey broadly, then answer: a project or topic usually spans several "
+    "sources at once — e.g. a project 'acme' may have repositories "
+    "'acme-backend' and 'acme-frontend', a database connection, uploaded "
+    "documents, and stored memories. For broad or project-level questions, "
+    "check EVERY plausibly relevant source (repositories, memory, knowledge "
+    "base, databases) before answering — do not stop at the first source "
+    "that returns something. You may request multiple tool calls in a "
+    "single turn. Cross-check what you find: reconcile what the code says "
+    "with the database schema/data and the documents, and point out "
+    "disagreements between sources.\n\n"
+    "For database questions, inspect the schema with get_database_schema "
+    "before writing SQL, and use the exact table/column names it returns.\n\n"
+    "Always invoke tools through the structured tool-calling interface — "
+    "never write tool-call markup (XML, DSML, or similar) inside your "
+    "reply or reasoning text.\n\n"
+    "When you use results, cite where they came from (repo/file, memory, "
     "document title, or connection/table) so the developer can confirm "
     "retrieval is working. If a search returns nothing, say so plainly. "
     "Keep answers concise."
@@ -577,6 +591,40 @@ def _build_response(reply: str, traces: list[ToolCallTrace], model: str) -> Chat
 
 
 # --------------------------------------------------------------------------- #
+# DSML fallback: DeepSeek's reasoner sometimes writes its tool calls as inline
+# markup (<|DSML|>invoke name="..."> ... ) in the text/reasoning stream instead
+# of using structured tool_calls, which stalls the agent loop. Detect that
+# markup, execute the intended calls, and keep the loop going.
+# --------------------------------------------------------------------------- #
+_DSML_HINT_RE = re.compile(r"<\|DSML\|>|<\|tool[^|>]*\|>")
+_DSML_INVOKE_RE = re.compile(r'invoke\s+name="([\w.-]+)"')
+_DSML_PARAM_RE = re.compile(r'parameter\s+name="([\w.-]+)"[^>]*>([^<]*)')
+# Rendered/stored text cleanup: special tokens plus the tag fragment after them.
+_DSML_STRIP_RE = re.compile(r"</?\|DSML\|>[^<]*|<\|[^|>]*\|>")
+
+
+def _strip_dsml(text: str) -> str:
+    return _DSML_STRIP_RE.sub("", text).strip()
+
+
+def _parse_dsml_tool_calls(text: str) -> list[tuple[str, dict[str, Any]]]:
+    """Extract (tool_name, args) pairs from inline DSML tool-call markup."""
+    if not _DSML_HINT_RE.search(text):
+        return []
+    calls: list[tuple[str, dict[str, Any]]] = []
+    parts = _DSML_INVOKE_RE.split(text)
+    # split() yields [before, name1, body1, name2, body2, ...]
+    for i in range(1, len(parts) - 1, 2):
+        name = parts[i]
+        body = parts[i + 1]
+        if name not in _TOOL_HANDLERS:
+            continue
+        args = {m.group(1): m.group(2).strip() for m in _DSML_PARAM_RE.finditer(body)}
+        calls.append((name, args))
+    return calls
+
+
+# --------------------------------------------------------------------------- #
 # Streaming (SSE)
 # --------------------------------------------------------------------------- #
 def _sse(event: dict[str, Any]) -> str:
@@ -611,6 +659,7 @@ async def _stream_openai(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest):
         stream = await client.chat.completions.create(**_kwargs(with_tools=True))
         calls: dict[int, dict[str, str]] = {}
         round_text = ""
+        round_reasoning = ""
         async for chunk in stream:
             if not chunk.choices:
                 continue
@@ -618,6 +667,7 @@ async def _stream_openai(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest):
             # DeepSeek reasoner (and compatible endpoints) stream reasoning here.
             reasoning = getattr(delta, "reasoning_content", None)
             if reasoning:
+                round_reasoning += reasoning
                 yield {"type": "reasoning", "delta": reasoning}
             if delta.content:
                 if emitted_text and not round_text:
@@ -635,8 +685,37 @@ async def _stream_openai(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest):
                     acc["arguments"] += tc.function.arguments
 
         if not calls:
-            answered = True
-            break
+            dsml_calls = _parse_dsml_tool_calls(round_text + "\n" + round_reasoning)
+            if not dsml_calls:
+                answered = True
+                break
+            # The model wrote its tool calls as inline markup instead of using
+            # the structured interface — execute them anyway and keep looping.
+            logger.warning("chat: recovered %d DSML inline tool call(s)", len(dsml_calls))
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": _strip_dsml(round_text),
+                    "tool_calls": [
+                        {
+                            "id": f"dsml-{i}",
+                            "type": "function",
+                            "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)},
+                        }
+                        for i, (name, args) in enumerate(dsml_calls)
+                    ],
+                }
+            )
+            for i, (name, args) in enumerate(dsml_calls):
+                _, source = _TOOL_HANDLERS[name]
+                yield {"type": "tool_start", "tool": name, "source": source, "query": _trace_query(name, args)}
+                trace = await _run_tool(org, name, args)
+                traces.append(trace)
+                yield {"type": "tool_result", **trace.model_dump()}
+                messages.append(
+                    {"role": "tool", "tool_call_id": f"dsml-{i}", "content": _trace_to_tool_content(trace)}
+                )
+            continue
 
         messages.append(
             {

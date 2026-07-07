@@ -156,6 +156,53 @@
   }
 }
 
+/* Pixel-scan spinner: a 3x3 grid of monochrome "pixels" lit one at a time
+   around the ring with steps() timing, like a scanning cursor on an old
+   digital display. Inherits currentColor so it adapts to any text color. */
+.cf-spinner {
+  display: inline-grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14%;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.cf-spinner span {
+  background: currentColor;
+  opacity: 0.12;
+  animation: cf-pixel 0.96s steps(1, end) infinite;
+}
+
+/* Clockwise ring order over DOM cells 1..9 (cell 5 is the center). */
+.cf-spinner span:nth-child(1) { animation-delay: 0s; }
+.cf-spinner span:nth-child(2) { animation-delay: 0.12s; }
+.cf-spinner span:nth-child(3) { animation-delay: 0.24s; }
+.cf-spinner span:nth-child(6) { animation-delay: 0.36s; }
+.cf-spinner span:nth-child(9) { animation-delay: 0.48s; }
+.cf-spinner span:nth-child(8) { animation-delay: 0.6s; }
+.cf-spinner span:nth-child(7) { animation-delay: 0.72s; }
+.cf-spinner span:nth-child(4) { animation-delay: 0.84s; }
+
+/* The center pixel doesn't scan — it blinks slowly, like a heartbeat. */
+.cf-spinner span:nth-child(5) {
+  animation: cf-pixel-center 1.92s steps(1, end) infinite;
+}
+
+@keyframes cf-pixel {
+  /* Lit for two ticks with a decaying trail, then dark for the rest. */
+  0% { opacity: 1; }
+  12.5% { opacity: 0.45; }
+  25% { opacity: 0.12; }
+  100% { opacity: 0.12; }
+}
+
+@keyframes cf-pixel-center {
+  0% { opacity: 0.35; }
+  50% { opacity: 0.08; }
+  100% { opacity: 0.35; }
+}
+
 @layer utilities {
   .scrollbar-thin {
     scrollbar-width: thin;

@@ -364,6 +364,25 @@ CREATE TABLE IF NOT EXISTS api_endpoints (
 
 CREATE INDEX IF NOT EXISTS api_endpoints_contract_idx ON api_endpoints (contract_id);
 CREATE INDEX IF NOT EXISTS api_endpoints_org_idx ON api_endpoints (org_id);
+
+-- ===== Agent chat: saved conversations + public share links =====
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id              BIGSERIAL PRIMARY KEY,
+    org_id          BIGINT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    user_id         BIGINT REFERENCES admin_users(id) ON DELETE CASCADE,
+    title           TEXT NOT NULL DEFAULT 'New chat',
+    turns           JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- Public sharing: token grants read access to shared_snapshot (a copy of
+    -- turns frozen at share time, so the link shows the chat "up to then").
+    share_token     TEXT UNIQUE,
+    shared_snapshot JSONB,
+    shared_at       TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS chat_sessions_org_user_idx ON chat_sessions (org_id, user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS chat_sessions_share_idx ON chat_sessions (share_token);
 """
 
 

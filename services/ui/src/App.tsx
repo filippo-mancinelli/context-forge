@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom'
-import { GitBranch, Brain, Wrench, Activity, SlidersHorizontal, Menu, X, Building2, Library, MessagesSquare, Database, Braces } from 'lucide-react'
+import { GitBranch, Brain, Wrench, SlidersHorizontal, Menu, X, Building2, Library, MessagesSquare, Database, Braces } from 'lucide-react'
 import Repos from './pages/Repos'
 import Chat from './pages/Chat'
 import DataSources from './pages/DataSources'
@@ -17,6 +17,7 @@ import Organization from './pages/Organization'
 import Setup from './pages/Setup'
 import Login from './pages/Login'
 import AcceptInvite from './pages/AcceptInvite'
+import SharedChat from './pages/SharedChat'
 import OAuth from './pages/OAuth'
 import { api } from './lib/api'
 import { useAppStore } from './store'
@@ -31,7 +32,7 @@ const navLinks = [
   { to: '/settings', icon: SlidersHorizontal, label: 'Settings' },
   { to: '/organization', icon: Building2, label: 'Organization' },
   { to: '/tools', icon: Wrench, label: 'MCP Tools' },
-  { to: '/jobs', icon: Activity, label: 'Async Jobs' },
+  //{ to: '/jobs', icon: Activity, label: 'Async Jobs' },
 ]
 
 function OrgSwitcher() {
@@ -212,6 +213,12 @@ export default function App() {
     bootstrap()
   }, [bootstrap])
 
+  // Public shared-chat link, reachable without an existing session.
+  const shareMatch = window.location.pathname.match(/^\/share\/chat\/(.+)$/)
+  if (shareMatch) {
+    return <SharedChat token={decodeURIComponent(shareMatch[1])} />
+  }
+
   // Public invite-acceptance link, reachable without an existing session.
   const inviteMatch = window.location.pathname.match(/^\/invite\/(.+)$/)
   if (inviteMatch) {
@@ -246,7 +253,8 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <div className="flex h-screen overflow-hidden">
+      {/* 100dvh tracks the real visible viewport on mobile (h-screen is the fallback). */}
+      <div className="flex h-screen overflow-hidden" style={{ height: '100dvh' }}>
         <Sidebar />
         <div className="flex-1 flex flex-col min-w-0">
           <MobileHeader onMenuOpen={() => setDrawerOpen(true)} />

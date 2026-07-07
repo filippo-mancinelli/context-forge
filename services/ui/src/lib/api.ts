@@ -257,6 +257,35 @@ export type ChatStreamEvent =
   | { type: 'done'; model: string; sources_used: ChatSourcesUsed }
   | { type: 'error'; message: string }
 
+// One conversation turn as persisted in a saved session / shared snapshot.
+export interface StoredChatTurn {
+  role: 'user' | 'assistant'
+  content: string
+  reasoning?: string
+  toolCalls?: ChatToolCall[]
+  model?: string
+  stopped?: boolean
+}
+
+export interface ChatSessionSummary {
+  id: number
+  title: string
+  turn_count: number
+  shared: boolean
+  created_at?: string
+  updated_at?: string
+}
+
+export interface ChatSessionDetail extends ChatSessionSummary {
+  turns: StoredChatTurn[]
+}
+
+export interface SharedChatResponse {
+  title: string
+  turns: StoredChatTurn[]
+  shared_at?: string
+}
+
 export interface Job {
   id: string
   tool: string
@@ -736,6 +765,35 @@ export const api = {
         }
       }
     },
+    sessions: {
+      list: () => request<{ sessions: ChatSessionSummary[] }>('/api/chat/sessions'),
+      get: (id: number) => request<ChatSessionDetail>(`/api/chat/sessions/${id}`),
+      create: (turns: StoredChatTurn[], title?: string) =>
+        request<{ status: string; session: ChatSessionSummary }>('/api/chat/sessions', {
+          method: 'POST',
+          body: JSON.stringify({ turns, title }),
+        }),
+      update: (id: number, turns: StoredChatTurn[], title?: string) =>
+        request<{ status: string; session: ChatSessionSummary }>(`/api/chat/sessions/${id}`, {
+          method: 'PUT',
+          body: JSON.stringify({ turns, title }),
+        }),
+      delete: (id: number) =>
+        request<{ status: string }>(`/api/chat/sessions/${id}`, { method: 'DELETE' }),
+      share: (id: number) =>
+        request<{ status: string; share_token: string; shared_at?: string }>(
+          `/api/chat/sessions/${id}/share`,
+          { method: 'POST' }
+        ),
+      unshare: (id: number) =>
+        request<{ status: string }>(`/api/chat/sessions/${id}/share`, { method: 'DELETE' }),
+    },
+    shared: (token: string) =>
+      request<SharedChatResponse>(
+        `/api/chat/shared/${encodeURIComponent(token)}`,
+        undefined,
+        false
+      ),
   },
   jobs: {
     list: (limit = 50) => request<{ jobs: Job[]; count: number }>(`/api/jobs?limit=${limit}`),

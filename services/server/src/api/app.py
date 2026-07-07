@@ -10,6 +10,7 @@ from .routes import repos as repos_routes
 from .routes import memory as memory_routes
 from .routes import knowledge as knowledge_routes
 from .routes import chat as chat_routes
+from .routes import chat_sessions as chat_sessions_routes
 from .routes import jobs as jobs_routes
 from .routes import setup as setup_routes
 from .routes import auth as auth_routes
@@ -69,6 +70,8 @@ else:
 api.include_router(repos_routes.router, prefix="/api")
 api.include_router(memory_routes.router, prefix="/api")
 api.include_router(knowledge_routes.router, prefix="/api")
+api.include_router(chat_sessions_routes.router, prefix="/api")
+api.include_router(chat_sessions_routes.public_router, prefix="/api")
 api.include_router(chat_routes.router, prefix="/api")
 api.include_router(jobs_routes.router, prefix="/api")
 api.include_router(setup_routes.router, prefix="/api")
@@ -103,6 +106,7 @@ async def auth_guard(request, call_next):
         "/api/oauth",
         "/api/invitations",  # public invite preview/accept
         "/api/webhooks",     # external git hooks; authenticated by shared secret
+        "/api/chat/shared",  # public chat snapshots; authorized by share token
     )
     if path.startswith(open_paths):
         return await call_next(request)
