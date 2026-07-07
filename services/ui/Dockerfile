@@ -12,7 +12,9 @@ RUN npm install --legacy-peer-deps
 
 COPY . .
 
-ARG VITE_API_URL=http://localhost:8000
+# Empty by default → the SPA uses same-origin /api paths, which nginx proxies
+# to the backend (see default.conf.template). Override only for split-origin setups.
+ARG VITE_API_URL=
 ENV VITE_API_URL=$VITE_API_URL
 
 RUN npm run build
@@ -20,7 +22,11 @@ RUN npm run build
 FROM public.ecr.aws/docker/library/nginx:alpine
 
 COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Placed as a template so nginx's entrypoint renders ${BACKEND_UPSTREAM} at start.
+COPY default.conf.template /etc/nginx/templates/default.conf.template
+
+# Where nginx forwards /api/ requests. Compose sets the service name; override on Dokploy.
+ENV BACKEND_UPSTREAM=http://context-forge:8000
 
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]

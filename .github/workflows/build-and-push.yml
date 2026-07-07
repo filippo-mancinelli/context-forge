@@ -68,7 +68,9 @@ jobs:
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
-          build-args: ${{ matrix.name == 'server' && 'EMBEDDINGS_PROVIDER=openai' || format('VITE_API_URL={0}', vars.VITE_API_URL) }}
+          # UI builds same-origin (empty VITE_API_URL): the SPA calls /api and the
+          # UI nginx proxies to the backend (BACKEND_UPSTREAM, set on Dokploy).
+          build-args: ${{ matrix.name == 'server' && 'EMBEDDINGS_PROVIDER=openai' || 'VITE_API_URL=' }}
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ matrix.image }}:latest
