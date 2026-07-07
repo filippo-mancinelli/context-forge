@@ -321,6 +321,49 @@ CREATE TABLE IF NOT EXISTS db_query_log (
 );
 
 CREATE INDEX IF NOT EXISTS db_query_log_conn_idx ON db_query_log (connection_id, created_at DESC);
+
+-- ===== API contracts: ingested OpenAPI specs and GraphQL schemas =====
+CREATE TABLE IF NOT EXISTS api_contracts (
+    id             BIGSERIAL PRIMARY KEY,
+    org_id         BIGINT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    name           TEXT NOT NULL,
+    type           TEXT NOT NULL,          -- 'openapi' | 'graphql'
+    source_url     TEXT,                   -- spec URL / GraphQL endpoint (NULL for pasted specs)
+    description    TEXT,
+    title          TEXT,
+    version        TEXT,
+    raw_spec       TEXT,
+    status         TEXT NOT NULL DEFAULT 'pending',
+    error_message  TEXT,
+    endpoint_count INTEGER DEFAULT 0,
+    fetched_at     TIMESTAMPTZ,
+    created_at     TIMESTAMPTZ DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (org_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS api_contracts_org_idx ON api_contracts (org_id);
+
+-- One row per operation (REST method+path, or GraphQL query/mutation field)
+-- so endpoints are individually listable and searchable.
+CREATE TABLE IF NOT EXISTS api_endpoints (
+    id              BIGSERIAL PRIMARY KEY,
+    contract_id     BIGINT NOT NULL REFERENCES api_contracts(id) ON DELETE CASCADE,
+    org_id          BIGINT NOT NULL,
+    method          TEXT NOT NULL,
+    path            TEXT NOT NULL,
+    operation_id    TEXT,
+    summary         TEXT,
+    description     TEXT,
+    tags            TEXT[] NOT NULL DEFAULT '{{}}',
+    deprecated      BOOLEAN NOT NULL DEFAULT FALSE,
+    request_schema  JSONB,
+    response_schema JSONB,
+    UNIQUE (contract_id, method, path)
+);
+
+CREATE INDEX IF NOT EXISTS api_endpoints_contract_idx ON api_endpoints (contract_id);
+CREATE INDEX IF NOT EXISTS api_endpoints_org_idx ON api_endpoints (org_id);
 """
 
 

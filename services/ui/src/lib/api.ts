@@ -403,6 +403,84 @@ export interface DbQueryLogEntry {
   created_at?: string
 }
 
+export type ApiContractType = 'openapi' | 'graphql'
+
+export interface ApiContract {
+  id: number
+  name: string
+  type: ApiContractType
+  source_url?: string
+  description?: string
+  title?: string
+  version?: string
+  status: 'pending' | 'ready' | 'error'
+  error_message?: string
+  endpoint_count: number
+  fetched_at?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface ApiContractCreateRequest {
+  name: string
+  type: ApiContractType
+  source_url?: string
+  raw_spec?: string
+  description?: string
+}
+
+export interface ApiEndpointSummary {
+  id: number
+  contract: string
+  method: string
+  path: string
+  operation_id?: string
+  summary?: string
+  tags: string[]
+  deprecated: boolean
+}
+
+export interface ApiEndpointDetail {
+  id: number
+  contract: string
+  method: string
+  path: string
+  operation_id?: string
+  summary?: string
+  description?: string
+  tags: string[]
+  deprecated: boolean
+  request_schema: Record<string, unknown>
+  response_schema: Record<string, unknown>
+}
+
+export interface CiRun {
+  id: number
+  name?: string
+  status?: string
+  conclusion?: string
+  branch?: string
+  commit?: string
+  event?: string
+  url?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface CiFailedJob {
+  name?: string
+  failed_steps: string[]
+  log_tail: string
+  url?: string
+}
+
+export interface CiFailureDetail {
+  found: boolean
+  message?: string
+  run?: CiRun
+  failed_jobs?: CiFailedJob[]
+}
+
 export interface SetupStatus {
   is_configured: boolean
   mode: 'configured' | 'admin' | 'full'
@@ -644,6 +722,47 @@ export const api = {
       }),
     log: (id: number, limit = 50) =>
       request<{ log: DbQueryLogEntry[]; count: number }>(`/api/datasources/${id}/log?limit=${limit}`),
+  },
+  contracts: {
+    list: () => request<{ contracts: ApiContract[]; types: ApiContractType[] }>('/api/contracts'),
+    create: (req: ApiContractCreateRequest) =>
+      request<{ status: string; contract: ApiContract }>('/api/contracts', {
+        method: 'POST',
+        body: JSON.stringify(req),
+      }),
+    refresh: (id: number, rawSpec?: string) =>
+      request<{ status: string; contract: ApiContract }>(`/api/contracts/${id}/refresh`, {
+        method: 'POST',
+        body: JSON.stringify({ raw_spec: rawSpec ?? null }),
+      }),
+    delete: (id: number) => request<{ status: string }>(`/api/contracts/${id}`, { method: 'DELETE' }),
+    endpoints: (id: number, opts?: { tag?: string; search?: string }) => {
+      const params = new URLSearchParams()
+      if (opts?.tag) params.set('tag', opts.tag)
+      if (opts?.search) params.set('search', opts.search)
+      const qs = params.toString()
+      return request<{ endpoints: ApiEndpointSummary[]; count: number }>(
+        `/api/contracts/${id}/endpoints${qs ? `?${qs}` : ''}`
+      )
+    },
+    endpoint: (id: number, method: string, path: string) =>
+      request<ApiEndpointDetail>(
+        `/api/contracts/${id}/endpoint?method=${encodeURIComponent(method)}&path=${encodeURIComponent(path)}`
+      ),
+    search: (q: string, limit = 100) =>
+      request<{ endpoints: ApiEndpointSummary[]; count: number }>(
+        `/api/contracts/search?q=${encodeURIComponent(q)}&limit=${limit}`
+      ),
+  },
+  ci: {
+    runs: (repoName: string, limit = 10) =>
+      request<{ repo: string; runs: CiRun[]; count: number }>(
+        `/api/ci/${encodeURIComponent(repoName)}/runs?limit=${limit}`
+      ),
+    failure: (repoName: string, runId?: number) =>
+      request<CiFailureDetail>(
+        `/api/ci/${encodeURIComponent(repoName)}/failure${runId ? `?run_id=${runId}` : ''}`
+      ),
   },
   mcpKeys: {
     list: () => request<{ keys: MCPApiKey[] }>('/api/mcp/keys'),
