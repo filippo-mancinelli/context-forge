@@ -224,12 +224,38 @@ export interface ChatToolCall {
   error?: string | null
 }
 
+export interface ChatSourcesUsed {
+  repositories: boolean
+  memory: boolean
+  knowledge_base: boolean
+  databases: boolean
+}
+
 export interface ChatResponse {
   reply: string
   tool_calls: ChatToolCall[]
-  sources_used: { repositories: boolean; memory: boolean; knowledge_base: boolean; databases: boolean }
+  sources_used: ChatSourcesUsed
   model: string
 }
+
+export interface ChatModel {
+  id: string
+  provider: string
+  label: string
+}
+
+export interface ChatModelsResponse {
+  models: ChatModel[]
+  default: { provider: string; model: string } | null
+}
+
+export type ChatStreamEvent =
+  | { type: 'reasoning'; delta: string }
+  | { type: 'text'; delta: string }
+  | ({ type: 'tool_start' } & Pick<ChatToolCall, 'tool' | 'source' | 'query'>)
+  | ({ type: 'tool_result' } & ChatToolCall)
+  | { type: 'done'; model: string; sources_used: ChatSourcesUsed }
+  | { type: 'error'; message: string }
 
 export interface Job {
   id: string
@@ -670,6 +696,46 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ messages }),
       }),
+    models: () => request<ChatModelsResponse>('/api/chat/models'),
+    // Streams SSE frames from POST /api/chat/stream, invoking onEvent per frame.
+    // Uses fetch (not EventSource) because auth/org headers are required.
+    stream: async (
+      payload: { messages: ChatMessage[]; provider?: string; model?: string },
+      onEvent: (ev: ChatStreamEvent) => void,
+      signal?: AbortSignal
+    ): Promise<void> => {
+      const res = await fetch(`${BASE}/api/chat/stream`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal,
+      })
+      if (!res.ok || !res.body) {
+        const text = await res.text()
+        throw new Error(`${res.status} ${res.statusText}: ${text}`)
+      }
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        let sep: number
+        while ((sep = buf.indexOf('\n\n')) !== -1) {
+          const frame = buf.slice(0, sep)
+          buf = buf.slice(sep + 2)
+          for (const line of frame.split('\n')) {
+            if (!line.startsWith('data: ')) continue
+            try {
+              onEvent(JSON.parse(line.slice(6)) as ChatStreamEvent)
+            } catch {
+              // Ignore malformed frames rather than killing the stream.
+            }
+          }
+        }
+      }
+    },
   },
   jobs: {
     list: (limit = 50) => request<{ jobs: Job[]; count: number }>(`/api/jobs?limit=${limit}`),
