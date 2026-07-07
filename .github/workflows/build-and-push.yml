@@ -30,8 +30,8 @@ jobs:
         id: set
         run: |
           all='[
-            {"name":"server","image":"context-forge","context":"services/server","dockerfile":"Dockerfile"},
-            {"name":"ui","image":"context-forge-ui","context":"services/ui","dockerfile":"Dockerfile"}
+            {"name":"server","image":"context-forge","context":"services/server","dockerfile":"services/server/Dockerfile"},
+            {"name":"ui","image":"context-forge-ui","context":"services/ui","dockerfile":"services/ui/Dockerfile"}
           ]'
           sel='${{ github.event.inputs.image }}'
           if [ "$sel" = "all" ]; then
