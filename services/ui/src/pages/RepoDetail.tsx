@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ChevronRight, FileCode2, Folder } from 'lucide-react'
+import { ChevronRight, ExternalLink, FileCode2, Folder } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
-import { api, type RepoSearchResult, type RepoStats } from '../lib/api'
+import { api, type CiFailureDetail, type CiRun, type RepoSearchResult, type RepoStats } from '../lib/api'
 import { Button, Input, Badge } from '../components/ui'
 
 function formatBytes(bytes?: number) {
@@ -14,6 +14,127 @@ function formatBytes(bytes?: number) {
 function snippet(content: string, max = 220) {
   const flat = content.replace(/\s+/g, ' ').trim()
   return flat.length > max ? `${flat.slice(0, max)}...` : flat
+}
+
+function ciRunVariant(conclusion?: string) {
+  if (conclusion === 'success') return 'success' as const
+  if (conclusion === 'failure' || conclusion === 'failed') return 'danger' as const
+  if (conclusion === 'running' || conclusion === 'pending') return 'accent' as const
+  return 'default' as const
+}
+
+function CiSection({ repoName }: { repoName: string }) {
+  const [runs, setRuns] = useState<CiRun[]>([])
+  const [failure, setFailure] = useState<CiFailureDetail | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [inspecting, setInspecting] = useState(false)
+
+  useEffect(() => {
+    let mounted = true
+    api.ci
+      .runs(repoName, 10)
+      .then((d) => mounted && setRuns(d.runs))
+      .catch((e) => mounted && setError(String(e)))
+      .finally(() => mounted && setLoading(false))
+    return () => { mounted = false }
+  }, [repoName])
+
+  const inspect = async (runId?: number) => {
+    setInspecting(true)
+    setFailure(null)
+    try {
+      setFailure(await api.ci.failure(repoName, runId))
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setInspecting(false)
+    }
+  }
+
+  const hasFailure = runs.some((r) => r.conclusion === 'failure' || r.conclusion === 'failed')
+
+  return (
+    <section style={{ border: '1px solid var(--border)' }} className="mt-6">
+      <div
+        style={{ borderBottom: '1px solid var(--border)' }}
+        className="px-4 py-2.5 flex items-center justify-between bg-surface"
+      >
+        <span className="text-sm font-medium">CI / CD</span>
+        {hasFailure && (
+          <Button size="sm" variant="secondary" loading={inspecting} onClick={() => inspect()}>
+            Why is it red?
+          </Button>
+        )}
+      </div>
+      <div className="p-4 space-y-3">
+        {loading && <p className="text-sm text-muted">Loading CI runs…</p>}
+        {error && <p className="text-sm text-danger break-words">{error}</p>}
+        {!loading && !error && runs.length === 0 && (
+          <p className="text-sm text-muted">No CI runs found for this repository.</p>
+        )}
+        {runs.map((run) => (
+          <div key={run.id} className="flex items-center gap-3 text-sm flex-wrap">
+            <Badge variant={ciRunVariant(run.conclusion)}>{run.conclusion ?? run.status ?? '?'}</Badge>
+            <span className="truncate">{run.name}</span>
+            <code className="font-mono text-xs text-muted">
+              {run.branch} @ {run.commit}
+            </code>
+            <span className="text-xs text-muted ml-auto whitespace-nowrap">
+              {run.created_at
+                ? new Date(run.created_at).toLocaleString(undefined, {
+                    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                  })
+                : ''}
+            </span>
+            {(run.conclusion === 'failure' || run.conclusion === 'failed') && (
+              <Button size="sm" variant="ghost" onClick={() => inspect(run.id)}>
+                Inspect
+              </Button>
+            )}
+            {run.url && (
+              <a href={run.url} target="_blank" rel="noreferrer" className="text-muted hover:text-accent">
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            )}
+          </div>
+        ))}
+
+        {failure && failure.found === false && (
+          <p className="text-sm text-muted">{failure.message}</p>
+        )}
+        {failure?.found && failure.failed_jobs && (
+          <div style={{ borderTop: '1px solid var(--border)' }} className="pt-3 space-y-3">
+            <p className="text-sm">
+              Failure in <span className="font-medium">{failure.run?.name}</span>{' '}
+              <code className="font-mono text-xs text-muted">
+                {failure.run?.branch} @ {failure.run?.commit}
+              </code>
+            </p>
+            {failure.failed_jobs.map((job, i) => (
+              <div key={i} style={{ border: '1px solid var(--border)' }}>
+                <div
+                  style={{ borderBottom: '1px solid var(--border)' }}
+                  className="px-3 py-2 bg-surface text-xs"
+                >
+                  <span className="font-medium">{job.name}</span>
+                  {job.failed_steps.length > 0 && (
+                    <span className="text-danger"> — failed: {job.failed_steps.join(', ')}</span>
+                  )}
+                </div>
+                <pre
+                  style={{ background: 'var(--code-bg)' }}
+                  className="text-xs font-mono p-3 overflow-x-auto max-h-72 overflow-y-auto whitespace-pre-wrap break-words"
+                >
+                  {job.log_tail || '(no log available)'}
+                </pre>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  )
 }
 
 export default function RepoDetail() {
@@ -282,6 +403,11 @@ export default function RepoDetail() {
                 )}
               </div>
             </section>
+
+            {/* CI/CD context (github/gitlab repos only) */}
+            {stats && (stats.repo.type === 'github' || stats.repo.type === 'gitlab') && (
+              <CiSection repoName={repoName} />
+            )}
           </>
         )}
       </div>

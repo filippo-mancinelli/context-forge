@@ -9,6 +9,9 @@ mcp = FastMCP(
         "sessions. Use repo_* tools to search code and navigate repositories. "
         "Use db_* tools to explore external database schemas (with curated "
         "descriptions) and run read-only SQL queries. "
+        "Use api_* tools to browse ingested API contracts (OpenAPI/GraphQL): "
+        "endpoints, parameters, request/response schemas. "
+        "Use ci_* tools to see recent CI runs and why a pipeline failed. "
         "Use job_* tools to run long HTTP calls (e.g. slow AI agents) without timeouts."
     ),
 )

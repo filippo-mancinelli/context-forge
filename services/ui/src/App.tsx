@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom'
-import { GitBranch, Brain, Wrench, Activity, SlidersHorizontal, Menu, X, Building2, Library, MessagesSquare, Database } from 'lucide-react'
+import { GitBranch, Brain, Wrench, Activity, SlidersHorizontal, Menu, X, Building2, Library, MessagesSquare, Database, Braces } from 'lucide-react'
 import Repos from './pages/Repos'
 import Chat from './pages/Chat'
 import DataSources from './pages/DataSources'
 import DataSourceDetail from './pages/DataSourceDetail'
+import ApiContracts from './pages/ApiContracts'
 import Memory from './pages/Memory'
 import Knowledge from './pages/Knowledge'
 import Tools from './pages/Tools'
@@ -24,6 +25,7 @@ const navLinks = [
   { to: '/chat', icon: MessagesSquare, label: 'Agent Chat' },
   { to: '/repos', icon: GitBranch, label: 'Repositories' },
   { to: '/datasources', icon: Database, label: 'Data Sources' },
+  { to: '/contracts', icon: Braces, label: 'API Contracts' },
   { to: '/knowledge', icon: Library, label: 'Knowledge Base' },
   { to: '/memory', icon: Brain, label: 'Memory' },
   { to: '/settings', icon: SlidersHorizontal, label: 'Settings' },
@@ -258,6 +260,7 @@ export default function App() {
               <Route path="/repos/:repoName" element={<RepoDetail />} />
               <Route path="/datasources" element={<DataSources />} />
               <Route path="/datasources/:connectionId" element={<DataSourceDetail />} />
+              <Route path="/contracts" element={<ApiContracts />} />
               <Route path="/knowledge" element={<Knowledge />} />
               <Route path="/memory" element={<Memory />} />
               <Route path="/settings" element={<Settings />} />
