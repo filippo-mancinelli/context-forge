@@ -1,14 +1,15 @@
 # context-forge
 
-Self-hosted context infrastructure for AI coding agents. Exposes a single MCP endpoint that gives Claude Code, Codex, Cursor, and other MCP clients three capabilities: persistent memory, semantic code search across repositories, and async job execution. Multi-tenant by design, managed from a web UI.
+Self-hosted context infrastructure for AI coding agents. Exposes a single MCP endpoint that gives Claude Code, Codex, Cursor, and other MCP clients four capabilities: persistent memory, semantic code search across repositories, live database schema context with read-only queries, and async job execution. Multi-tenant by design, managed from a web UI.
 
 ## Features
 
 - **Persistent memory** — long-term memory with Mem0 + pgvector, scoped per organization.
 - **Knowledge base** — upload documents (PDF, Word, Excel, PowerPoint, images with OCR, text, and more) via drag-and-drop; they're extracted, chunked, embedded, and made semantically searchable.
 - **Hybrid repository search** — index and query local, GitHub, and GitLab repos using tree-sitter parsing. Retrieval fuses dense vector embeddings with lexical full-text ranking (Reciprocal Rank Fusion) so exact identifiers, error strings, and rare tokens surface alongside semantic matches. Set `SEARCH_HYBRID=false` to fall back to vector-only.
+- **Data sources** — connect external databases (PostgreSQL, MySQL, MariaDB, SQLite) with read-only credentials. Agents get live schema context (tables, columns, keys, indexes, row estimates) enriched by a human-curated **data dictionary** (per-table and per-column descriptions edited in the UI), and can run validated read-only SQL (single SELECT/SHOW/EXPLAIN statement, enforced LIMIT, timeouts, full audit log). Credentials are encrypted at rest when `ENCRYPTION_KEY` is set.
 - **Async jobs** — offload slow downstream calls without hitting client timeouts.
-- **Agent chat** — a built-in chat page where a tool-using agent searches your repos, memory, and knowledge base, showing every retrieval inline so you can verify context is surfaced correctly.
+- **Agent chat** — a built-in chat page where a tool-using agent searches your repos, memory, knowledge base, and connected databases, showing every retrieval inline so you can verify context is surfaced correctly.
 - **Multi-tenancy** — organizations as isolation boundaries with `owner / admin / member / viewer` roles and email invitations.
 - **Runtime-first config** — manage repositories, providers, tokens, and indexing from the UI; `.env` and YAML are only for bootstrap.
 - **Pluggable providers** — OpenAI, Jina, OpenAI-compatible, or fully local embeddings.
@@ -47,6 +48,7 @@ See `.env.example` for the full list.
 - **Memory:** `memory_add`, `memory_search`, `memory_list`, `memory_delete`
 - **Knowledge base:** `kb_search`, `kb_list`, `kb_get_document`
 - **Repositories:** `repo_list`, `repo_search`, `repo_get_file`, `repo_index`, `repo_relationships`
+- **Data sources:** `db_list`, `db_schema`, `db_describe`, `db_query`
 - **Jobs:** `job_submit`, `job_status`, `job_result`
 
 ## Agent setup
