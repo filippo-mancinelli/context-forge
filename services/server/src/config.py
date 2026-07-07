@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     # GitHub: HMAC-SHA256 (X-Hub-Signature-256); GitLab: X-Gitlab-Token; generic:
     # X-Webhook-Secret. Set WEBHOOK_SECRET to enable push-triggered indexing.
     webhook_secret: str = ""
+    # Symmetric key used to encrypt stored data-source credentials at rest
+    # (any non-empty string; it is hashed to derive the actual Fernet key).
+    # Empty means credentials are stored obfuscated but NOT encrypted.
+    encryption_key: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

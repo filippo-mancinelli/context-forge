@@ -265,6 +265,62 @@ ALTER TABLE kb_chunks ADD COLUMN IF NOT EXISTS
 
 CREATE INDEX IF NOT EXISTS repo_chunks_tsv_idx ON repo_chunks USING GIN (content_tsv);
 CREATE INDEX IF NOT EXISTS kb_chunks_tsv_idx ON kb_chunks USING GIN (content_tsv);
+
+-- ===== External data sources: managed database connections =====
+CREATE TABLE IF NOT EXISTS db_connections (
+    id              BIGSERIAL PRIMARY KEY,
+    org_id          BIGINT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    engine          TEXT NOT NULL,
+    host            TEXT,
+    port            INTEGER,
+    database_name   TEXT,
+    username        TEXT,
+    password_enc    TEXT,
+    options         JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    description     TEXT,
+    status          TEXT NOT NULL DEFAULT 'unknown',
+    error_message   TEXT,
+    last_checked_at TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (org_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS db_connections_org_idx ON db_connections (org_id);
+
+-- Human-curated data dictionary: descriptions for tables (column_name = '')
+-- and columns, merged into schema introspection results. This is the context
+-- a live database cannot provide by itself (enum meanings, encrypted fields,
+-- tenancy conventions, ...).
+CREATE TABLE IF NOT EXISTS db_annotations (
+    id            BIGSERIAL PRIMARY KEY,
+    connection_id BIGINT NOT NULL REFERENCES db_connections(id) ON DELETE CASCADE,
+    schema_name   TEXT NOT NULL DEFAULT '',
+    table_name    TEXT NOT NULL,
+    column_name   TEXT NOT NULL DEFAULT '',
+    description   TEXT NOT NULL,
+    updated_at    TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (connection_id, schema_name, table_name, column_name)
+);
+
+CREATE INDEX IF NOT EXISTS db_annotations_conn_idx ON db_annotations (connection_id);
+
+-- Audit trail of every read-only query executed through context-forge.
+CREATE TABLE IF NOT EXISTS db_query_log (
+    id            BIGSERIAL PRIMARY KEY,
+    connection_id BIGINT NOT NULL REFERENCES db_connections(id) ON DELETE CASCADE,
+    org_id        BIGINT NOT NULL,
+    source        TEXT NOT NULL DEFAULT 'mcp',
+    sql_text      TEXT NOT NULL,
+    success       BOOLEAN NOT NULL DEFAULT TRUE,
+    error_message TEXT,
+    rows_returned INTEGER DEFAULT 0,
+    duration_ms   INTEGER DEFAULT 0,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS db_query_log_conn_idx ON db_query_log (connection_id, created_at DESC);
 """
 
 

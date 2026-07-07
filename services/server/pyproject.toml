@@ -20,6 +20,10 @@ dependencies = [
     "pgvector>=0.3.0",
     "sqlalchemy[asyncio]>=2.0.0",
 
+    # External data sources (schema context + read-only queries)
+    "pymysql>=1.1.0",           # MySQL / MariaDB driver
+    "cryptography>=42.0.0",     # credential encryption at rest (Fernet)
+
     # Memory
     "mem0ai>=1.0.11,<2.0.0",
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { GitBranch, Brain, Library, ChevronDown, ChevronRight, AlertCircle } from 'lucide-react'
+import { GitBranch, Brain, Library, Database, ChevronDown, ChevronRight, AlertCircle } from 'lucide-react'
 import { api, type ChatMessage, type ChatToolCall } from '../lib/api'
 import { Button, Textarea } from '../components/ui'
 import { Markdown } from '../components/Markdown'
@@ -23,6 +23,7 @@ const SOURCE_META: Record<
   repositories: { label: 'Repositories', icon: GitBranch, color: '#2563eb' },
   memory: { label: 'Memory', icon: Brain, color: '#7c3aed' },
   knowledge_base: { label: 'Knowledge Base', icon: Library, color: '#0d9488' },
+  databases: { label: 'Databases', icon: Database, color: '#d97706' },
 }
 
 const SUGGESTIONS = [
@@ -44,11 +45,15 @@ function resultTitle(source: ChatToolCall['source'], r: Record<string, unknown>)
   if (source === 'knowledge_base') {
     return String(r.title ?? r.filename ?? `document ${r.document_id ?? ''}`)
   }
+  if (source === 'databases') {
+    return String(r.connection ?? r.table ?? 'database')
+  }
   return 'memory'
 }
 
 function resultBody(source: ChatToolCall['source'], r: Record<string, unknown>): string {
   if (source === 'memory') return snippet(r.memory)
+  if (source === 'databases') return snippet(r.rows ?? r.columns ?? r.description ?? r)
   return snippet(r.content)
 }
 

@@ -21,6 +21,7 @@ from .routes import oauth as oauth_routes
 from .routes import organizations as organizations_routes
 from .routes import invitations as invitations_routes
 from .routes import webhooks as webhooks_routes
+from .routes import datasources as datasources_routes
 
 api = FastAPI(
     title="context-forge API",
@@ -78,6 +79,7 @@ api.include_router(oauth_routes.router, prefix="/api")
 api.include_router(organizations_routes.router, prefix="/api")
 api.include_router(invitations_routes.router, prefix="/api")
 api.include_router(webhooks_routes.router, prefix="/api")
+api.include_router(datasources_routes.router, prefix="/api")
 
 
 @api.middleware("http")
@@ -149,6 +151,10 @@ async def list_tools():
             {"name": "repo_get_file", "description": "Read the full content of a file from an indexed repository."},
             {"name": "repo_index", "description": "Trigger re-indexing of one or all repositories."},
             {"name": "repo_relationships", "description": "Discover semantic relationships between repositories."},
+            {"name": "db_list", "description": "List external database connections available to the organization."},
+            {"name": "db_schema", "description": "Get the schema overview of an external database (tables, views, row estimates)."},
+            {"name": "db_describe", "description": "Describe a table in depth: columns, keys, indexes, curated descriptions."},
+            {"name": "db_query", "description": "Run a validated read-only SQL query against an external database."},
             {"name": "job_submit", "description": "Submit a long-running HTTP request as an async background job."},
             {"name": "job_status", "description": "Check the status of a submitted async job."},
             {"name": "job_result", "description": "Retrieve the result of a completed async job."},

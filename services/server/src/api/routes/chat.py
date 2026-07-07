@@ -28,26 +28,43 @@ MAX_TOOL_ITERATIONS = 6
 SYSTEM_PROMPT = (
     "You are the context-forge test agent. You help a developer verify that "
     "their self-hosted context infrastructure returns useful results.\n\n"
-    "You have three retrieval tools:\n"
+    "You have these retrieval tools:\n"
     "- search_repositories: semantic search over indexed code repositories.\n"
     "- search_memory: semantic search over long-term persistent memories.\n"
-    "- search_knowledge_base: semantic search over uploaded documents.\n\n"
+    "- search_knowledge_base: semantic search over uploaded documents.\n"
+    "- get_database_schema: list configured database connections, browse a "
+    "database's tables, or describe one table in depth (columns, keys, "
+    "curated descriptions).\n"
+    "- query_database: run a single read-only SQL query on a configured "
+    "database connection.\n\n"
     "For any question that could benefit from stored context, call the "
-    "relevant tool(s) before answering — prefer searching over guessing. When "
-    "you use results, cite where they came from (repo/file, memory, or "
-    "document title) so the developer can confirm retrieval is working. If a "
-    "search returns nothing, say so plainly. Keep answers concise."
+    "relevant tool(s) before answering — prefer searching over guessing. For "
+    "database questions, inspect the schema with get_database_schema before "
+    "writing SQL, and use the exact table/column names it returns. When "
+    "you use results, cite where they came from (repo/file, memory, "
+    "document title, or connection/table) so the developer can confirm "
+    "retrieval is working. If a search returns nothing, say so plainly. "
+    "Keep answers concise."
 )
 
 
 # --------------------------------------------------------------------------- #
 # Retrieval helpers (org-scoped). These mirror the REST search endpoints but
-# are callable directly so the agent loop can invoke them as tools.
+# are callable directly so the agent loop can invoke them as tools. Handlers
+# take (org, tool_args) and return a list of result dicts.
 # --------------------------------------------------------------------------- #
-async def _search_repositories(org: ActiveOrg, query: str, limit: int = 8) -> list[dict[str, Any]]:
+def _arg_query(args: dict[str, Any]) -> str:
+    return str(args.get("query", "")).strip()
+
+
+def _arg_limit(args: dict[str, Any], default: int = 8, cap: int = 20) -> int:
+    return max(1, min(int(args.get("limit") or default), cap))
+
+
+async def _search_repositories(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
     from ...search import search_repo_chunks
 
-    results = await search_repo_chunks(org.org_id, query, limit=limit)
+    results = await search_repo_chunks(org.org_id, _arg_query(args), limit=_arg_limit(args))
     return [
         {
             "repo_name": r["repo_name"],
@@ -60,11 +77,11 @@ async def _search_repositories(org: ActiveOrg, query: str, limit: int = 8) -> li
     ]
 
 
-async def _search_memory(org: ActiveOrg, query: str, limit: int = 8) -> list[dict[str, Any]]:
+async def _search_memory(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
     from ...mcp.memory import _get_memory
 
     mem = _get_memory()
-    results = mem.search(query, user_id=org.namespace, limit=limit)
+    results = mem.search(_arg_query(args), user_id=org.namespace, limit=_arg_limit(args))
     memories = results.get("results", results) if isinstance(results, dict) else results
     out: list[dict[str, Any]] = []
     for m in memories or []:
@@ -81,10 +98,10 @@ async def _search_memory(org: ActiveOrg, query: str, limit: int = 8) -> list[dic
     return out
 
 
-async def _search_knowledge_base(org: ActiveOrg, query: str, limit: int = 8) -> list[dict[str, Any]]:
+async def _search_knowledge_base(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
     from ...kb import store
 
-    results = await store.search_documents(org.org_id, query, limit=limit)
+    results = await store.search_documents(org.org_id, _arg_query(args), limit=_arg_limit(args))
     return [
         {
             "document_id": r.get("document_id"),
@@ -97,11 +114,60 @@ async def _search_knowledge_base(org: ActiveOrg, query: str, limit: int = 8) -> 
     ]
 
 
-# Map tool name -> (handler, human label). Handlers take (org, query, limit).
+async def _get_database_schema(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
+    """Three granularities: no args -> connections; connection -> tables; +table -> columns."""
+    from ...datasources import service
+
+    connection = str(args.get("connection") or "").strip()
+    table = str(args.get("table") or "").strip()
+    schema = str(args.get("schema") or "").strip() or None
+
+    if not connection:
+        return [
+            {
+                "connection": c["name"],
+                "engine": c["engine"],
+                "database": c.get("database_name"),
+                "description": c.get("description"),
+                "status": c.get("status"),
+            }
+            for c in await service.list_connections(org.org_id)
+        ]
+    if not table:
+        overview = await service.schema_overview(org.org_id, connection, schema=schema)
+        return [
+            {
+                "table": t["name"],
+                "description": t.get("description") or t.get("comment"),
+                "column_count": t["column_count"],
+                "estimated_rows": t.get("estimated_rows"),
+            }
+            for t in overview["tables"]
+        ]
+    detail = await service.describe_table(org.org_id, connection, table, schema=schema)
+    return [detail]
+
+
+async def _query_database(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
+    from ...datasources import service
+
+    connection = str(args.get("connection") or "").strip()
+    sql = str(args.get("sql") or "").strip()
+    if not connection or not sql:
+        raise ValueError("Both 'connection' and 'sql' are required")
+    result = await service.run_query(
+        org.org_id, connection, sql, max_rows=_arg_limit(args, default=50, cap=200), source="chat"
+    )
+    return [result]
+
+
+# Map tool name -> (handler, human label). Handlers take (org, tool_args).
 _TOOL_HANDLERS = {
     "search_repositories": (_search_repositories, "repositories"),
     "search_memory": (_search_memory, "memory"),
     "search_knowledge_base": (_search_knowledge_base, "knowledge_base"),
+    "get_database_schema": (_get_database_schema, "databases"),
+    "query_database": (_query_database, "databases"),
 }
 
 # OpenAI-style tool schemas (also reshaped for Anthropic below).
@@ -159,6 +225,48 @@ _OPENAI_TOOLS = [
                     "limit": {"type": "integer", "description": "Max results (default 8)"},
                 },
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_database_schema",
+            "description": (
+                "Explore configured external databases. Without arguments, "
+                "lists available connections. With 'connection', lists that "
+                "database's tables (with curated descriptions and row "
+                "estimates). With 'connection' and 'table', describes the "
+                "table in depth: columns, types, keys, indexes."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "connection": {"type": "string", "description": "Connection name"},
+                    "table": {"type": "string", "description": "Table to describe in depth"},
+                    "schema": {"type": "string", "description": "Schema name (optional)"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_database",
+            "description": (
+                "Run a single read-only SQL query (SELECT/SHOW/EXPLAIN) on a "
+                "configured database connection. Inspect the schema with "
+                "get_database_schema first and use exact table/column names."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "connection": {"type": "string", "description": "Connection name"},
+                    "sql": {"type": "string", "description": "Read-only SQL statement"},
+                    "limit": {"type": "integer", "description": "Max rows (default 50)"},
+                },
+                "required": ["connection", "sql"],
             },
         },
     },
@@ -231,13 +339,21 @@ class ChatResponse(BaseModel):
     model: str
 
 
+def _trace_query(name: str, args: dict[str, Any]) -> str:
+    """Human-readable summary of a tool invocation for the trace panel."""
+    if name == "query_database":
+        return f"{args.get('connection', '?')}: {str(args.get('sql', '')).strip()}"
+    if name == "get_database_schema":
+        parts = [str(args[k]) for k in ("connection", "table") if args.get(k)]
+        return " / ".join(parts) if parts else "(list connections)"
+    return _arg_query(args)
+
+
 async def _run_tool(org: ActiveOrg, name: str, args: dict[str, Any]) -> ToolCallTrace:
     handler, source = _TOOL_HANDLERS[name]
-    query = str(args.get("query", "")).strip()
-    limit = int(args.get("limit") or 8)
-    limit = max(1, min(limit, 20))
+    query = _trace_query(name, args)
     try:
-        results = await handler(org, query, limit)
+        results = await handler(org, args)
         return ToolCallTrace(
             tool=name, source=source, query=query,
             result_count=len(results), results=results,
@@ -386,6 +502,7 @@ def _build_response(reply: str, traces: list[ToolCallTrace], model: str) -> Chat
         "repositories": any(t.source == "repositories" and not t.error for t in traces),
         "memory": any(t.source == "memory" and not t.error for t in traces),
         "knowledge_base": any(t.source == "knowledge_base" and not t.error for t in traces),
+        "databases": any(t.source == "databases" and not t.error for t in traces),
     }
     return ChatResponse(reply=reply, tool_calls=traces, sources_used=sources_used, model=model)
 
