@@ -217,7 +217,7 @@ export interface ChatMessage {
 
 export interface ChatToolCall {
   tool: string
-  source: 'repositories' | 'memory' | 'knowledge_base'
+  source: 'repositories' | 'memory' | 'knowledge_base' | 'databases'
   query: string
   result_count: number
   results: Record<string, unknown>[]
@@ -227,7 +227,7 @@ export interface ChatToolCall {
 export interface ChatResponse {
   reply: string
   tool_calls: ChatToolCall[]
-  sources_used: { repositories: boolean; memory: boolean; knowledge_base: boolean }
+  sources_used: { repositories: boolean; memory: boolean; knowledge_base: boolean; databases: boolean }
   model: string
 }
 
@@ -294,6 +294,113 @@ export interface CurrentUser {
 export interface MeResponse {
   user: CurrentUser
   organizations: Organization[]
+}
+
+export type DbEngine = 'postgresql' | 'mysql' | 'mariadb' | 'sqlite'
+
+export interface DbConnection {
+  id: number
+  name: string
+  engine: DbEngine
+  host?: string
+  port?: number
+  database_name?: string
+  username?: string
+  has_password: boolean
+  options: Record<string, unknown>
+  description?: string
+  status: 'unknown' | 'ok' | 'error'
+  error_message?: string
+  last_checked_at?: string
+  created_at?: string
+  updated_at?: string
+  annotation_count?: number
+}
+
+export interface DbConnectionRequest {
+  name: string
+  engine: DbEngine
+  host?: string
+  port?: number
+  database_name?: string
+  username?: string
+  password?: string
+  options?: Record<string, unknown>
+  description?: string
+}
+
+export interface DbSchemaTable {
+  name: string
+  comment?: string | null
+  description?: string | null
+  column_count: number
+  estimated_rows?: number | null
+}
+
+export interface DbSchemaOverview {
+  connection: string
+  connection_id: number
+  dialect: string
+  default_schema?: string
+  schema?: string
+  schemas: string[]
+  tables: DbSchemaTable[]
+  views: string[]
+}
+
+export interface DbColumn {
+  name: string
+  type: string
+  nullable: boolean
+  default?: string | null
+  comment?: string | null
+  description?: string | null
+  autoincrement: boolean
+}
+
+export interface DbTableDetail {
+  connection: string
+  connection_id: number
+  schema?: string
+  table: string
+  comment?: string | null
+  description?: string | null
+  columns: DbColumn[]
+  primary_key: string[]
+  foreign_keys: { columns: string[]; referred_schema?: string; referred_table: string; referred_columns: string[] }[]
+  indexes: { name?: string; columns: string[]; unique: boolean }[]
+  unique_constraints: { name?: string; columns: string[] }[]
+  estimated_rows?: number | null
+  sample_rows?: Record<string, unknown>[]
+  sample_error?: string
+}
+
+export interface DbAnnotation {
+  schema_name: string
+  table_name: string
+  column_name: string
+  description: string
+}
+
+export interface DbQueryResult {
+  connection: string
+  sql: string
+  columns: string[]
+  rows: Record<string, unknown>[]
+  row_count: number
+  truncated: boolean
+  duration_ms: number
+}
+
+export interface DbQueryLogEntry {
+  id: number
+  source: string
+  sql_text: string
+  success: boolean
+  error_message?: string
+  rows_returned: number
+  duration_ms: number
+  created_at?: string
 }
 
 export interface SetupStatus {
@@ -494,6 +601,49 @@ export const api = {
     get: () => request<{ forge_config: Record<string, unknown>; settings_overrides: Record<string, unknown>; settings_overrides_editable?: boolean }>('/api/settings'),
     update: (payload: { forge_config: Record<string, unknown>; settings_overrides: Record<string, unknown> }) =>
       request<SettingsUpdateResponse>('/api/settings', { method: 'PUT', body: JSON.stringify(payload) }),
+  },
+  datasources: {
+    list: () => request<{ connections: DbConnection[]; engines: DbEngine[] }>('/api/datasources'),
+    create: (req: DbConnectionRequest) =>
+      request<{ status: string; connection: DbConnection }>('/api/datasources', {
+        method: 'POST',
+        body: JSON.stringify(req),
+      }),
+    update: (id: number, req: DbConnectionRequest) =>
+      request<{ status: string; connection: DbConnection }>(`/api/datasources/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(req),
+      }),
+    delete: (id: number) => request<{ status: string }>(`/api/datasources/${id}`, { method: 'DELETE' }),
+    test: (id: number) =>
+      request<{ status: 'ok' | 'error'; error?: string }>(`/api/datasources/${id}/test`, { method: 'POST' }),
+    schema: (id: number, schema?: string) =>
+      request<DbSchemaOverview>(
+        `/api/datasources/${id}/schema${schema ? `?schema=${encodeURIComponent(schema)}` : ''}`
+      ),
+    table: (id: number, table: string, opts?: { schema?: string; sampleRows?: number }) => {
+      const params = new URLSearchParams()
+      if (opts?.schema) params.set('schema', opts.schema)
+      if (opts?.sampleRows) params.set('sample_rows', String(opts.sampleRows))
+      const qs = params.toString()
+      return request<DbTableDetail>(
+        `/api/datasources/${id}/tables/${encodeURIComponent(table)}${qs ? `?${qs}` : ''}`
+      )
+    },
+    annotations: (id: number) =>
+      request<{ annotations: DbAnnotation[]; count: number }>(`/api/datasources/${id}/annotations`),
+    saveAnnotations: (id: number, annotations: DbAnnotation[]) =>
+      request<{ status: string; written: number }>(`/api/datasources/${id}/annotations`, {
+        method: 'PUT',
+        body: JSON.stringify({ annotations }),
+      }),
+    query: (id: number, sql: string, maxRows = 100) =>
+      request<DbQueryResult>(`/api/datasources/${id}/query`, {
+        method: 'POST',
+        body: JSON.stringify({ sql, max_rows: maxRows }),
+      }),
+    log: (id: number, limit = 50) =>
+      request<{ log: DbQueryLogEntry[]; count: number }>(`/api/datasources/${id}/log?limit=${limit}`),
   },
   mcpKeys: {
     list: () => request<{ keys: MCPApiKey[] }>('/api/mcp/keys'),
