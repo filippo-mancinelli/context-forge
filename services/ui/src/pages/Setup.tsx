@@ -126,7 +126,7 @@ export default function Setup({ mode, onCompleted }: SetupProps) {
       <div className="mx-auto" style={{ maxWidth: '860px' }}>
         <div className="mb-8">
           <h1 className="text-2xl font-semibold">
-            {mode === 'full' ? 'Setup context-forge' : 'Create admin account'}
+            {mode === 'full' ? 'Setup ContextForge' : 'Create admin account'}
           </h1>
           <p className="text-muted text-sm mt-1">
             {mode === 'full'

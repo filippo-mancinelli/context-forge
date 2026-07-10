@@ -136,7 +136,7 @@ function ImportDialog({
       open={open}
       onOpenChange={open => { if (!open) onClose() }}
       title={`Browse ${title} repositories`}
-      description="Select repositories to add to context-forge."
+      description="Select repositories to add to ContextForge."
       maxWidth="720px"
     >
       <div className="space-y-4">

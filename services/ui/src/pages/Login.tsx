@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { api, setAuthToken } from '../lib/api'
 import { Button } from '../components/ui'
 import { Input } from '../components/ui'
+import { Logo } from '../components/Logo'
 
 type LoginProps = { onLoggedIn: () => void }
 
@@ -34,7 +35,9 @@ export default function Login({ onLoggedIn }: LoginProps) {
         style={{ maxWidth: '360px', border: '1px solid var(--border)' }}
         className="w-full bg-bg p-8"
       >
-        <h1 className="text-xl font-semibold mb-1">context-forge</h1>
+        <div className="mb-1">
+          <Logo size={26} />
+        </div>
         <p className="text-sm text-muted mb-6">Admin login</p>
 
         {error && (

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api, setAuthToken } from '../lib/api'
 import { Button, Input, Badge } from '../components/ui'
+import { Logo } from '../components/Logo'
 
 type AcceptInviteProps = { token: string; onAccepted: () => void }
 
@@ -50,7 +51,9 @@ export default function AcceptInvite({ token, onAccepted }: AcceptInviteProps) {
       className="flex items-center justify-center p-6"
     >
       <div style={{ maxWidth: '380px', border: '1px solid var(--border)' }} className="w-full bg-bg p-8">
-        <h1 className="text-xl font-semibold mb-1">context-forge</h1>
+        <div className="mb-1">
+          <Logo size={26} />
+        </div>
 
         {loading ? (
           <p className="text-sm text-muted">Loading invitation…</p>
