@@ -5,6 +5,7 @@ import {
   GitlabIcon,
   HardDrive,
   ExternalLink,
+  Square,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api, type GitHubRepo, type GitLabRepo, type RemoteRepo, type Repo } from '../lib/api'
@@ -236,6 +237,7 @@ export default function Repos() {
   const [repos, setRepos] = useState<Repo[]>([])
   const [loading, setLoading] = useState(true)
   const [indexingRepo, setIndexingRepo] = useState<string | null>(null)
+  const [stoppingRepo, setStoppingRepo] = useState<string | null>(null)
   const [syncing, setSyncing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showImport, setShowImport] = useState(false)
@@ -266,6 +268,16 @@ export default function Repos() {
       await load()
     } finally {
       setIndexingRepo(null)
+    }
+  }
+
+  const handleStop = async (name: string) => {
+    setStoppingRepo(name)
+    try {
+      await api.repos.cancelIndex(name)
+      await load()
+    } finally {
+      setStoppingRepo(null)
     }
   }
 
@@ -376,16 +388,29 @@ export default function Repos() {
                   style={{ borderTop: '1px solid var(--border)' }}
                   className="flex items-center gap-3 mt-3 pt-3"
                 >
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => handleIndex(repo.name)}
-                    disabled={indexingRepo === repo.name || repo.status === 'indexing'}
-                    loading={indexingRepo === repo.name}
-                  >
-                    <RefreshCw className="w-3 h-3" />
-                    Index
-                  </Button>
+                  {repo.status === 'indexing' ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleStop(repo.name)}
+                      disabled={stoppingRepo === repo.name}
+                      loading={stoppingRepo === repo.name}
+                    >
+                      <Square className="w-3 h-3" />
+                      Stop
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => handleIndex(repo.name)}
+                      disabled={indexingRepo === repo.name}
+                      loading={indexingRepo === repo.name}
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      Index
+                    </Button>
+                  )}
                   <Link
                     to={`/repos/${encodeURIComponent(repo.name)}`}
                     className="text-xs text-accent hover:underline"
@@ -447,7 +472,7 @@ export default function Repos() {
                     <td className="px-3 py-3">
                       <Badge variant={repoBadgeVariant(repo.status)}>{repo.status}</Badge>
                       {repo.error_message && (
-                        <p className="text-xs text-danger mt-1 max-w-xs truncate" title={repo.error_message}>
+                        <p className="text-xs text-danger mt-1 max-w-xs break-words" title={repo.error_message}>
                           {repo.error_message}
                         </p>
                       )}
@@ -460,16 +485,29 @@ export default function Repos() {
                     <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{formatDate(repo.last_indexed_at)}</td>
                     <td className="px-3 py-3">
                       <div className="flex items-center gap-2 justify-end whitespace-nowrap">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleIndex(repo.name)}
-                          disabled={indexingRepo === repo.name || repo.status === 'indexing'}
-                          loading={indexingRepo === repo.name}
-                        >
-                          <RefreshCw className="w-3 h-3" />
-                          Index
-                        </Button>
+                        {repo.status === 'indexing' ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleStop(repo.name)}
+                            disabled={stoppingRepo === repo.name}
+                            loading={stoppingRepo === repo.name}
+                          >
+                            <Square className="w-3 h-3" />
+                            Stop
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleIndex(repo.name)}
+                            disabled={indexingRepo === repo.name}
+                            loading={indexingRepo === repo.name}
+                          >
+                            <RefreshCw className="w-3 h-3" />
+                            Index
+                          </Button>
+                        )}
                         <Link
                           to={`/repos/${encodeURIComponent(repo.name)}`}
                           className="text-xs text-accent hover:underline"

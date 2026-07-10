@@ -28,7 +28,7 @@ async def main() -> None:
     from .scheduler import start_scheduler, stop_scheduler, initial_index
 
     # Import tool modules so they register on the mcp instance
-    from .mcp import memory, repos, jobs, knowledge, datasources, contracts, ci  # noqa: F401
+    from .mcp import memory, repos, jobs, knowledge, web, datasources, contracts, ci  # noqa: F401
     from .mcp.server import mcp
     from .mcp import oauth  # noqa: F401 - register OAuth handlers
     from .api.app import api
@@ -46,10 +46,14 @@ async def main() -> None:
     # migrate repo storage to tenant-aware composite identity.
     await ensure_tenant_storage()
 
-    # Requeue any knowledge-base documents left mid-processing by a prior crash.
+    # Requeue any knowledge-base documents / web pages / repos left mid-processing by a crash.
     from .kb.store import reset_stale_processing
+    from .web.store import reset_stale_processing as reset_stale_web
+    from .indexer.indexer import reset_stale_indexing
 
     await reset_stale_processing()
+    await reset_stale_web()
+    await reset_stale_indexing()
 
     # Initial indexing (background)
     logger.info("Starting initial repo sync...")

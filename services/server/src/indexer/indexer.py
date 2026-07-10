@@ -161,9 +161,15 @@ def _chunk_file(
 ) -> list[dict]:
     """Read and chunk a single file. Returns chunk dicts ready for insertion."""
     try:
-        content = file_path.read_text(encoding="utf-8", errors="replace")
+        raw = file_path.read_bytes()
     except Exception:
         return []
+
+    # NUL bytes mean binary content regardless of extension (same heuristic as
+    # git); Postgres TEXT also rejects NUL outright, so strip any stragglers.
+    if b"\x00" in raw[:8192]:
+        return []
+    content = raw.decode("utf-8", errors="replace").replace("\x00", "")
 
     detected_lang = language or _detect_language(file_path)
     suffix = file_path.suffix.lower()
@@ -372,6 +378,75 @@ ON CONFLICT (org_id, repo_name, file_path, chunk_index) DO UPDATE
 SET content=EXCLUDED.content, metadata=EXCLUDED.metadata,
     embedding=EXCLUDED.embedding, indexed_at=NOW()
 """
+
+# Registry of in-flight indexing tasks, keyed by (org_id, repo_name). Both API
+# servers and the scheduler share one event loop, so a cancel request from the
+# REST API can cancel a task started by the scheduler.
+_running_index_tasks: dict[tuple[int, str], asyncio.Task] = {}
+
+
+def is_index_running(org_id: int, repo_name: str) -> bool:
+    task = _running_index_tasks.get((org_id, repo_name))
+    return task is not None and not task.done()
+
+
+def cancel_index_task(org_id: int, repo_name: str) -> bool:
+    """Request cancellation of a running index task. Returns True if one was running."""
+    task = _running_index_tasks.get((org_id, repo_name))
+    if task and not task.done():
+        task.cancel()
+        return True
+    return False
+
+
+async def run_index_repo(
+    org_id: int,
+    repo: RepoConfig,
+    indexing_cfg: IndexingConfig | None = None,
+    *,
+    force_full: bool = False,
+) -> bool:
+    """Run ``index_repo`` as a registered, cancellable task.
+
+    Skips (returning False) if the repo is already being indexed, so scheduler
+    and manual triggers can't stack concurrent runs of the same repo. Returns
+    False when the run was cancelled, True otherwise.
+    """
+    key = (org_id, repo.name)
+    if is_index_running(org_id, repo.name):
+        logger.info("Indexing already running for org=%s repo=%s; skipping", org_id, repo.name)
+        return False
+
+    task = asyncio.create_task(index_repo(org_id, repo, indexing_cfg, force_full=force_full))
+    _running_index_tasks[key] = task
+    try:
+        await task
+        return True
+    except asyncio.CancelledError:
+        if not task.cancelled():
+            raise  # the awaiting coroutine itself was cancelled — propagate
+        logger.info("Indexing cancelled for org=%s repo=%s", org_id, repo.name)
+        return False
+    finally:
+        _running_index_tasks.pop(key, None)
+
+
+async def reset_stale_indexing() -> None:
+    """Recover repos left in 'indexing' by a crash or restart.
+
+    Repos that already have chunks fall back to 'indexed' (their data is still
+    usable); the rest return to 'pending' so the startup indexer retries them.
+    Without this, an interrupted run leaves the repo stuck in 'indexing' forever.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE repos SET status = CASE WHEN total_chunks > 0 THEN 'indexed' ELSE 'pending' END "
+            "WHERE status='indexing'"
+        )
+    count = int(result.split()[-1]) if result else 0
+    if count:
+        logger.warning("Reset %d repo(s) stuck in 'indexing' from a previous run", count)
 
 
 async def index_repo(
@@ -647,7 +722,7 @@ async def run_pending_index_requests() -> None:
 
         for repo in repos_to_index:
             logger.info("Processing index request for org=%s repo=%s", oid, repo.name)
-            await index_repo(oid, repo, cfg.indexing)
+            await run_index_repo(oid, repo, cfg.indexing)
 
         async with pool.acquire() as conn:
             await conn.execute(

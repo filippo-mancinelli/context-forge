@@ -13,7 +13,12 @@ logger = logging.getLogger(__name__)
 
 @mcp.tool()
 async def repo_list() -> dict:
-    """List all configured repositories and their indexing status.
+    """List ALL repositories the organization has configured in ContextForge, with indexing status.
+
+    Use this to answer questions like "which repos are indexed?", "how many
+    repositories do you see?", "is repo X indexed?", or to check indexing
+    progress and errors. This is the authoritative org-wide list — do not
+    infer it from other sources.
 
     Returns:
         dict with list of repos, each including name, type, status, last_indexed_at, and total_chunks
@@ -42,10 +47,12 @@ async def repo_search(
     repos: Optional[list[str]] = None,
     limit: int = 10,
 ) -> dict:
-    """Search across indexed repositories using semantic similarity.
+    """Search across ALL the organization's indexed repositories using semantic similarity.
 
     Finds code, functions, classes, and documentation relevant to the query.
-    Works across all indexed repos or a subset.
+    Works across all indexed repos or a subset. Prefer this over local file
+    search when the answer may live in a repo that is not checked out locally,
+    or when the user asks about the org's codebase in general.
 
     Args:
         query: Natural language or code search query

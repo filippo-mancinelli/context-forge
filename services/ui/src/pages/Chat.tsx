@@ -30,10 +30,14 @@ import {
   PendingToolCard,
   ReasoningBlock,
   SourceBadges,
+  SourceReferences,
   ToolCallCard,
   CopyButton,
   UserBubble,
+  collectSources,
+  type CitationSource,
 } from '../components/ChatTranscript'
+import { SourcePanel } from '../components/SourcePanel'
 
 interface PendingTool {
   tool: string
@@ -317,6 +321,7 @@ export default function Chat() {
     () => localStorage.getItem(HISTORY_OPEN_KEY) !== '0'
   )
   const [historyDrawer, setHistoryDrawer] = useState(false)
+  const [activeSource, setActiveSource] = useState<CitationSource | null>(null)
 
   const [shareOpen, setShareOpen] = useState(false)
   const [shareUrl, setShareUrl] = useState<string | null>(null)
@@ -650,17 +655,25 @@ export default function Chat() {
                 </div>
               </div>
             ) : (
-              <div className="page-content space-y-5 py-4">
+              <div className="page-content mx-auto space-y-5 py-4">
                 {turns.map((turn, idx) =>
                   turn.role === 'user' ? (
                     <UserBubble key={idx} content={turn.content} />
                   ) : (
+                    (() => {
+                      const sources = collectSources(turn.toolCalls)
+                      return (
                     <div key={idx} className="space-y-2">
                       {turn.toolCalls.length > 0 && (
                         <div className="space-y-1.5">
                           <SourceBadges calls={turn.toolCalls} />
                           {turn.toolCalls.map((call, ci) => (
-                            <ToolCallCard key={ci} call={call} />
+                            <ToolCallCard
+                              key={ci}
+                              call={call}
+                              sources={sources}
+                              onOpenSource={setActiveSource}
+                            />
                           ))}
                         </div>
                       )}
@@ -684,6 +697,9 @@ export default function Chat() {
                           </div>
                         )
                       )}
+                      {!turn.streaming && sources.length > 0 && (
+                        <SourceReferences sources={sources} onOpen={setActiveSource} />
+                      )}
                       {turn.error && (
                         <div
                           style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
@@ -705,6 +721,8 @@ export default function Chat() {
                         </div>
                       )}
                     </div>
+                      )
+                    })()
                   )
                 )}
               </div>
@@ -724,7 +742,7 @@ export default function Chat() {
         </div>
 
         <div className="px-4 sm:px-8 pb-4 pt-2 flex-shrink-0">
-          <form onSubmit={onSubmit} className="page-content">
+          <form onSubmit={onSubmit} className="page-content mx-auto">
             {noKeys ? (
               <div
                 style={{ border: '1px solid var(--border)' }}
@@ -867,6 +885,9 @@ export default function Chat() {
           </div>
         </>
       )}
+
+      {/* Source excerpt drawer */}
+      <SourcePanel source={activeSource} onClose={() => setActiveSource(null)} />
 
       {/* Share dialog */}
       <Dialog

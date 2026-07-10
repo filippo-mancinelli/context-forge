@@ -7,7 +7,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from .indexer.git_manager import pull_all_repos
-from .indexer.indexer import index_repo, run_pending_index_requests, sync_repos_config
+from .indexer.indexer import run_index_repo, run_pending_index_requests, sync_repos_config
 from .org_config import get_org_config, iter_org_configs
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,7 @@ async def _scheduled_refresh_org(org_id: int) -> None:
     logger.info("Scheduled refresh: org=%s repos=%d", org_id, len(cfg.repos))
     await pull_all_repos(cfg.repos, org_id)
     for repo in cfg.repos:
-        await index_repo(org_id, repo, cfg.indexing)
+        await run_index_repo(org_id, repo, cfg.indexing)
 
 
 def _cron_trigger(schedule: str) -> CronTrigger:
@@ -79,6 +79,20 @@ async def _check_kb_documents() -> None:
     await process_pending_documents()
 
 
+async def _check_web_pages() -> None:
+    """Process web pages left in the pending state."""
+    from .web.store import process_pending_pages
+
+    await process_pending_pages()
+
+
+async def _check_web_sites() -> None:
+    """Crawl web sites left in the pending state."""
+    from .web.crawler import process_pending_sites
+
+    await process_pending_sites()
+
+
 async def start_scheduler() -> None:
     global _scheduler
     _scheduler = AsyncIOScheduler()
@@ -91,6 +105,16 @@ async def start_scheduler() -> None:
     # Safety-net for knowledge-base documents whose background task didn't run.
     _scheduler.add_job(
         _check_kb_documents, "interval", seconds=20, id="kb_documents", replace_existing=True
+    )
+
+    # Safety-net for web pages whose background fetch didn't run.
+    _scheduler.add_job(
+        _check_web_pages, "interval", seconds=20, id="web_pages", replace_existing=True
+    )
+
+    # Safety-net for site crawls whose background task didn't run.
+    _scheduler.add_job(
+        _check_web_sites, "interval", seconds=30, id="web_sites", replace_existing=True
     )
 
     _scheduler.start()
@@ -129,4 +153,4 @@ async def initial_index() -> None:
             repo = config_repos.get(row["name"])
             if repo:
                 logger.info("Initial index for org=%s repo=%s", org_id, repo.name)
-                await index_repo(org_id, repo, cfg.indexing)
+                await run_index_repo(org_id, repo, cfg.indexing)

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom'
-import { GitBranch, Brain, Wrench, SlidersHorizontal, Menu, X, Building2, Library, MessagesSquare, Database, Braces } from 'lucide-react'
+import { GitBranch, Brain, Wrench, SlidersHorizontal, Menu, X, Building2, Library, MessagesSquare, Database, Braces, Globe } from 'lucide-react'
 import Repos from './pages/Repos'
 import Chat from './pages/Chat'
 import DataSources from './pages/DataSources'
@@ -8,6 +8,7 @@ import DataSourceDetail from './pages/DataSourceDetail'
 import ApiContracts from './pages/ApiContracts'
 import Memory from './pages/Memory'
 import Knowledge from './pages/Knowledge'
+import WebPages from './pages/WebPages'
 import Tools from './pages/Tools'
 import Jobs from './pages/Jobs'
 import Search from './pages/Search'
@@ -28,6 +29,7 @@ const navLinks = [
   { to: '/datasources', icon: Database, label: 'Data Sources' },
   { to: '/contracts', icon: Braces, label: 'API Contracts' },
   { to: '/knowledge', icon: Library, label: 'Knowledge Base' },
+  { to: '/web', icon: Globe, label: 'Web Pages' },
   { to: '/memory', icon: Brain, label: 'Memory' },
   { to: '/settings', icon: SlidersHorizontal, label: 'Settings' },
   { to: '/organization', icon: Building2, label: 'Organization' },
@@ -270,6 +272,7 @@ export default function App() {
               <Route path="/datasources/:connectionId" element={<DataSourceDetail />} />
               <Route path="/contracts" element={<ApiContracts />} />
               <Route path="/knowledge" element={<Knowledge />} />
+              <Route path="/web" element={<WebPages />} />
               <Route path="/memory" element={<Memory />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="/organization" element={<Organization />} />

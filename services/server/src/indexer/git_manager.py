@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
@@ -35,15 +36,31 @@ def _inject_token(url: str, token: str) -> str:
     return urlunparse(parsed._replace(netloc=netloc))
 
 
+_GIT_TIMEOUT_SECONDS = 600
+
+
 async def _run_git(*args: str, cwd: str = None) -> tuple[int, str, str]:
-    """Run a git command asynchronously."""
+    """Run a git command asynchronously.
+
+    Credential prompts are disabled and stdin is closed: a private repo with a
+    missing/expired token must fail fast instead of hanging the indexer forever.
+    A generous timeout guards against network stalls for the same reason.
+    """
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     proc = await asyncio.create_subprocess_exec(
         "git", *args,
         cwd=cwd,
+        env=env,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_GIT_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        return 124, "", f"git {' '.join(args)} timed out after {_GIT_TIMEOUT_SECONDS}s"
     return proc.returncode, stdout.decode(), stderr.decode()
 
 

@@ -7,7 +7,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
 from ...db import get_pool
-from ...indexer.indexer import index_repo, sync_repos_config
+from ...indexer.indexer import sync_repos_config
 from ...org_config import get_org_config, persist_org_config
 from ..deps import ActiveOrg, get_active_org, require_role
 
@@ -127,6 +127,35 @@ async def trigger_index(
             repo_name,
         )
     return {"status": "queued", "repo": repo_name}
+
+
+@router.post("/{repo_name}/cancel-index")
+async def cancel_index(repo_name: str, org: ActiveOrg = Depends(require_role("member"))):
+    """Stop a running index run (or clear a stale 'indexing' status).
+
+    Cancels the in-flight task if one exists, drops queued requests for the
+    repo, and resets the status so the UI is no longer stuck on 'indexing'.
+    """
+    from ...indexer.indexer import cancel_index_task
+
+    await _assert_repo_in_org(repo_name, org.org_id)
+    cancelled = cancel_index_task(org.org_id, repo_name)
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE index_requests SET processed_at=NOW() "
+            "WHERE org_id=$1 AND repo_name=$2 AND processed_at IS NULL",
+            org.org_id,
+            repo_name,
+        )
+        await conn.execute(
+            "UPDATE repos SET status = CASE WHEN total_chunks > 0 THEN 'indexed' ELSE 'pending' END, "
+            "error_message=NULL WHERE org_id=$1 AND name=$2 AND status='indexing'",
+            org.org_id,
+            repo_name,
+        )
+    return {"status": "cancelled" if cancelled else "reset", "repo": repo_name}
 
 
 @router.post("/index-all")

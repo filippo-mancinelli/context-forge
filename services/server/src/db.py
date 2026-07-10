@@ -383,6 +383,77 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 
 CREATE INDEX IF NOT EXISTS chat_sessions_org_user_idx ON chat_sessions (org_id, user_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS chat_sessions_share_idx ON chat_sessions (share_token);
+
+-- ===== Web sites: crawl roots that group scraped pages =====
+-- A site is a root URL crawled recursively (sitemap + same-scope links). Its
+-- discovered pages live in web_pages with site_id set; exclude_patterns is a
+-- JSON array of URL patterns skipped during crawling.
+CREATE TABLE IF NOT EXISTS web_sites (
+    id               BIGSERIAL PRIMARY KEY,
+    org_id           BIGINT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    root_url         TEXT NOT NULL,
+    status           TEXT NOT NULL DEFAULT 'pending',
+    max_pages        INTEGER NOT NULL DEFAULT 200,
+    exclude_patterns JSONB NOT NULL DEFAULT '[]'::jsonb,
+    pages_found      INTEGER DEFAULT 0,
+    error_message    TEXT,
+    created_at       TIMESTAMPTZ DEFAULT NOW(),
+    crawled_at       TIMESTAMPTZ,
+    UNIQUE (org_id, root_url)
+);
+
+CREATE INDEX IF NOT EXISTS web_sites_org_idx ON web_sites (org_id);
+CREATE INDEX IF NOT EXISTS web_sites_status_idx ON web_sites (status);
+
+-- ===== Web pages: scraped URLs + their embedded chunks =====
+-- Mirrors the knowledge-base pipeline (fetch → extract readable text → chunk →
+-- embed → search) but keyed by URL instead of an uploaded file.
+CREATE TABLE IF NOT EXISTS web_pages (
+    id            BIGSERIAL PRIMARY KEY,
+    org_id        BIGINT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    url           TEXT NOT NULL,
+    title         TEXT,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    total_chunks  INTEGER DEFAULT 0,
+    char_count    INTEGER DEFAULT 0,
+    error_message TEXT,
+    content_hash  TEXT,
+    metadata      JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    created_at    TIMESTAMPTZ DEFAULT NOW(),
+    fetched_at    TIMESTAMPTZ,
+    UNIQUE (org_id, url)
+);
+
+CREATE INDEX IF NOT EXISTS web_pages_org_idx ON web_pages (org_id);
+CREATE INDEX IF NOT EXISTS web_pages_status_idx ON web_pages (status);
+
+-- Pages discovered by a site crawl point back to their site (NULL = standalone).
+ALTER TABLE web_pages ADD COLUMN IF NOT EXISTS
+    site_id BIGINT REFERENCES web_sites(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS web_pages_site_idx ON web_pages (site_id);
+
+CREATE TABLE IF NOT EXISTS web_chunks (
+    id            BIGSERIAL PRIMARY KEY,
+    org_id        BIGINT NOT NULL,
+    page_id       BIGINT NOT NULL REFERENCES web_pages(id) ON DELETE CASCADE,
+    chunk_index   INTEGER NOT NULL,
+    content       TEXT NOT NULL,
+    metadata      JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+    embedding     vector({dims}),
+    indexed_at    TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (page_id, chunk_index)
+);
+
+CREATE INDEX IF NOT EXISTS web_chunks_embedding_idx
+    ON web_chunks USING ivfflat (embedding vector_cosine_ops)
+    WITH (lists = 100);
+
+CREATE INDEX IF NOT EXISTS web_chunks_org_idx ON web_chunks (org_id);
+CREATE INDEX IF NOT EXISTS web_chunks_page_idx ON web_chunks (page_id);
+
+ALTER TABLE web_chunks ADD COLUMN IF NOT EXISTS
+    content_tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
+CREATE INDEX IF NOT EXISTS web_chunks_tsv_idx ON web_chunks USING GIN (content_tsv);
 """
 
 
