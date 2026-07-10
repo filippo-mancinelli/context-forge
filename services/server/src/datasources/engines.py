@@ -103,3 +103,12 @@ def ping(engine: Engine) -> None:
     """Open a connection and run a trivial query; raises on failure."""
     with engine.connect() as conn:
         conn.execute(sa.text("SELECT 1"))
+
+
+def probe_url(engine: str, url: URL) -> None:
+    """One-shot connectivity check on an ephemeral engine (never cached); raises on failure."""
+    eng = sa.create_engine(url, poolclass=sa.pool.NullPool, connect_args=_connect_args(engine))
+    try:
+        ping(eng)
+    finally:
+        eng.dispose()

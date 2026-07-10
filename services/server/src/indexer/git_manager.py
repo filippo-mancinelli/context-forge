@@ -140,6 +140,27 @@ async def ensure_repo_cloned(repo: RepoConfig, org_id: int | None = None) -> str
     if path.exists() and (path / ".git").exists():
         # Keep the stored remote URL in sync with the current token.
         await _run_git("remote", "set-url", "origin", clone_url, cwd=local_path)
+
+        # If the configured branch changed since the clone, switch to it.
+        # Shallow clones track only the original branch, so point the fetch
+        # refspec at the new one before fetching it.
+        code, out, _ = await _run_git("rev-parse", "--abbrev-ref", "HEAD", cwd=local_path)
+        current_branch = out.strip() if code == 0 else None
+        if current_branch and repo.branch and current_branch != repo.branch:
+            logger.info("Switching %s from branch %s to %s", repo.name, current_branch, repo.branch)
+            await _run_git("remote", "set-branches", "origin", repo.branch, cwd=local_path)
+            code, _, err = await _run_git(
+                "fetch", "--depth=1", "origin", repo.branch, cwd=local_path
+            )
+            if code != 0:
+                raise RuntimeError(f"git fetch of branch '{repo.branch}' failed for {repo.name}: {err}")
+            code, _, err = await _run_git(
+                "checkout", "-B", repo.branch, f"origin/{repo.branch}", cwd=local_path
+            )
+            if code != 0:
+                raise RuntimeError(f"git checkout of branch '{repo.branch}' failed for {repo.name}: {err}")
+            return local_path
+
         logger.info("Pulling latest changes for %s", repo.name)
         code, out, err = await _run_git("pull", "--ff-only", cwd=local_path)
         if code != 0:

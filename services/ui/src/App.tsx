@@ -23,6 +23,7 @@ import OAuth from './pages/OAuth'
 import { api } from './lib/api'
 import { useAppStore } from './store'
 import { Logo } from './components/Logo'
+import { Button, Dialog, DialogFooter, Input, useToast } from './components/ui'
 
 const navLinks = [
   { to: '/chat', icon: MessagesSquare, label: 'Agent Chat' },
@@ -38,25 +39,58 @@ const navLinks = [
   //{ to: '/jobs', icon: Activity, label: 'Async Jobs' },
 ]
 
+function NewOrgDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const setActiveOrg = useAppStore((s) => s.setActiveOrg)
+  const toast = useToast()
+  const [name, setName] = useState('')
+  const [creating, setCreating] = useState(false)
+
+  useEffect(() => {
+    if (open) setName('')
+  }, [open])
+
+  const create = async () => {
+    setCreating(true)
+    try {
+      const res = await api.organizations.create(name.trim())
+      setActiveOrg(res.organization.id)
+      // Reload so every page refetches with the new organization scope.
+      window.location.reload()
+    } catch (e) {
+      toast.error(String(e))
+      setCreating(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }} title="New organization">
+      <Input
+        label="Organization name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="e.g. My Team"
+      />
+      <DialogFooter>
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button variant="primary" onClick={create} loading={creating} disabled={!name.trim()}>
+          Create
+        </Button>
+      </DialogFooter>
+    </Dialog>
+  )
+}
+
 function OrgSwitcher() {
   const organizations = useAppStore((s) => s.organizations)
   const activeOrgId = useAppStore((s) => s.activeOrgId)
   const setActiveOrg = useAppStore((s) => s.setActiveOrg)
+  const [showNewOrg, setShowNewOrg] = useState(false)
 
   if (organizations.length === 0) return null
 
   const onSwitch = (value: string) => {
     if (value === '__new__') {
-      const name = window.prompt('New organization name')
-      if (name && name.trim()) {
-        api.organizations
-          .create(name.trim())
-          .then((res) => {
-            setActiveOrg(res.organization.id)
-            window.location.reload()
-          })
-          .catch((e) => window.alert(String(e)))
-      }
+      setShowNewOrg(true)
       return
     }
     const id = Number(value)
@@ -83,6 +117,7 @@ function OrgSwitcher() {
         ))}
         <option value="__new__">+ New organization…</option>
       </select>
+      <NewOrgDialog open={showNewOrg} onClose={() => setShowNewOrg(false)} />
     </div>
   )
 }

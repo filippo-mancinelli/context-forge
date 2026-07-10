@@ -67,7 +67,7 @@ export default function Search() {
 
   return (
     <div className="p-4 sm:p-8">
-      <div className="page-content">
+      <div className="page-wide">
         <div className="mb-6">
           <h1>Cross-Repo Search</h1>
           <p className="text-muted text-sm">Unified search across repositories, memories, and jobs.</p>

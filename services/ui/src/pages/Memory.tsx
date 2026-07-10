@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Trash2 } from 'lucide-react'
 import { api, type Memory as MemoryItem } from '../lib/api'
-import { Button, Input, Textarea } from '../components/ui'
+import { Button, Input, Textarea, useConfirm, useToast } from '../components/ui'
 
 function parseMetadataInput(value: string): Record<string, unknown> | undefined {
   const trimmed = value.trim()
@@ -75,6 +75,8 @@ function MemoryRow({ memory, onDelete }: { memory: MemoryItem; onDelete: (id: st
 }
 
 export default function Memory() {
+  const confirm = useConfirm()
+  const toast = useToast()
   const [memories, setMemories] = useState<MemoryItem[]>([])
   const [loading, setLoading] = useState(true)
   const [query, setQuery] = useState('')
@@ -127,13 +129,16 @@ export default function Memory() {
   }
 
   const handleDelete = async (id: string) => {
-    try {
-      await api.memory.delete(id)
-      setMemories(prev => prev.filter(m => m.id !== id))
-      setPageError(null)
-    } catch (e) {
-      setPageError(String(e))
-    }
+    const ok = await confirm({
+      title: 'Delete memory',
+      message: 'Delete this memory? This cannot be undone.',
+      confirmLabel: 'Delete',
+      danger: true,
+      onConfirm: () => api.memory.delete(id),
+    })
+    if (!ok) return
+    toast.success('Memory deleted')
+    setMemories(prev => prev.filter(m => m.id !== id))
   }
 
   const handleCreate = async (event: FormEvent<HTMLFormElement>) => {
@@ -170,7 +175,7 @@ export default function Memory() {
 
   return (
     <div className="p-4 sm:p-8">
-      <div className="page-content">
+      <div className="page-wide">
         <div className="mb-6">
           <h1>Memory</h1>
           <p className="text-muted text-sm">

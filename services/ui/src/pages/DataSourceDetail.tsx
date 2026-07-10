@@ -25,6 +25,7 @@ import {
   Th,
   Thead,
   Tr,
+  useToast,
 } from '../components/ui'
 
 function formatRows(n?: number | null): string {
@@ -48,6 +49,7 @@ function TableDetailPanel({
   schema?: string
   onSaved: () => void
 }) {
+  const toast = useToast()
   const [detail, setDetail] = useState<DbTableDetail | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
@@ -88,6 +90,7 @@ function TableDetailPanel({
         })),
       ]
       await api.datasources.saveAnnotations(connectionId, annotations)
+      toast.success('Descriptions saved')
       setEditing(false)
       await load()
       onSaved()
@@ -484,7 +487,7 @@ export default function DataSourceDetail() {
 
   return (
     <div className="p-4 sm:p-8">
-      <div className="page-content">
+      <div className="page-wide">
         <Link to="/datasources" className="inline-flex items-center gap-1 text-xs text-muted hover:text-text mb-3">
           <ArrowLeft className="w-3.5 h-3.5" /> Data Sources
         </Link>

@@ -13,6 +13,7 @@ import datetime
 import decimal
 import json
 import logging
+import os
 import time
 import uuid
 from typing import Any, Optional
@@ -203,15 +204,58 @@ async def _resolve_engine(record: dict[str, Any]) -> sa.engine.Engine:
     return engines.get_engine(record["id"], record["engine"], url)
 
 
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+_DOCKER_HOST_ALIAS = "host.docker.internal"
+
+
+def _running_in_container() -> bool:
+    return os.path.exists("/.dockerenv")
+
+
+async def _probe_alternate_host(record: dict[str, Any], host: str) -> bool:
+    """Check whether the connection would work with a different host."""
+    url = engines.build_url(
+        engine=record["engine"],
+        host=host,
+        port=record.get("port"),
+        database=record.get("database_name"),
+        username=record.get("username"),
+        password=decrypt_secret(record.get("password_enc") or ""),
+        options=record.get("options") or {},
+    )
+    try:
+        await asyncio.wait_for(
+            asyncio.to_thread(engines.probe_url, record["engine"], url), timeout=10
+        )
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def test_connection(org_id: int, connection_id: int) -> dict[str, Any]:
-    """Try to connect; persist the resulting status on the connection row."""
+    """Try to connect; persist the resulting status on the connection row.
+
+    When the server runs inside a container and a loopback host fails, it also
+    probes ``host.docker.internal`` (the host machine, where sibling containers
+    publish their ports) and returns it as ``suggested_host`` if reachable.
+    """
     record = await get_connection(org_id, connection_id, include_secret=True)
-    status, error = "ok", None
+    status, error, suggested_host = "ok", None, None
     try:
         engine = await _resolve_engine(record)
         await asyncio.wait_for(asyncio.to_thread(engines.ping, engine), timeout=10)
     except Exception as e:  # noqa: BLE001
         status, error = "error", str(e)
+
+    host = (record.get("host") or "").strip().lower()
+    if status == "error" and host in _LOOPBACK_HOSTS and _running_in_container():
+        if await _probe_alternate_host(record, _DOCKER_HOST_ALIAS):
+            suggested_host = _DOCKER_HOST_ALIAS
+            error = (
+                f"'{record.get('host')}' points to the context-forge container itself, "
+                f"not to the machine it runs on. The same connection succeeded via "
+                f"'{_DOCKER_HOST_ALIAS}' — update the host to fix it."
+            )
 
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -223,7 +267,7 @@ async def test_connection(org_id: int, connection_id: int) -> dict[str, Any]:
             status,
             error,
         )
-    return {"status": status, "error": error}
+    return {"status": status, "error": error, "suggested_host": suggested_host}
 
 
 # --------------------------------------------------------------------------- #

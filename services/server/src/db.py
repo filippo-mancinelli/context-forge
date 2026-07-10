@@ -53,6 +53,10 @@ CREATE INDEX IF NOT EXISTS repo_chunks_embedding_idx
 
 CREATE INDEX IF NOT EXISTS repo_chunks_repo_idx ON repo_chunks (repo_name);
 
+-- Content-hash lookup used to reuse embeddings for identical chunks
+-- (e.g. a second branch of the same repo, or force re-indexes).
+CREATE INDEX IF NOT EXISTS repo_chunks_org_md5_idx ON repo_chunks (org_id, md5(content));
+
 CREATE TABLE IF NOT EXISTS jobs (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tool          TEXT NOT NULL,

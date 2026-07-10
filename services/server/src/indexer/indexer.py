@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import fnmatch
+import hashlib
 import json
 import logging
 import os
@@ -339,33 +340,84 @@ def _iter_repo_files(repo_path: str, config: IndexingConfig) -> Iterator[tuple[P
     logger.info("File scan complete for %s: scanned=%d indexable=%d", root.name, scanned, yielded)
 
 
-async def _embed_chunks(chunks: list[dict], repo_name: str) -> list[list[float]]:
-    """Embed chunk contents in batches, logging progress. Returns one vector per chunk."""
+async def _fetch_reusable_embeddings(org_id: int, texts: list[str]) -> dict[str, str]:
+    """Return {md5(content): pgvector literal} for chunks already embedded in this org.
+
+    Content alone determines the embedding (for a fixed model), so identical
+    chunks — a second branch of the same repo, or unchanged files in a force
+    re-index — can reuse the stored vector instead of calling the embedder.
+    """
+    hashes = list({hashlib.md5(t.encode("utf-8")).hexdigest() for t in texts})
+    reuse: dict[str, str] = {}
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        for start in range(0, len(hashes), 5000):
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (md5(content)) md5(content) AS h, embedding::text AS e
+                FROM repo_chunks
+                WHERE org_id = $1 AND md5(content) = ANY($2)
+                ORDER BY md5(content)
+                """,
+                org_id,
+                hashes[start:start + 5000],
+            )
+            reuse.update({r["h"]: r["e"] for r in rows})
+    return reuse
+
+
+async def _embed_chunks(
+    org_id: int, chunks: list[dict], repo_name: str, *, reuse: bool = True
+) -> list[str]:
+    """Embed chunk contents, reusing stored vectors for identical content.
+
+    Returns one pgvector literal string per chunk. With ``reuse`` disabled every
+    chunk is embedded from scratch (used by force re-indexes, e.g. after an
+    embeddings model change).
+    """
     texts = [c["content"] for c in chunks]
+    reusable = await _fetch_reusable_embeddings(org_id, texts) if reuse else {}
+
+    to_embed = [
+        i for i, t in enumerate(texts)
+        if hashlib.md5(t.encode("utf-8")).hexdigest() not in reusable
+    ]
+    if reuse and len(to_embed) < len(texts):
+        logger.info(
+            "Embedding reuse for %s: %d/%d chunks reused from identical content",
+            repo_name, len(texts) - len(to_embed), len(texts),
+        )
+
     batch_size = 20
-    embeddings: list[list[float]] = []
+    fresh: dict[int, str] = {}
     started_at = time.monotonic()
-    total_batches = (len(texts) + batch_size - 1) // batch_size
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i:i + batch_size]
+    total_batches = (len(to_embed) + batch_size - 1) // batch_size
+    for b in range(0, len(to_embed), batch_size):
+        idxs = to_embed[b:b + batch_size]
         logger.info(
             "Embedding progress for %s: batch=%d/%d size=%d",
-            repo_name, (i // batch_size) + 1, total_batches, len(batch),
+            repo_name, (b // batch_size) + 1, total_batches, len(idxs),
         )
-        embeddings.extend(await embed_batch(batch))
+        vectors = await embed_batch([texts[i] for i in idxs])
+        for i, vec in zip(idxs, vectors):
+            fresh[i] = _vector_to_pg(vec)
     logger.info(
-        "Embedding complete for %s: vectors=%d elapsed=%.1fs",
-        repo_name, len(embeddings), time.monotonic() - started_at,
+        "Embedding complete for %s: vectors=%d (new=%d) elapsed=%.1fs",
+        repo_name, len(texts), len(to_embed), time.monotonic() - started_at,
     )
-    return embeddings
+
+    return [
+        fresh.get(i) or reusable[hashlib.md5(t.encode("utf-8")).hexdigest()]
+        for i, t in enumerate(texts)
+    ]
 
 
-def _chunk_rows(org_id: int, chunks: list[dict], embeddings: list[list[float]]) -> list[tuple]:
+def _chunk_rows(org_id: int, chunks: list[dict], embeddings: list[str]) -> list[tuple]:
     """Build asyncpg parameter tuples for a batch of chunks."""
     return [
         (
             org_id, c["repo_name"], c["file_path"], c["chunk_index"],
-            c["chunk_type"], c["content"], c["metadata"], _vector_to_pg(embeddings[idx]),
+            c["chunk_type"], c["content"], c["metadata"], embeddings[idx],
         )
         for idx, c in enumerate(chunks)
     ]
@@ -513,7 +565,10 @@ async def index_repo(
                 return
             logger.info("Incremental indexing unavailable for %s; running full index", repo.name)
 
-        await _index_repo_full(pool, org_id, repo, indexing_cfg, language, local_path, new_commit)
+        await _index_repo_full(
+            pool, org_id, repo, indexing_cfg, language, local_path, new_commit,
+            reuse_embeddings=not force_full,
+        )
 
     except Exception as e:
         logger.error("Indexing failed for %s: %s", repo.name, e)
@@ -532,6 +587,8 @@ async def _index_repo_full(
     language: str | None,
     local_path: str,
     new_commit: str | None,
+    *,
+    reuse_embeddings: bool = True,
 ) -> None:
     """Full re-index: scan the whole tree, replace all of the repo's chunks."""
     loop = asyncio.get_running_loop()
@@ -551,7 +608,7 @@ async def _index_repo_full(
         return
 
     logger.info("Embedding %d chunks for %s", len(all_chunks), repo.name)
-    embeddings = await _embed_chunks(all_chunks, repo.name)
+    embeddings = await _embed_chunks(org_id, all_chunks, repo.name, reuse=reuse_embeddings)
 
     async with pool.acquire() as conn:
         await conn.execute(
@@ -618,7 +675,7 @@ async def _index_repo_incremental(
         None, _collect_changed_chunks_sync, repo.name, local_path, indexing_cfg, language, sorted(changed)
     )
 
-    embeddings = await _embed_chunks(chunks, repo.name) if chunks else []
+    embeddings = await _embed_chunks(org_id, chunks, repo.name) if chunks else []
 
     async with pool.acquire() as conn:
         async with conn.transaction():

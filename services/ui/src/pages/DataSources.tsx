@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { Plus, Database, RefreshCw, Pencil, Trash2 } from 'lucide-react'
 import { api, type DbConnection, type DbConnectionRequest, type DbEngine } from '../lib/api'
-import { Badge, Button, Dialog, DialogFooter, Input, Select, Table, Tbody, Td, Th, Thead, Tr } from '../components/ui'
+import { Badge, Button, Dialog, DialogFooter, Input, Select, Table, Tbody, Td, Th, Thead, Tr, useConfirm, useToast } from '../components/ui'
 
 const ENGINE_OPTIONS: { value: DbEngine; label: string }[] = [
   { value: 'postgresql', label: 'PostgreSQL' },
@@ -10,6 +10,9 @@ const ENGINE_OPTIONS: { value: DbEngine; label: string }[] = [
   { value: 'mariadb', label: 'MariaDB' },
   { value: 'sqlite', label: 'SQLite' },
 ]
+
+const DOCKER_HOST_ALIAS = 'host.docker.internal'
+const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '::1']
 
 const EMPTY_FORM: DbConnectionRequest = {
   name: '',
@@ -42,6 +45,7 @@ function ConnectionDialog({
   const [form, setForm] = useState<DbConnectionRequest>(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const toast = useToast()
 
   useEffect(() => {
     if (!open) return
@@ -81,6 +85,7 @@ function ConnectionDialog({
     try {
       if (editing) await api.datasources.update(editing.id, payload)
       else await api.datasources.create(payload)
+      toast.success(editing ? `Connection "${form.name}" updated` : `Connection "${form.name}" created`)
       onOpenChange(false)
       onSaved()
     } catch (err) {
@@ -113,23 +118,40 @@ function ConnectionDialog({
           options={ENGINE_OPTIONS}
         />
         {!isSqlite && (
-          <div className="grid grid-cols-3 gap-2">
-            <div className="col-span-2">
+          <div>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="col-span-2">
+                <Input
+                  label="Host"
+                  value={form.host ?? ''}
+                  onChange={(e) => set({ host: e.target.value })}
+                  placeholder="db.internal"
+                  required
+                />
+              </div>
               <Input
-                label="Host"
-                value={form.host ?? ''}
-                onChange={(e) => set({ host: e.target.value })}
-                placeholder="db.internal"
-                required
+                label="Port"
+                type="number"
+                value={form.port ?? ''}
+                onChange={(e) => set({ port: e.target.value ? Number(e.target.value) : undefined })}
+                placeholder={form.engine === 'postgresql' ? '5432' : '3306'}
               />
             </div>
-            <Input
-              label="Port"
-              type="number"
-              value={form.port ?? ''}
-              onChange={(e) => set({ port: e.target.value ? Number(e.target.value) : undefined })}
-              placeholder={form.engine === 'postgresql' ? '5432' : '3306'}
-            />
+            {LOOPBACK_HOSTS.includes((form.host ?? '').trim().toLowerCase()) && (
+              <p className="text-xs text-muted mt-1">
+                The server runs in a container, so <code>{form.host}</code> points to the
+                container itself. For a database on this machine (or published by another
+                container) use{' '}
+                <button
+                  type="button"
+                  className="text-accent hover:underline"
+                  onClick={() => set({ host: DOCKER_HOST_ALIAS })}
+                >
+                  {DOCKER_HOST_ALIAS}
+                </button>
+                .
+              </p>
+            )}
           </div>
         )}
         <Input
@@ -183,6 +205,9 @@ export default function DataSources() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<DbConnection | null>(null)
   const [testingId, setTestingId] = useState<number | null>(null)
+  const [suggestions, setSuggestions] = useState<Record<number, string>>({})
+  const confirm = useConfirm()
+  const toast = useToast()
 
   const load = useCallback(async () => {
     try {
@@ -203,28 +228,70 @@ export default function DataSources() {
   const test = async (conn: DbConnection) => {
     setTestingId(conn.id)
     try {
-      await api.datasources.test(conn.id)
+      const result = await api.datasources.test(conn.id)
+      setSuggestions((s) => {
+        const next = { ...s }
+        if (result.suggested_host) next[conn.id] = result.suggested_host
+        else delete next[conn.id]
+        return next
+      })
+      if (result.status === 'ok') toast.success(`Connection "${conn.name}" is working`)
+      else toast.error(result.error ?? `Connection "${conn.name}" failed`)
       await load()
     } catch (e) {
-      setError(String(e))
+      toast.error(String(e))
+    } finally {
+      setTestingId(null)
+    }
+  }
+
+  const applySuggestedHost = async (conn: DbConnection) => {
+    const host = suggestions[conn.id]
+    if (!host) return
+    setTestingId(conn.id)
+    try {
+      await api.datasources.update(conn.id, {
+        name: conn.name,
+        engine: conn.engine,
+        host,
+        port: conn.port,
+        database_name: conn.database_name ?? undefined,
+        username: conn.username ?? undefined,
+        password: '', // keep the stored password
+        description: conn.description ?? undefined,
+      })
+      setSuggestions((s) => {
+        const next = { ...s }
+        delete next[conn.id]
+        return next
+      })
+      const result = await api.datasources.test(conn.id)
+      if (result.status === 'ok') toast.success(`Connection "${conn.name}" fixed and working`)
+      else toast.error(result.error ?? 'Connection still failing')
+      await load()
+    } catch (e) {
+      toast.error(String(e))
     } finally {
       setTestingId(null)
     }
   }
 
   const remove = async (conn: DbConnection) => {
-    if (!window.confirm(`Delete connection '${conn.name}'? Annotations and query log are removed too.`)) return
-    try {
-      await api.datasources.delete(conn.id)
-      await load()
-    } catch (e) {
-      setError(String(e))
-    }
+    const ok = await confirm({
+      title: 'Delete connection',
+      message: `Delete connection '${conn.name}'? Annotations and query log are removed too.`,
+      confirmLabel: 'Delete',
+      danger: true,
+      onConfirm: () => api.datasources.delete(conn.id),
+    })
+    if (!ok) return
+    toast.success(`Connection "${conn.name}" deleted`)
+    await load()
   }
 
   return (
     <div className="p-4 sm:p-8">
-      <div className="page-content">
+      <div className="page-wide">
         <div className="flex items-start justify-between gap-4 mb-6">
           <div>
             <h1>Data Sources</h1>
@@ -299,6 +366,17 @@ export default function DataSources() {
                         <p className="text-xs text-danger mt-1 max-w-xs truncate" title={c.error_message}>
                           {c.error_message}
                         </p>
+                      )}
+                      {c.status === 'error' && suggestions[c.id] && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="mt-1"
+                          loading={testingId === c.id}
+                          onClick={() => applySuggestedHost(c)}
+                        >
+                          Use {suggestions[c.id]}
+                        </Button>
                       )}
                     </Td>
                     <Td className="text-xs text-muted">{c.annotation_count ?? 0}</Td>

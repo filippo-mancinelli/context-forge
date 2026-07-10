@@ -3,13 +3,17 @@ import {
   RefreshCw,
   Github,
   GitlabIcon,
+  GitBranch,
   HardDrive,
   ExternalLink,
+  Pencil,
+  Plus,
   Square,
+  Trash2,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, type GitHubRepo, type GitLabRepo, type RemoteRepo, type Repo } from '../lib/api'
-import { Button, Input, Badge, Dialog, DialogFooter, Select } from '../components/ui'
+import { api, type GitHubRepo, type GitLabRepo, type RemoteRepo, type Repo, type RepoCreateRequest } from '../lib/api'
+import { Button, Input, Badge, Dialog, DialogFooter, Select, useConfirm, useToast } from '../components/ui'
 
 type Provider = 'github' | 'gitlab'
 
@@ -67,6 +71,7 @@ function ImportDialog({
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Record<string, boolean>>({})
   const [adding, setAdding] = useState(false)
+  const toast = useToast()
 
   const title = provider === 'github' ? 'GitHub' : 'GitLab'
 
@@ -123,6 +128,11 @@ function ImportDialog({
           await api.gitlab.addRepo(repo.full_name, repo.default_branch)
         }
       }
+      toast.success(
+        selectedRepos.length === 1
+          ? `Repository "${selectedRepos[0].full_name}" added`
+          : `${selectedRepos.length} repositories added`
+      )
       onAdded()
     } catch (e) {
       setError(String(e))
@@ -233,6 +243,230 @@ function ImportDialog({
   )
 }
 
+const EMPTY_REPO_FORM: RepoCreateRequest = {
+  name: '',
+  type: 'local',
+  url: '',
+  path: '',
+  branch: 'main',
+  language: 'auto',
+}
+
+function RepoDialog({
+  open,
+  repo,
+  onClose,
+  onSaved,
+}: {
+  open: boolean
+  repo: Repo | null
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [form, setForm] = useState<RepoCreateRequest>(EMPTY_REPO_FORM)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const toast = useToast()
+
+  // Re-seed the form each time the dialog opens: state initializers only run
+  // on first mount, so without this an edit shows stale/empty fields.
+  useEffect(() => {
+    if (!open) return
+    setError(null)
+    setForm(
+      repo
+        ? {
+            name: repo.name,
+            type: repo.type,
+            url: repo.url || '',
+            path: repo.path || '',
+            branch: repo.branch || 'main',
+            language: repo.language || 'auto',
+          }
+        : EMPTY_REPO_FORM
+    )
+  }, [open, repo])
+
+  const set = (patch: Partial<RepoCreateRequest>) => setForm(f => ({ ...f, ...patch }))
+  const isLocal = form.type === 'local'
+
+  const submit = async () => {
+    setSaving(true)
+    setError(null)
+    const payload: RepoCreateRequest = {
+      ...form,
+      url: isLocal ? undefined : form.url || undefined,
+      path: isLocal ? form.path || undefined : undefined,
+    }
+    try {
+      if (repo) await api.repos.update(repo.name, payload)
+      else await api.repos.create(payload)
+      toast.success(repo ? `Repository "${form.name}" updated` : `Repository "${form.name}" added`)
+      onClose()
+      onSaved()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={o => { if (!o) onClose() }}
+      title={repo ? `Edit ${repo.name}` : 'Add repository'}
+    >
+      <div className="space-y-3">
+        {error && <p className="text-xs text-danger break-words">{error}</p>}
+        <div className="grid gap-3 md:grid-cols-2">
+          <Input
+            label="Name"
+            value={form.name}
+            onChange={e => set({ name: e.target.value })}
+            placeholder="my-repo"
+          />
+          <Select
+            label="Type"
+            value={form.type}
+            onValueChange={v => set({ type: v as Repo['type'] })}
+            options={[
+              { value: 'local', label: 'Local' },
+              { value: 'github', label: 'GitHub' },
+              { value: 'gitlab', label: 'GitLab' },
+            ]}
+          />
+        </div>
+        {isLocal ? (
+          <Input
+            label="Local path"
+            value={form.path ?? ''}
+            onChange={e => set({ path: e.target.value })}
+            placeholder="/repos/project (path inside the container)"
+          />
+        ) : (
+          <Input
+            label="Repository URL"
+            value={form.url ?? ''}
+            onChange={e => set({ url: e.target.value })}
+            placeholder={`https://${form.type}.com/owner/repo`}
+          />
+        )}
+        <div className="grid gap-3 md:grid-cols-2">
+          {!isLocal && (
+            <Input
+              label="Branch"
+              value={form.branch}
+              onChange={e => set({ branch: e.target.value })}
+              placeholder="main"
+            />
+          )}
+          <Input
+            label="Language"
+            value={form.language ?? ''}
+            onChange={e => set({ language: e.target.value })}
+            placeholder="auto"
+          />
+        </div>
+        {isLocal && (
+          <p className="text-xs text-muted">
+            Local repos index the mounted working tree as-is (whatever branch is checked out).
+          </p>
+        )}
+      </div>
+      <DialogFooter>
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button
+          variant="primary"
+          onClick={submit}
+          loading={saving}
+          disabled={!form.name || (isLocal ? !form.path : !form.url)}
+        >
+          {repo ? 'Save changes' : 'Add repository'}
+        </Button>
+      </DialogFooter>
+    </Dialog>
+  )
+}
+
+function AddBranchDialog({
+  repo,
+  onClose,
+  onSaved,
+}: {
+  repo: Repo | null
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [branch, setBranch] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const toast = useToast()
+
+  useEffect(() => {
+    if (repo) {
+      setBranch('')
+      setError(null)
+    }
+  }, [repo])
+
+  const baseName = repo ? repo.name.split('@')[0] : ''
+  const newName = branch ? `${baseName}@${branch}` : ''
+
+  const submit = async () => {
+    if (!repo || !branch) return
+    setSaving(true)
+    setError(null)
+    try {
+      await api.repos.create({
+        name: newName,
+        type: repo.type,
+        url: repo.url || undefined,
+        branch,
+        language: repo.language || 'auto',
+      })
+      await api.repos.index(newName)
+      toast.success(`Branch "${branch}" added and queued for indexing`)
+      onClose()
+      onSaved()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog
+      open={!!repo}
+      onOpenChange={o => { if (!o) onClose() }}
+      title={`Index another branch of ${baseName}`}
+      description="Adds a separate index for this branch — searchable on its own, embeddings are reused for unchanged files."
+    >
+      <div className="space-y-3">
+        {error && <p className="text-xs text-danger break-words">{error}</p>}
+        <Input
+          label="Branch"
+          value={branch}
+          onChange={e => setBranch(e.target.value)}
+          placeholder="develop"
+        />
+        {newName && (
+          <p className="text-xs text-muted">
+            Will be indexed as <code className="font-mono text-text">{newName}</code>.
+          </p>
+        )}
+      </div>
+      <DialogFooter>
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button variant="primary" onClick={submit} loading={saving} disabled={!branch}>
+          Add & index
+        </Button>
+      </DialogFooter>
+    </Dialog>
+  )
+}
+
 export default function Repos() {
   const [repos, setRepos] = useState<Repo[]>([])
   const [loading, setLoading] = useState(true)
@@ -242,6 +476,11 @@ export default function Repos() {
   const [error, setError] = useState<string | null>(null)
   const [showImport, setShowImport] = useState(false)
   const [provider, setProvider] = useState<Provider>('github')
+  const [showRepoDialog, setShowRepoDialog] = useState(false)
+  const [editingRepo, setEditingRepo] = useState<Repo | null>(null)
+  const [branchRepo, setBranchRepo] = useState<Repo | null>(null)
+  const confirm = useConfirm()
+  const toast = useToast()
 
   const load = useCallback(async () => {
     try {
@@ -265,7 +504,10 @@ export default function Repos() {
     setIndexingRepo(name)
     try {
       await api.repos.index(name)
+      toast.success(`Indexing queued for ${name}`)
       await load()
+    } catch (e) {
+      toast.error(String(e))
     } finally {
       setIndexingRepo(null)
     }
@@ -275,7 +517,10 @@ export default function Repos() {
     setStoppingRepo(name)
     try {
       await api.repos.cancelIndex(name)
+      toast.success(`Indexing stopped for ${name}`)
       await load()
+    } catch (e) {
+      toast.error(String(e))
     } finally {
       setStoppingRepo(null)
     }
@@ -285,10 +530,36 @@ export default function Repos() {
     setSyncing(true)
     try {
       await api.repos.indexAll()
+      toast.success('All repositories queued for indexing')
       await load()
+    } catch (e) {
+      toast.error(String(e))
     } finally {
       setSyncing(false)
     }
+  }
+
+  const handleDelete = async (repo: Repo) => {
+    const ok = await confirm({
+      title: 'Remove repository',
+      message: `Remove repository "${repo.name}"? Its indexed chunks are deleted too.`,
+      confirmLabel: 'Remove',
+      danger: true,
+      onConfirm: () => api.repos.delete(repo.name),
+    })
+    if (!ok) return
+    toast.success(`Repository "${repo.name}" removed`)
+    await load()
+  }
+
+  const openEdit = (repo: Repo) => {
+    setEditingRepo(repo)
+    setShowRepoDialog(true)
+  }
+
+  const openAdd = () => {
+    setEditingRepo(null)
+    setShowRepoDialog(true)
   }
 
   const totalChunks = repos.reduce((sum, repo) => sum + repo.total_chunks, 0)
@@ -296,7 +567,7 @@ export default function Repos() {
 
   return (
     <div className="p-4 sm:p-8">
-      <div className="page-content">
+      <div className="page-wide">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-6">
           <div>
             <h1>Repositories</h1>
@@ -315,6 +586,10 @@ export default function Repos() {
             />
             <Button variant="secondary" onClick={() => setShowImport(true)}>
               Import
+            </Button>
+            <Button variant="primary" onClick={openAdd}>
+              <Plus className="w-3.5 h-3.5" />
+              Add
             </Button>
             <Button
               variant="secondary"
@@ -343,8 +618,7 @@ export default function Repos() {
           <div style={{ border: '1px dashed var(--border)' }} className="py-12 text-center">
             <p className="text-muted text-sm">No repositories configured.</p>
             <p className="text-muted text-xs mt-1">
-              Import from a provider above or{' '}
-              <Link to="/settings" className="text-accent">add local repos in Settings</Link>.
+              Import from a provider or add a local/remote repo with the buttons above.
             </p>
           </div>
         ) : (
@@ -386,7 +660,7 @@ export default function Repos() {
                 </div>
                 <div
                   style={{ borderTop: '1px solid var(--border)' }}
-                  className="flex items-center gap-3 mt-3 pt-3"
+                  className="flex items-center gap-2 mt-3 pt-3 flex-wrap"
                 >
                   {repo.status === 'indexing' ? (
                     <Button
@@ -411,6 +685,17 @@ export default function Repos() {
                       Index
                     </Button>
                   )}
+                  {repo.type !== 'local' && (
+                    <Button size="sm" variant="ghost" onClick={() => setBranchRepo(repo)} title="Index another branch">
+                      <GitBranch className="w-3 h-3" />
+                    </Button>
+                  )}
+                  <Button size="sm" variant="ghost" onClick={() => openEdit(repo)} title="Edit">
+                    <Pencil className="w-3 h-3" />
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => handleDelete(repo)} title="Delete">
+                    <Trash2 className="w-3 h-3" />
+                  </Button>
                   <Link
                     to={`/repos/${encodeURIComponent(repo.name)}`}
                     className="text-xs text-accent hover:underline"
@@ -484,7 +769,7 @@ export default function Repos() {
                     </td>
                     <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{formatDate(repo.last_indexed_at)}</td>
                     <td className="px-3 py-3">
-                      <div className="flex items-center gap-2 justify-end whitespace-nowrap">
+                      <div className="flex items-center gap-1 justify-end whitespace-nowrap">
                         {repo.status === 'indexing' ? (
                           <Button
                             size="sm"
@@ -492,9 +777,9 @@ export default function Repos() {
                             onClick={() => handleStop(repo.name)}
                             disabled={stoppingRepo === repo.name}
                             loading={stoppingRepo === repo.name}
+                            title="Stop indexing"
                           >
                             <Square className="w-3 h-3" />
-                            Stop
                           </Button>
                         ) : (
                           <Button
@@ -503,14 +788,30 @@ export default function Repos() {
                             onClick={() => handleIndex(repo.name)}
                             disabled={indexingRepo === repo.name}
                             loading={indexingRepo === repo.name}
+                            title="Re-index"
                           >
                             <RefreshCw className="w-3 h-3" />
-                            Index
                           </Button>
                         )}
+                        {repo.type !== 'local' && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setBranchRepo(repo)}
+                            title="Index another branch"
+                          >
+                            <GitBranch className="w-3 h-3" />
+                          </Button>
+                        )}
+                        <Button size="sm" variant="ghost" onClick={() => openEdit(repo)} title="Edit">
+                          <Pencil className="w-3 h-3" />
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => handleDelete(repo)} title="Delete">
+                          <Trash2 className="w-3 h-3" />
+                        </Button>
                         <Link
                           to={`/repos/${encodeURIComponent(repo.name)}`}
-                          className="text-xs text-accent hover:underline"
+                          className="text-xs text-accent hover:underline ml-1"
                         >
                           Open
                         </Link>
@@ -531,6 +832,17 @@ export default function Repos() {
         existingRepos={repos}
         onClose={() => setShowImport(false)}
         onAdded={() => { setShowImport(false); load() }}
+      />
+      <RepoDialog
+        open={showRepoDialog}
+        repo={editingRepo}
+        onClose={() => setShowRepoDialog(false)}
+        onSaved={load}
+      />
+      <AddBranchDialog
+        repo={branchRepo}
+        onClose={() => setBranchRepo(null)}
+        onSaved={load}
       />
     </div>
   )

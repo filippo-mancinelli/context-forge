@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertCircle, Check, Clipboard, Github, GitlabIcon, HardDrive, Pencil, Plus, RefreshCw, Save, Trash2, X } from 'lucide-react'
-import { Link } from 'react-router-dom'
-import { api, type Repo, type RepoCreateRequest, type MCPApiKey } from '../lib/api'
-import { Button, Input, Textarea, Select, Tabs, TabsList, TabsTrigger, TabsContent, Badge, Dialog, DialogFooter } from '../components/ui'
+import { AlertCircle, Check, Clipboard, Plus, Save, Trash2, X } from 'lucide-react'
+import { api, type Repo, type MCPApiKey } from '../lib/api'
+import { Button, Input, Textarea, Select, Tabs, TabsList, TabsTrigger, TabsContent, Badge, Dialog, DialogFooter, useConfirm, useToast } from '../components/ui'
 
-type Tab = 'repositories' | 'access' | 'models' | 'runtime' | 'mcp_keys'
+type Tab = 'access' | 'models' | 'runtime' | 'mcp_keys'
 
 interface SettingsData {
   forge_config: {
@@ -92,202 +91,6 @@ function SecretField({
         </button>
       </div>
     </Field>
-  )
-}
-
-function RepoTypeIcon({ type }: { type: Repo['type'] }) {
-  if (type === 'github') return <Github className="h-3.5 w-3.5 text-muted" />
-  if (type === 'gitlab') return <GitlabIcon className="h-3.5 w-3.5 text-warning" />
-  return <HardDrive className="h-3.5 w-3.5 text-muted" />
-}
-
-function RepoDialog({
-  open,
-  repo,
-  onClose,
-  onSave,
-}: {
-  open: boolean
-  repo?: Repo
-  onClose: () => void
-  onSave: (v: RepoCreateRequest) => void
-}) {
-  const [name, setName] = useState(repo?.name || '')
-  const [type, setType] = useState<Repo['type']>(repo?.type || 'local')
-  const [url, setUrl] = useState(repo?.url || '')
-  const [path, setPath] = useState(repo?.path || '')
-  const [branch, setBranch] = useState(repo?.branch || 'main')
-  const [language, setLanguage] = useState(repo?.language || 'auto')
-
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={o => { if (!o) onClose() }}
-      title={repo ? 'Edit repository' : 'Add repository'}
-    >
-      <div className="grid gap-3 md:grid-cols-2">
-        <Field label="Name">
-          <Input value={name} onChange={e => setName(e.target.value)} placeholder="my-repo" />
-        </Field>
-        <Select
-          label="Type"
-          value={type}
-          onValueChange={v => setType(v as Repo['type'])}
-          options={[
-            { value: 'local', label: 'Local' },
-            { value: 'github', label: 'GitHub' },
-            { value: 'gitlab', label: 'GitLab' },
-          ]}
-        />
-        <div className="md:col-span-2">
-          {type === 'local' ? (
-            <Field label="Local path">
-              <Input value={path} onChange={e => setPath(e.target.value)} placeholder="/repos/project" />
-            </Field>
-          ) : (
-            <Field label="Repository URL">
-              <Input value={url} onChange={e => setUrl(e.target.value)} placeholder={`https://${type}.com/owner/repo`} />
-            </Field>
-          )}
-        </div>
-        <Field label="Branch">
-          <Input value={branch} onChange={e => setBranch(e.target.value)} placeholder="main" />
-        </Field>
-        <Field label="Language">
-          <Input value={language} onChange={e => setLanguage(e.target.value)} placeholder="auto" />
-        </Field>
-      </div>
-      <DialogFooter>
-        <Button variant="ghost" onClick={onClose}>Cancel</Button>
-        <Button
-          variant="primary"
-          onClick={() => onSave({ name, type, url: url || undefined, path: path || undefined, branch, language })}
-          disabled={!name || (type === 'local' ? !path : !url)}
-        >
-          {repo ? 'Save changes' : 'Add repository'}
-        </Button>
-      </DialogFooter>
-    </Dialog>
-  )
-}
-
-function RepositoriesTab({ repos, onReload }: { repos: Repo[]; onReload: () => void }) {
-  const [editingRepo, setEditingRepo] = useState<Repo | undefined>()
-  const [showAdd, setShowAdd] = useState(false)
-  const [deletingRepo, setDeletingRepo] = useState<string | null>(null)
-  const [indexingRepo, setIndexingRepo] = useState<string | null>(null)
-
-  const handleSave = async (payload: RepoCreateRequest) => {
-    try {
-      if (editingRepo) {
-        await api.repos.update(editingRepo.name, payload)
-      } else {
-        await api.repos.create(payload)
-      }
-      setEditingRepo(undefined)
-      setShowAdd(false)
-      onReload()
-    } catch (e) {
-      window.alert(String(e))
-    }
-  }
-
-  const handleDelete = async (name: string) => {
-    if (!window.confirm(`Remove repository "${name}"?`)) return
-    setDeletingRepo(name)
-    try {
-      await api.repos.delete(name)
-      onReload()
-    } catch (e) {
-      window.alert(String(e))
-    } finally {
-      setDeletingRepo(null)
-    }
-  }
-
-  const handleIndex = async (name: string) => {
-    setIndexingRepo(name)
-    try {
-      await api.repos.index(name)
-      onReload()
-    } catch (e) {
-      window.alert(String(e))
-    } finally {
-      setIndexingRepo(null)
-    }
-  }
-
-  return (
-    <div>
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-4">
-        <div>
-          <p className="text-sm text-muted">
-            {repos.length} repositories configured.{' '}
-            <Link to="/repos" className="text-accent">Open Repositories →</Link>
-          </p>
-        </div>
-        <Button variant="primary" size="sm" onClick={() => setShowAdd(true)} className="self-start">
-          <Plus className="w-3.5 h-3.5" />
-          Add repository
-        </Button>
-      </div>
-
-      {repos.length === 0 ? (
-        <p className="text-muted text-sm">No repositories configured yet.</p>
-      ) : (
-        <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto">
-          <table className="w-full min-w-[500px]">
-            <thead>
-              <tr style={{ borderBottom: '2px solid var(--border)' }}>
-                <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-4 py-2">Repository</th>
-                <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2">Status</th>
-                <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2">Branch</th>
-                <th className="px-3 py-2" />
-              </tr>
-            </thead>
-            <tbody>
-              {repos.map(repo => (
-                <tr
-                  key={repo.name}
-                  style={{ borderBottom: '1px solid var(--border)' }}
-                  className="last:border-b-0 hover:bg-surface"
-                >
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <RepoTypeIcon type={repo.type} />
-                      <div>
-                        <p className="text-sm font-medium">{repo.name}</p>
-                        <p className="text-xs text-muted font-mono">{repo.url || repo.path || '—'}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-3 py-3">
-                    <span className="text-xs text-muted">{repo.status}{repo.total_chunks > 0 ? ` · ${repo.total_chunks.toLocaleString()} chunks` : ''}</span>
-                  </td>
-                  <td className="px-3 py-3 text-xs text-muted font-mono">{repo.branch}</td>
-                  <td className="px-3 py-3">
-                    <div className="flex items-center gap-2 justify-end">
-                      <Button size="sm" variant="ghost" onClick={() => handleIndex(repo.name)} disabled={indexingRepo === repo.name} loading={indexingRepo === repo.name}>
-                        <RefreshCw className="w-3 h-3" />
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => setEditingRepo(repo)}>
-                        <Pencil className="w-3 h-3" />
-                      </Button>
-                      <Button size="sm" variant="danger" onClick={() => handleDelete(repo.name)} disabled={deletingRepo === repo.name} loading={deletingRepo === repo.name}>
-                        <Trash2 className="w-3 h-3" />
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      <RepoDialog open={showAdd} onClose={() => setShowAdd(false)} onSave={handleSave} />
-      <RepoDialog open={!!editingRepo} repo={editingRepo} onClose={() => setEditingRepo(undefined)} onSave={handleSave} />
-    </div>
   )
 }
 
@@ -528,7 +331,8 @@ function McpKeysTab() {
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [revokingKey, setRevokingKey] = useState<number | null>(null)
+  const confirm = useConfirm()
+  const toast = useToast()
   const [newKey, setNewKey] = useState<{ key: string; name: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [keyName, setKeyName] = useState('')
@@ -559,28 +363,29 @@ function McpKeysTab() {
         expires_days: expiresDays ? parseInt(expiresDays, 10) : undefined,
       })
       setNewKey({ key: response.key, name: response.name })
+      toast.success(`API key "${response.name}" generated`)
       await loadKeys()
       setShowCreate(false)
       setKeyName('')
       setExpiresDays('')
     } catch (e) {
-      setError(String(e))
+      toast.error(String(e))
     } finally {
       setCreating(false)
     }
   }
 
   const handleRevoke = async (id: number) => {
-    if (!window.confirm('Revoke this API key? It will stop working immediately.')) return
-    setRevokingKey(id)
-    try {
-      await api.mcpKeys.revoke(id)
-      await loadKeys()
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setRevokingKey(null)
-    }
+    const ok = await confirm({
+      title: 'Revoke API key',
+      message: 'Revoke this API key? It will stop working immediately.',
+      confirmLabel: 'Revoke',
+      danger: true,
+      onConfirm: () => api.mcpKeys.revoke(id),
+    })
+    if (!ok) return
+    toast.success('API key revoked')
+    await loadKeys()
   }
 
   const isExpired = (expiresAt?: string) => expiresAt ? new Date(expiresAt) < new Date() : false
@@ -639,7 +444,7 @@ function McpKeysTab() {
                     {key.expires_at ? <span className={isExpired(key.expires_at) ? 'text-danger' : ''}>{fmtDate(key.expires_at)}</span> : 'Never'}
                   </td>
                   <td className="px-3 py-3">
-                    <Button size="sm" variant="danger" onClick={() => handleRevoke(key.id)} disabled={revokingKey === key.id} loading={revokingKey === key.id}>
+                    <Button size="sm" variant="danger" onClick={() => handleRevoke(key.id)}>
                       <Trash2 className="w-3 h-3" />
                     </Button>
                   </td>
@@ -701,15 +506,16 @@ function getEmbeddingSignature(settings: SettingsData['settings_overrides']) {
 }
 
 export default function Settings() {
-  const [activeTab, setActiveTab] = useState<Tab>('repositories')
+  const [activeTab, setActiveTab] = useState<Tab>('access')
   const [data, setData] = useState<SettingsData | null>(null)
   const [baselineEmbedding, setBaselineEmbedding] = useState<ReturnType<typeof getEmbeddingSignature> | null>(null)
   const [baselineOverrides, setBaselineOverrides] = useState<SettingsData['settings_overrides'] | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
+  const confirm = useConfirm()
+  const toast = useToast()
 
   const load = useCallback(async () => {
     try {
@@ -757,10 +563,17 @@ export default function Settings() {
 
   const handleSave = async () => {
     if (!data) return
-    if (embeddingRisk.dimsChanged && !window.confirm('Changing embedding dimensions requires resetting vector data and re-indexing. Save anyway?')) return
+    if (embeddingRisk.dimsChanged) {
+      const ok = await confirm({
+        title: 'Change embedding dimensions',
+        message: 'Changing embedding dimensions requires resetting vector data and re-indexing. Save anyway?',
+        confirmLabel: 'Save anyway',
+        danger: true,
+      })
+      if (!ok) return
+    }
     setSaving(true)
     setError(null)
-    setSuccess(null)
     setWarnings([])
     try {
       // Non-admins cannot change global model/provider settings; submit the
@@ -769,10 +582,10 @@ export default function Settings() {
         overridesEditable || !baselineOverrides ? data.settings_overrides : baselineOverrides
       const result = await api.settings.update({ forge_config: data.forge_config, settings_overrides: overridesToSend })
       setBaselineEmbedding(getEmbeddingSignature(data.settings_overrides))
-      setSuccess('Settings saved.')
+      toast.success('Settings saved')
       setWarnings(result.warnings)
     } catch (e) {
-      setError(String(e))
+      toast.error(String(e))
     } finally {
       setSaving(false)
     }
@@ -783,7 +596,7 @@ export default function Settings() {
 
   return (
     <div className="p-4 sm:p-8">
-      <div className="page-content">
+      <div className="page-wide">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-6">
           <div>
             <h1>Settings</h1>
@@ -800,11 +613,6 @@ export default function Settings() {
             <AlertCircle className="inline w-3.5 h-3.5 mr-1" />{error}
           </div>
         )}
-        {success && (
-          <div style={{ border: '1px solid var(--success)', color: 'var(--success)' }} className="text-sm p-3 mb-4 bg-[#eafaf1]">
-            <Check className="inline w-3.5 h-3.5 mr-1" />{success}
-          </div>
-        )}
         {warnings.length > 0 && (
           <div style={{ border: '1px solid var(--warning)', color: 'var(--warning)' }} className="text-sm p-3 mb-4 bg-[#fef9e7]">
             {warnings.map(w => <p key={w}>{w}</p>)}
@@ -813,16 +621,12 @@ export default function Settings() {
 
         <Tabs value={activeTab} onValueChange={v => setActiveTab(v as Tab)}>
           <TabsList>
-            <TabsTrigger value="repositories">Repositories</TabsTrigger>
             <TabsTrigger value="access">API keys</TabsTrigger>
             <TabsTrigger value="models">Models</TabsTrigger>
             <TabsTrigger value="runtime">Runtime</TabsTrigger>
             <TabsTrigger value="mcp_keys">MCP keys</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="repositories">
-            <RepositoriesTab repos={data.forge_config.repos} onReload={load} />
-          </TabsContent>
           <TabsContent value="access">
             <AccessTab settings={data.settings_overrides} onChange={updateOverride} editable={overridesEditable} />
           </TabsContent>

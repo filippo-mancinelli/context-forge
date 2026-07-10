@@ -917,7 +917,10 @@ export const api = {
       }),
     delete: (id: number) => request<{ status: string }>(`/api/datasources/${id}`, { method: 'DELETE' }),
     test: (id: number) =>
-      request<{ status: 'ok' | 'error'; error?: string }>(`/api/datasources/${id}/test`, { method: 'POST' }),
+      request<{ status: 'ok' | 'error'; error?: string; suggested_host?: string | null }>(
+        `/api/datasources/${id}/test`,
+        { method: 'POST' }
+      ),
     schema: (id: number, schema?: string) =>
       request<DbSchemaOverview>(
         `/api/datasources/${id}/schema${schema ? `?schema=${encodeURIComponent(schema)}` : ''}`
