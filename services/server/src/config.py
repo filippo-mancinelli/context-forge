@@ -42,6 +42,8 @@ class IndexingConfig(BaseModel):
         "**/.git/**", "**/node_modules/**", "**/__pycache__/**",
         "**/*.pyc", "**/dist/**", "**/build/**", "**/.next/**",
         "**/coverage/**", "**/*.min.js", "**/*.lock", "**/package-lock.json",
+        "**/.venv/**", "**/venv/**", "**/.tox/**", "**/.mypy_cache/**",
+        "**/.pytest_cache/**", "**/.ruff_cache/**",
     ])
     max_file_size_kb: int = 500
     chunk_size: int = 400

@@ -167,6 +167,99 @@ async def search_repo_chunks(
 
 
 # --------------------------------------------------------------------------- #
+# Web-page chunk search
+# --------------------------------------------------------------------------- #
+#   $1 embedding  $2 org_id  $3 candidate pool  $4 query text
+#   $5 page_ids (bigint[] or NULL)  $6 limit
+_WEB_HYBRID_SQL = f"""
+WITH tsq AS (
+    SELECT websearch_to_tsquery('{TSQUERY_CONFIG}', $4) AS query
+),
+vec AS (
+    SELECT c.id, ROW_NUMBER() OVER (ORDER BY c.embedding <=> $1::vector) AS rank
+    FROM web_chunks c
+    WHERE c.org_id = $2 AND ($5::bigint[] IS NULL OR c.page_id = ANY($5))
+    ORDER BY c.embedding <=> $1::vector
+    LIMIT $3
+),
+kw AS (
+    SELECT c.id, ROW_NUMBER() OVER (ORDER BY ts_rank_cd(c.content_tsv, tsq.query) DESC) AS rank
+    FROM web_chunks c, tsq
+    WHERE c.org_id = $2 AND ($5::bigint[] IS NULL OR c.page_id = ANY($5))
+      AND c.content_tsv @@ tsq.query
+    ORDER BY ts_rank_cd(c.content_tsv, tsq.query) DESC
+    LIMIT $3
+),
+fused AS (
+    SELECT COALESCE(v.id, k.id) AS id,
+           COALESCE(1.0 / ({RRF_K} + v.rank), 0)
+         + COALESCE(1.0 / ({RRF_K} + k.rank), 0) AS score
+    FROM vec v
+    FULL OUTER JOIN kw k ON v.id = k.id
+)
+SELECT c.page_id, c.chunk_index, c.content, c.metadata,
+       p.title, p.url, f.score
+FROM fused f
+JOIN web_chunks c ON c.id = f.id
+JOIN web_pages p ON p.id = c.page_id
+ORDER BY f.score DESC
+LIMIT $6
+"""
+
+_WEB_VECTOR_SQL = """
+SELECT c.page_id, c.chunk_index, c.content, c.metadata,
+       p.title, p.url,
+       1 - (c.embedding <=> $1::vector) AS score
+FROM web_chunks c
+JOIN web_pages p ON p.id = c.page_id
+WHERE c.org_id = $2 AND ($3::bigint[] IS NULL OR c.page_id = ANY($3))
+ORDER BY c.embedding <=> $1::vector
+LIMIT $4
+"""
+
+
+async def search_web_chunks(
+    org_id: int,
+    query: str,
+    page_ids: Optional[list[int]] = None,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Search scraped web-page chunks for an organization (hybrid or vector-only)."""
+    embedding_str = _vector_to_pg(await embed_text(query))
+    pool = await get_pool()
+    hybrid = hybrid_enabled()
+
+    async with pool.acquire() as conn:
+        if hybrid:
+            rows = await conn.fetch(
+                _WEB_HYBRID_SQL, embedding_str, org_id, CANDIDATE_POOL, query, page_ids, limit
+            )
+        else:
+            rows = await conn.fetch(
+                _WEB_VECTOR_SQL, embedding_str, org_id, page_ids, limit
+            )
+
+    results = [
+        {
+            "page_id": int(r["page_id"]),
+            "title": r["title"],
+            "url": r["url"],
+            "chunk_index": r["chunk_index"],
+            "content": r["content"],
+            "metadata": _parse_metadata(r["metadata"]),
+            "score": float(r["score"]),
+        }
+        for r in rows
+    ]
+    if hybrid:
+        _normalize_scores(results)
+    else:
+        for r in results:
+            r["score"] = round(r["score"], 4)
+    return results
+
+
+# --------------------------------------------------------------------------- #
 # Knowledge-base chunk search
 # --------------------------------------------------------------------------- #
 #   $1 embedding  $2 org_id  $3 candidate pool  $4 query text

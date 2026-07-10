@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react'
 import { MessagesSquare } from 'lucide-react'
 import { api, type SharedChatResponse } from '../lib/api'
 import { Spinner } from '../components/ui'
-import { Transcript } from '../components/ChatTranscript'
+import { Transcript, type CitationSource } from '../components/ChatTranscript'
+import { SourcePanel } from '../components/SourcePanel'
 
 /** Public, read-only view of a shared agent-chat snapshot. No auth required. */
 export default function SharedChat({ token }: { token: string }) {
   const [data, setData] = useState<SharedChatResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [activeSource, setActiveSource] = useState<CitationSource | null>(null)
 
   useEffect(() => {
     api.chat
@@ -57,7 +59,7 @@ export default function SharedChat({ token }: { token: string }) {
                   </p>
                 )}
               </div>
-              <Transcript turns={data.turns} />
+              <Transcript turns={data.turns} onOpenSource={setActiveSource} />
               <p
                 style={{ borderTop: '1px solid var(--border)' }}
                 className="text-[11px] text-muted mt-8 pt-4"
@@ -70,6 +72,8 @@ export default function SharedChat({ token }: { token: string }) {
           )}
         </div>
       </main>
+
+      <SourcePanel source={activeSource} onClose={() => setActiveSource(null)} />
     </div>
   )
 }

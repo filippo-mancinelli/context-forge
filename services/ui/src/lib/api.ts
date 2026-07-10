@@ -190,6 +190,56 @@ export interface KbSearchResult {
   score: number
 }
 
+export type WebPageStatus = 'pending' | 'processing' | 'ready' | 'error'
+
+export interface WebPage {
+  id: number
+  url: string
+  title?: string
+  status: WebPageStatus
+  site_id?: number | null
+  total_chunks: number
+  char_count: number
+  error_message?: string
+  metadata?: Record<string, unknown>
+  created_at?: string
+  fetched_at?: string
+}
+
+export type WebSiteStatus = 'pending' | 'crawling' | 'ready' | 'error'
+
+export interface WebSite {
+  id: number
+  root_url: string
+  status: WebSiteStatus
+  max_pages: number
+  exclude_patterns: string[]
+  pages_found: number
+  error_message?: string
+  created_at?: string
+  crawled_at?: string
+  total_pages: number
+  ready_pages: number
+  error_pages: number
+  total_chunks: number
+}
+
+export interface WebAddResult {
+  status: string
+  created: { id: number; url: string; title?: string; status: string }[]
+  rejected: { url: string; reason: string }[]
+}
+
+export interface WebSearchResult {
+  page_id: number
+  title?: string
+  url: string
+  chunk_index: number
+  content: string
+  metadata?: Record<string, unknown> | null
+  score: number
+}
+
 export interface Memory {
   id: string
   memory: string
@@ -217,7 +267,7 @@ export interface ChatMessage {
 
 export interface ChatToolCall {
   tool: string
-  source: 'repositories' | 'memory' | 'knowledge_base' | 'databases'
+  source: 'repositories' | 'memory' | 'knowledge_base' | 'web' | 'databases'
   query: string
   result_count: number
   results: Record<string, unknown>[]
@@ -228,6 +278,7 @@ export interface ChatSourcesUsed {
   repositories: boolean
   memory: boolean
   knowledge_base: boolean
+  web: boolean
   databases: boolean
 }
 
@@ -651,6 +702,7 @@ export const api = {
         `/api/repos/relationships${repo ? `?repo=${encodeURIComponent(repo)}` : ''}`
       ),
     index: (name: string) => request(`/api/repos/${encodeURIComponent(name)}/index`, { method: 'POST' }),
+    cancelIndex: (name: string) => request(`/api/repos/${encodeURIComponent(name)}/cancel-index`, { method: 'POST' }),
     indexAll: () => request('/api/repos/index-all', { method: 'POST' }),
     stats: (name: string) => request<RepoStats>(`/api/repos/${encodeURIComponent(name)}/stats`),
     files: (name: string, path = '') =>
@@ -715,6 +767,53 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ query, limit }),
       }),
+  },
+  web: {
+    list: () => request<WebPage[]>('/api/web/pages'),
+    add: (urls: string[]) =>
+      request<WebAddResult>('/api/web/pages', {
+        method: 'POST',
+        body: JSON.stringify({ urls }),
+      }),
+    refetch: (id: number) =>
+      request<{ status: string; id: number }>(`/api/web/pages/${id}/refetch`, { method: 'POST' }),
+    delete: (id: number) =>
+      request<{ status: string; deleted: number }>(`/api/web/pages/${id}`, { method: 'DELETE' }),
+    chunks: (id: number, limit = 50) =>
+      request<{ page_id: number; chunks: { chunk_index: number; content: string }[]; count: number }>(
+        `/api/web/pages/${id}/chunks?limit=${limit}`
+      ),
+    search: (query: string, limit = 10) =>
+      request<{ results: WebSearchResult[]; count: number }>('/api/web/search', {
+        method: 'POST',
+        body: JSON.stringify({ query, limit }),
+      }),
+    sites: {
+      list: () => request<WebSite[]>('/api/web/sites'),
+      add: (rootUrl: string, maxPages?: number, excludePatterns?: string[]) =>
+        request<{ status: string; site: WebSite }>('/api/web/sites', {
+          method: 'POST',
+          body: JSON.stringify({
+            root_url: rootUrl,
+            ...(maxPages ? { max_pages: maxPages } : {}),
+            ...(excludePatterns ? { exclude_patterns: excludePatterns } : {}),
+          }),
+        }),
+      update: (id: number, patch: { max_pages?: number; exclude_patterns?: string[] }) =>
+        request<WebSite>(`/api/web/sites/${id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(patch),
+        }),
+      recrawl: (id: number) =>
+        request<{ status: string; id: number }>(`/api/web/sites/${id}/recrawl`, {
+          method: 'POST',
+        }),
+      pages: (id: number) => request<WebPage[]>(`/api/web/sites/${id}/pages`),
+      delete: (id: number) =>
+        request<{ status: string; deleted: number }>(`/api/web/sites/${id}`, {
+          method: 'DELETE',
+        }),
+    },
   },
   tools: {
     list: () => request<{ tools: Tool[]; count: number }>('/api/tools'),

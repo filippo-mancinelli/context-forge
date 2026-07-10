@@ -34,6 +34,7 @@ SYSTEM_PROMPT = (
     "- search_repositories: semantic search over indexed code repositories.\n"
     "- search_memory: semantic search over long-term persistent memories.\n"
     "- search_knowledge_base: semantic search over uploaded documents.\n"
+    "- search_web: semantic search over scraped web pages the user has added.\n"
     "- get_database_schema: list configured database connections, browse a "
     "database's tables, or describe one table in depth (columns, keys, "
     "curated descriptions).\n"
@@ -46,7 +47,7 @@ SYSTEM_PROMPT = (
     "'acme-backend' and 'acme-frontend', a database connection, uploaded "
     "documents, and stored memories. For broad or project-level questions, "
     "check EVERY plausibly relevant source (repositories, memory, knowledge "
-    "base, databases) before answering — do not stop at the first source "
+    "base, web pages, databases) before answering — do not stop at the first source "
     "that returns something. You may request multiple tool calls in a "
     "single turn. Cross-check what you find: reconcile what the code says "
     "with the database schema/data and the documents, and point out "
@@ -57,7 +58,7 @@ SYSTEM_PROMPT = (
     "never write tool-call markup (XML, DSML, or similar) inside your "
     "reply or reasoning text.\n\n"
     "When you use results, cite where they came from (repo/file, memory, "
-    "document title, or connection/table) so the developer can confirm "
+    "document title, web page URL, or connection/table) so the developer can confirm "
     "retrieval is working. If a search returns nothing, say so plainly. "
     "Keep answers concise."
 )
@@ -129,6 +130,22 @@ async def _search_knowledge_base(org: ActiveOrg, args: dict[str, Any]) -> list[d
     ]
 
 
+async def _search_web(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
+    from ...web import store
+
+    results = await store.search_pages(org.org_id, _arg_query(args), limit=_arg_limit(args))
+    return [
+        {
+            "page_id": r.get("page_id"),
+            "title": r.get("title"),
+            "url": r.get("url"),
+            "content": r.get("content"),
+            "score": r.get("score"),
+        }
+        for r in results
+    ]
+
+
 async def _get_database_schema(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
     """Three granularities: no args -> connections; connection -> tables; +table -> columns."""
     from ...datasources import service
@@ -181,6 +198,7 @@ _TOOL_HANDLERS = {
     "search_repositories": (_search_repositories, "repositories"),
     "search_memory": (_search_memory, "memory"),
     "search_knowledge_base": (_search_knowledge_base, "knowledge_base"),
+    "search_web": (_search_web, "web"),
     "get_database_schema": (_get_database_schema, "databases"),
     "query_database": (_query_database, "databases"),
 }
@@ -232,6 +250,24 @@ _OPENAI_TOOLS = [
             "description": (
                 "Semantic search over uploaded knowledge-base documents "
                 "(PDFs, Word, Excel, PowerPoint, text, etc.)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Natural language search query"},
+                    "limit": {"type": "integer", "description": "Max results (default 8)"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_web",
+            "description": (
+                "Semantic search over web pages the user has scraped and "
+                "indexed (documentation sites, articles, reference pages)."
             ),
             "parameters": {
                 "type": "object",
@@ -585,6 +621,7 @@ def _build_response(reply: str, traces: list[ToolCallTrace], model: str) -> Chat
         "repositories": any(t.source == "repositories" and not t.error for t in traces),
         "memory": any(t.source == "memory" and not t.error for t in traces),
         "knowledge_base": any(t.source == "knowledge_base" and not t.error for t in traces),
+        "web": any(t.source == "web" and not t.error for t in traces),
         "databases": any(t.source == "databases" and not t.error for t in traces),
     }
     return ChatResponse(reply=reply, tool_calls=traces, sources_used=sources_used, model=model)
@@ -596,11 +633,15 @@ def _build_response(reply: str, traces: list[ToolCallTrace], model: str) -> Chat
 # of using structured tool_calls, which stalls the agent loop. Detect that
 # markup, execute the intended calls, and keep the loop going.
 # --------------------------------------------------------------------------- #
-_DSML_HINT_RE = re.compile(r"<\|DSML\|>|<\|tool[^|>]*\|>")
+# DeepSeek's tokens use the FULLWIDTH vertical bar U+FF5C ("｜"), not ASCII "|";
+# accept either so the markup is actually detected. (Matching only ASCII "|"
+# silently disabled recovery, stranding the leaked markup as the final answer.)
+_PIPE = r"[|｜]"
+_DSML_HINT_RE = re.compile(rf"<{_PIPE}DSML{_PIPE}>|<{_PIPE}tool[^|｜>]*{_PIPE}>")
 _DSML_INVOKE_RE = re.compile(r'invoke\s+name="([\w.-]+)"')
 _DSML_PARAM_RE = re.compile(r'parameter\s+name="([\w.-]+)"[^>]*>([^<]*)')
 # Rendered/stored text cleanup: special tokens plus the tag fragment after them.
-_DSML_STRIP_RE = re.compile(r"</?\|DSML\|>[^<]*|<\|[^|>]*\|>")
+_DSML_STRIP_RE = re.compile(rf"</?{_PIPE}DSML{_PIPE}>[^<]*|<{_PIPE}[^|｜>]*{_PIPE}>")
 
 
 def _strip_dsml(text: str) -> str:

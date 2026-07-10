@@ -142,9 +142,11 @@ async def memory_add(
 
 @mcp.tool()
 async def memory_search(query: str, limit: int = 10, user_id: Optional[str] = None) -> dict:
-    """Search memories semantically.
+    """Search the organization's persistent cross-session memory semantically.
 
     Find previously stored memories, decisions, or notes related to the query.
+    Use this BEFORE answering questions about past decisions, conventions, or
+    anything the user may have asked to remember in earlier sessions.
 
     Args:
         query: Natural language search query
