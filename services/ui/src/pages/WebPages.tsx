@@ -12,7 +12,7 @@ import {
   Settings2,
 } from 'lucide-react'
 import { api, type WebPage, type WebSite, type WebSearchResult } from '../lib/api'
-import { Button, Input, Badge } from '../components/ui'
+import { Button, Input, Badge, useConfirm, useToast } from '../components/ui'
 
 const STATUS_VARIANT: Record<WebPage['status'], 'success' | 'accent' | 'warning' | 'danger'> = {
   ready: 'success',
@@ -67,13 +67,8 @@ function parsePatterns(value: string): string[] {
     .filter(Boolean)
 }
 
-function AddUrls({
-  onAdded,
-  onError,
-}: {
-  onAdded: (msg: string) => void
-  onError: (msg: string) => void
-}) {
+function AddUrls({ onAdded }: { onAdded: () => void }) {
+  const toast = useToast()
   const [value, setValue] = useState('')
   const [adding, setAdding] = useState(false)
   const [crawl, setCrawl] = useState(false)
@@ -102,26 +97,25 @@ function AddUrls({
             failed.push(`${url}: ${String(e)}`)
           }
         }
-        const parts: string[] = []
-        if (added) parts.push(`${added} site${added === 1 ? '' : 's'} queued for crawling`)
-        if (failed.length) parts.push(`${failed.length} failed (${failed.join('; ')})`)
-        onAdded(parts.join(' · ') || 'Added')
+        if (added) toast.success(added === 1 ? 'Crawl started' : `Crawl started for ${added} sites`)
+        if (failed.length) toast.error(`${failed.length} failed (${failed.join('; ')})`)
       } else {
         const res = await api.web.add(urls)
-        const parts: string[] = []
-        if (res.created.length) parts.push(`${res.created.length} added`)
+        if (res.created.length) {
+          toast.success(res.created.length === 1 ? 'Page added' : `${res.created.length} pages added`)
+        }
         if (res.rejected.length) {
-          parts.push(
+          toast.error(
             `${res.rejected.length} skipped (${res.rejected
               .map((r) => `${r.url}: ${r.reason}`)
               .join('; ')})`
           )
         }
-        onAdded(parts.join(' · ') || 'Added')
       }
       setValue('')
+      onAdded()
     } catch (e) {
-      onError(String(e))
+      toast.error(String(e))
     } finally {
       setAdding(false)
     }
@@ -426,16 +420,16 @@ function PageCard({
 function SiteCard({
   site,
   onChanged,
-  onError,
   onDeletePage,
   onRefetchPage,
 }: {
   site: WebSite
   onChanged: () => void
-  onError: (msg: string) => void
   onDeletePage: (id: number) => Promise<void>
   onRefetchPage: (id: number) => Promise<void>
 }) {
+  const toast = useToast()
+  const confirm = useConfirm()
   const [busy, setBusy] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -450,9 +444,9 @@ function SiteCard({
     try {
       setPages(await api.web.sites.pages(site.id))
     } catch (e) {
-      onError(String(e))
+      toast.error(String(e))
     }
-  }, [site.id, onError])
+  }, [site.id, toast])
 
   useEffect(() => {
     if (expanded) void loadPages()
@@ -469,24 +463,26 @@ function SiteCard({
     setBusy(true)
     try {
       await api.web.sites.recrawl(site.id)
+      toast.success('Recrawl started')
       onChanged()
     } catch (e) {
-      onError(String(e))
+      toast.error(String(e))
     } finally {
       setBusy(false)
     }
   }
 
   const remove = async () => {
-    if (!window.confirm(`Delete ${site.root_url} and all its ${site.total_pages} indexed pages?`)) return
-    setBusy(true)
-    try {
-      await api.web.sites.delete(site.id)
-      onChanged()
-    } catch (e) {
-      onError(String(e))
-      setBusy(false)
-    }
+    const ok = await confirm({
+      title: 'Delete site',
+      message: `Delete ${site.root_url} and all its ${site.total_pages} indexed pages?`,
+      confirmLabel: 'Delete',
+      danger: true,
+      onConfirm: () => api.web.sites.delete(site.id),
+    })
+    if (!ok) return
+    toast.success('Site removed')
+    onChanged()
   }
 
   const saveSettings = async (thenRecrawl: boolean) => {
@@ -498,9 +494,10 @@ function SiteCard({
       })
       if (thenRecrawl) await api.web.sites.recrawl(site.id)
       setEditing(false)
+      toast.success(thenRecrawl ? 'Settings saved, recrawl started' : 'Settings saved')
       onChanged()
     } catch (e) {
-      onError(String(e))
+      toast.error(String(e))
     } finally {
       setSaving(false)
     }
@@ -646,11 +643,11 @@ function SiteCard({
 }
 
 export default function WebPages() {
+  const toast = useToast()
   const [pages, setPages] = useState<WebPage[]>([])
   const [sites, setSites] = useState<WebSite[]>([])
   const [loading, setLoading] = useState(true)
   const [pageError, setPageError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -686,17 +683,19 @@ export default function WebPages() {
     try {
       await api.web.delete(id)
       setPages((prev) => prev.filter((p) => p.id !== id))
+      toast.success('Page removed')
     } catch (e) {
-      setPageError(String(e))
+      toast.error(String(e))
     }
   }
 
   const handleRefetch = async (id: number) => {
     try {
       await api.web.refetch(id)
+      toast.success('Page refetched')
       await load()
     } catch (e) {
-      setPageError(String(e))
+      toast.error(String(e))
     }
   }
 
@@ -705,7 +704,7 @@ export default function WebPages() {
 
   return (
     <div className="p-4 sm:p-8">
-      <div className="page-content">
+      <div className="page-wide">
         <div className="mb-6">
           <h1>Web Pages</h1>
           <p className="text-muted text-sm">
@@ -729,20 +728,7 @@ export default function WebPages() {
             {pageError}
           </div>
         )}
-        {notice && (
-          <div style={{ border: '1px solid var(--border)' }} className="text-sm p-3 mb-4 text-muted bg-surface">
-            {notice}
-          </div>
-        )}
-
-        <AddUrls
-          onAdded={(msg) => {
-            setNotice(msg)
-            setPageError(null)
-            void load()
-          }}
-          onError={(msg) => setPageError(msg)}
-        />
+        <AddUrls onAdded={() => void load()} />
 
         <SearchPanel />
 
@@ -758,7 +744,6 @@ export default function WebPages() {
                     key={site.id}
                     site={site}
                     onChanged={() => void load()}
-                    onError={(msg) => setPageError(msg)}
                     onDeletePage={handleDelete}
                     onRefetchPage={handleRefetch}
                   />

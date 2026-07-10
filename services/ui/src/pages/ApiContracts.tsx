@@ -8,7 +8,7 @@ import {
   type ApiEndpointDetail,
   type ApiEndpointSummary,
 } from '../lib/api'
-import { Badge, Button, Dialog, DialogFooter, Input, Select, Textarea } from '../components/ui'
+import { Badge, Button, Dialog, DialogFooter, Input, Select, Textarea, useConfirm, useToast } from '../components/ui'
 
 const METHOD_COLOR: Record<string, string> = {
   GET: '#1a7a45',
@@ -49,6 +49,7 @@ function ContractDialog({
   onOpenChange: (open: boolean) => void
   onSaved: () => void
 }) {
+  const toast = useToast()
   const [form, setForm] = useState<ApiContractCreateRequest>({ name: '', type: 'openapi' })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -73,7 +74,9 @@ function ContractDialog({
       onOpenChange(false)
       onSaved()
       if (res.contract.status === 'error') {
-        window.alert(`Contract created but ingestion failed: ${res.contract.error_message}`)
+        toast.error(`Contract created but ingestion failed: ${res.contract.error_message}`)
+      } else {
+        toast.success('Contract created')
       }
     } catch (err) {
       setError(String(err))
@@ -229,6 +232,8 @@ function ContractCard({
   contract: ApiContract
   onChanged: () => void
 }) {
+  const toast = useToast()
+  const confirm = useConfirm()
   const [expanded, setExpanded] = useState(false)
   const [endpoints, setEndpoints] = useState<ApiEndpointSummary[]>([])
   const [filter, setFilter] = useState('')
@@ -247,23 +252,27 @@ function ContractCard({
     setRefreshing(true)
     try {
       await api.contracts.refresh(contract.id)
+      toast.success('Contract refreshed')
       onChanged()
       if (expanded) await loadEndpoints()
     } catch (e) {
-      window.alert(String(e))
+      toast.error(String(e))
     } finally {
       setRefreshing(false)
     }
   }
 
   const remove = async () => {
-    if (!window.confirm(`Delete contract '${contract.name}'?`)) return
-    try {
-      await api.contracts.delete(contract.id)
-      onChanged()
-    } catch (e) {
-      window.alert(String(e))
-    }
+    const ok = await confirm({
+      title: 'Delete contract',
+      message: `Delete contract '${contract.name}'?`,
+      confirmLabel: 'Delete',
+      danger: true,
+      onConfirm: () => api.contracts.delete(contract.id),
+    })
+    if (!ok) return
+    toast.success('Contract deleted')
+    onChanged()
   }
 
   return (
@@ -350,7 +359,7 @@ export default function ApiContracts() {
 
   return (
     <div className="p-4 sm:p-8">
-      <div className="page-content">
+      <div className="page-wide">
         <div className="flex items-start justify-between gap-4 mb-6">
           <div>
             <h1>API Contracts</h1>

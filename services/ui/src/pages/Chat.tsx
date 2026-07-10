@@ -24,7 +24,7 @@ import {
   type ChatToolCall,
   type StoredChatTurn,
 } from '../lib/api'
-import { Button, Dialog, DialogFooter, Spinner } from '../components/ui'
+import { Button, Dialog, DialogFooter, Spinner, useConfirm, useToast } from '../components/ui'
 import {
   AssistantBody,
   PendingToolCard,
@@ -305,6 +305,8 @@ function patchLastAssistant(prev: Turn[], patch: (t: AssistantTurn) => Assistant
 }
 
 export default function Chat() {
+  const toast = useToast()
+  const confirm = useConfirm()
   const [turns, setTurns] = useState<Turn[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -499,23 +501,26 @@ export default function Chat() {
         setHistoryDrawer(false)
         pinnedRef.current = true
       })
-      .catch(() => {})
+      .catch((e) => toast.error(String(e)))
   }
 
-  const deleteSession = (id: number) => {
+  const deleteSession = async (id: number) => {
     if (streaming && id === sessionIdRef.current) return
-    if (!window.confirm('Delete this chat? This cannot be undone.')) return
-    api.chat.sessions
-      .delete(id)
-      .then(() => {
-        setSessions((prev) => prev.filter((s) => s.id !== id))
-        if (id === sessionIdRef.current) {
-          sessionIdRef.current = null
-          setSessionId(null)
-          setTurns([])
-        }
-      })
-      .catch(() => {})
+    const ok = await confirm({
+      title: 'Delete chat',
+      message: 'Delete this chat? This cannot be undone.',
+      confirmLabel: 'Delete',
+      danger: true,
+      onConfirm: () => api.chat.sessions.delete(id),
+    })
+    if (!ok) return
+    toast.success('Chat deleted')
+    setSessions((prev) => prev.filter((s) => s.id !== id))
+    if (id === sessionIdRef.current) {
+      sessionIdRef.current = null
+      setSessionId(null)
+      setTurns([])
+    }
   }
 
   const openShare = async () => {
@@ -532,6 +537,7 @@ export default function Chat() {
       const res = await api.chat.sessions.share(id)
       setShareUrl(`${window.location.origin}/share/chat/${res.share_token}`)
       setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, shared: true } : s)))
+      toast.success('Share link created')
     } catch (e) {
       setShareError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -548,6 +554,7 @@ export default function Chat() {
       setShareUrl(null)
       setShareOpen(false)
       setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, shared: false } : s)))
+      toast.success('Share link revoked')
     } catch (e) {
       setShareError(e instanceof Error ? e.message : String(e))
     } finally {

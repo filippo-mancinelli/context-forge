@@ -239,8 +239,15 @@
     border: 1px solid var(--border);
   }
 
+  /* Narrow reading column (chat, shared chat). */
   .page-content {
     max-width: 860px;
+    width: 100%;
+  }
+
+  /* Data pages: use the available width, capped only on very wide screens. */
+  .page-wide {
+    max-width: 1600px;
     width: 100%;
   }
 

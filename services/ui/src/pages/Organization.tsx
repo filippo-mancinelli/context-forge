@@ -7,7 +7,7 @@ import {
   type OrgRole,
 } from '../lib/api'
 import { useAppStore } from '../store'
-import { Button, Input, Select, Badge, Table, Thead, Tbody, Tr, Th, Td } from '../components/ui'
+import { Button, Input, Select, Badge, Table, Thead, Tbody, Tr, Th, Td, useConfirm, useToast } from '../components/ui'
 
 const ROLE_OPTIONS: { value: OrgRole; label: string }[] = [
   { value: 'viewer', label: 'Viewer' },
@@ -24,6 +24,8 @@ function roleBadge(role: OrgRole) {
 }
 
 export default function Organization() {
+  const confirm = useConfirm()
+  const toast = useToast()
   const currentUser = useAppStore((s) => s.currentUser)
   const organizations = useAppStore((s) => s.organizations)
   const activeOrgId = useAppStore((s) => s.activeOrgId)
@@ -76,10 +78,12 @@ export default function Organization() {
       const res = await api.organizations.invite(activeOrgId, inviteEmail.trim(), inviteRole)
       setInviteEmail('')
       if (res.added_existing_user) {
+        toast.success('Member added')
         await refresh()
       } else if (res.invite_token) {
         const link = `${window.location.origin}/invite/${res.invite_token}`
         setInviteLink(link)
+        toast.success('Invitation created')
         await refresh()
       }
     } catch (e) {
@@ -93,6 +97,7 @@ export default function Organization() {
     if (!activeOrgId) return
     try {
       await api.organizations.updateMember(activeOrgId, userId, role)
+      toast.success('Role updated')
       await refresh()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update role')
@@ -101,22 +106,33 @@ export default function Organization() {
 
   const handleRemove = async (userId: number) => {
     if (!activeOrgId) return
-    try {
-      await api.organizations.removeMember(activeOrgId, userId)
-      await refresh()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to remove member')
-    }
+    const isSelf = userId === currentUser?.id
+    const ok = await confirm({
+      title: isSelf ? 'Leave organization' : 'Remove member',
+      message: isSelf
+        ? 'Leave this organization? You will lose access to its resources.'
+        : 'Remove this member from the organization?',
+      confirmLabel: isSelf ? 'Leave' : 'Remove',
+      danger: true,
+      onConfirm: () => api.organizations.removeMember(activeOrgId, userId),
+    })
+    if (!ok) return
+    toast.success(isSelf ? 'You left the organization' : 'Member removed')
+    await refresh()
   }
 
   const handleRevoke = async (invitationId: number) => {
     if (!activeOrgId) return
-    try {
-      await api.organizations.revokeInvite(activeOrgId, invitationId)
-      await refresh()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to revoke invite')
-    }
+    const ok = await confirm({
+      title: 'Revoke invitation',
+      message: 'Revoke this invitation? The invite link will stop working.',
+      confirmLabel: 'Revoke',
+      danger: true,
+      onConfirm: () => api.organizations.revokeInvite(activeOrgId, invitationId),
+    })
+    if (!ok) return
+    toast.success('Invitation revoked')
+    await refresh()
   }
 
   const handleRename = async (e: FormEvent) => {
@@ -124,6 +140,7 @@ export default function Organization() {
     if (!activeOrgId || !orgName.trim()) return
     try {
       await api.organizations.update(activeOrgId, orgName.trim())
+      toast.success('Organization renamed')
       await loadIdentity()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to rename organization')
@@ -140,7 +157,7 @@ export default function Organization() {
   if (!activeOrg) {
     return (
       <div className="p-4 sm:p-8">
-        <div className="page-content">
+        <div className="page-wide">
           <h1>Organization</h1>
           <p className="text-muted text-sm">No active organization.</p>
         </div>
@@ -150,7 +167,7 @@ export default function Organization() {
 
   return (
     <div className="p-4 sm:p-8">
-      <div className="page-content">
+      <div className="page-wide">
         <div className="mb-6">
           <h1>Organization</h1>
           <p className="text-muted text-sm">

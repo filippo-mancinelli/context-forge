@@ -12,7 +12,7 @@ import {
   AlertCircle,
 } from 'lucide-react'
 import { api, type KbDocument, type KbSearchResult } from '../lib/api'
-import { Button, Input, Badge } from '../components/ui'
+import { Button, Input, Badge, useConfirm, useToast } from '../components/ui'
 
 const STATUS_VARIANT: Record<KbDocument['status'], 'success' | 'accent' | 'warning' | 'danger'> = {
   ready: 'success',
@@ -374,6 +374,8 @@ function DocumentCard({
 }
 
 export default function Knowledge() {
+  const confirm = useConfirm()
+  const toast = useToast()
   const [documents, setDocuments] = useState<KbDocument[]>([])
   const [loading, setLoading] = useState(true)
   const [uploading, setUploading] = useState(false)
@@ -437,17 +439,22 @@ export default function Knowledge() {
   }
 
   const handleDelete = async (id: number) => {
-    try {
-      await api.kb.delete(id)
-      setDocuments((prev) => prev.filter((d) => d.id !== id))
-    } catch (e) {
-      setPageError(String(e))
-    }
+    const ok = await confirm({
+      title: 'Delete document',
+      message: 'Delete this document and its indexed chunks? This cannot be undone.',
+      confirmLabel: 'Delete',
+      danger: true,
+      onConfirm: () => api.kb.delete(id),
+    })
+    if (!ok) return
+    toast.success('Document deleted')
+    setDocuments((prev) => prev.filter((d) => d.id !== id))
   }
 
   const handleReprocess = async (id: number) => {
     try {
       await api.kb.reprocess(id)
+      toast.success('Reprocessing started')
       await load()
     } catch (e) {
       setPageError(String(e))
@@ -474,7 +481,7 @@ export default function Knowledge() {
 
   return (
     <div className="p-4 sm:p-8">
-      <div className="page-content">
+      <div className="page-wide">
         <div className="mb-6">
           <h1>Knowledge Base</h1>
           <p className="text-muted text-sm">
