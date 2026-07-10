@@ -22,6 +22,7 @@ import SharedChat from './pages/SharedChat'
 import OAuth from './pages/OAuth'
 import { api } from './lib/api'
 import { useAppStore } from './store'
+import { Logo } from './components/Logo'
 
 const navLinks = [
   { to: '/chat', icon: MessagesSquare, label: 'Agent Chat' },
@@ -132,7 +133,7 @@ function Sidebar() {
         style={{ borderBottom: '1px solid var(--border)' }}
         className="px-4 py-3 space-y-2"
       >
-        <span className="font-semibold text-text text-sm tracking-tight block">context-forge</span>
+        <Logo />
         <OrgSwitcher />
       </div>
       <NavItems />
@@ -146,7 +147,7 @@ function MobileHeader({ onMenuOpen }: { onMenuOpen: () => void }) {
       style={{ borderBottom: '1px solid var(--border)' }}
       className="md:hidden flex items-center justify-between px-4 py-3 bg-surface sticky top-0 z-30"
     >
-      <span className="font-semibold text-text text-sm tracking-tight">context-forge</span>
+      <Logo />
       <button
         onClick={onMenuOpen}
         className="text-muted hover:text-text transition-colors p-1"
@@ -186,7 +187,7 @@ function Drawer({ open, onClose }: { open: boolean; onClose: () => void }) {
           className="px-4 py-3 space-y-2"
         >
           <div className="flex items-center justify-between">
-            <span className="font-semibold text-text text-sm tracking-tight">context-forge</span>
+            <Logo />
             <button
               onClick={onClose}
               className="text-muted hover:text-text transition-colors p-1"

@@ -126,7 +126,7 @@ export default function OAuth() {
           </div>
           <h1 className="text-xl font-semibold mb-1">Authorize Application</h1>
           <p className="text-muted text-sm">
-            An application wants to access your context-forge account
+            An application wants to access your ContextForge account
           </p>
         </div>
 
@@ -181,7 +181,7 @@ export default function OAuth() {
         </div>
 
         <p className="text-xs text-muted text-center mt-4">
-          By authorizing, you allow this application to access your context-forge data
+          By authorizing, you allow this application to access your ContextForge data
         </p>
       </div>
     </div>

@@ -4,6 +4,7 @@ import { api, type SharedChatResponse } from '../lib/api'
 import { Spinner } from '../components/ui'
 import { Transcript, type CitationSource } from '../components/ChatTranscript'
 import { SourcePanel } from '../components/SourcePanel'
+import { Logo } from '../components/Logo'
 
 /** Public, read-only view of a shared agent-chat snapshot. No auth required. */
 export default function SharedChat({ token }: { token: string }) {
@@ -27,7 +28,7 @@ export default function SharedChat({ token }: { token: string }) {
         className="px-4 sm:px-8 py-3 bg-surface"
       >
         <div className="page-content mx-auto flex items-center justify-between gap-4">
-          <span className="font-semibold text-text text-sm tracking-tight">context-forge</span>
+          <Logo />
           <span className="text-xs text-muted flex items-center gap-1.5">
             <MessagesSquare className="w-3.5 h-3.5" />
             Shared chat
@@ -65,7 +66,7 @@ export default function SharedChat({ token }: { token: string }) {
                 className="text-[11px] text-muted mt-8 pt-4"
               >
                 Read-only snapshot of an agent-chat conversation from a self-hosted{' '}
-                <span className="font-mono">context-forge</span> instance. Retrieval traces
+                <span className="font-mono">ContextForge</span> instance. Retrieval traces
                 (repositories, memory, knowledge base, databases) are shown as they ran.
               </p>
             </>
