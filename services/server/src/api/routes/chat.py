@@ -53,7 +53,13 @@ SYSTEM_PROMPT = (
     "with the database schema/data and the documents, and point out "
     "disagreements between sources.\n\n"
     "For database questions, inspect the schema with get_database_schema "
-    "before writing SQL, and use the exact table/column names it returns.\n\n"
+    "before writing SQL, and use the exact table/column names it returns. "
+    "When the user asks about a database without naming the connection, "
+    "infer it from the conversation: project/repo names usually match a "
+    "connection name (e.g. discussing context-forge → connection "
+    "context-forge). Use the hint parameter or call get_database_schema "
+    "with no arguments to list connections. Never pass placeholder values "
+    "like __list__.\n\n"
     "Always invoke tools through the structured tool-calling interface — "
     "never write tool-call markup (XML, DSML, or similar) inside your "
     "reply or reasoning text.\n\n"
@@ -62,6 +68,58 @@ SYSTEM_PROMPT = (
     "retrieval is working. If a search returns nothing, say so plainly. "
     "Keep answers concise."
 )
+
+
+def _extract_context_hints(messages: list[ChatMessage]) -> list[str]:
+    """Pull project/repo-like tokens from recent chat for DB connection matching."""
+    hints: list[str] = []
+    for message in messages[-8:]:
+        text = message.content
+        for match in re.finditer(r"\b[a-zA-Z][a-zA-Z0-9]*(?:[-_][a-zA-Z0-9]+)+\b", text):
+            token = match.group()
+            if token.lower() not in {"gpt-", "http", "https"}:
+                hints.append(token)
+        for match in re.finditer(r"`([^`]+)`", text):
+            segment = match.group(1).strip()
+            if "/" in segment:
+                segment = segment.split("/")[0]
+            if segment and len(segment) > 2:
+                hints.append(segment)
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for hint in hints:
+        key = hint.lower()
+        if key not in seen:
+            seen.add(key)
+            deduped.append(hint)
+    return deduped
+
+
+async def _build_system_prompt(org: ActiveOrg, messages: list[ChatMessage]) -> str:
+    from ...datasources import service
+
+    parts = [SYSTEM_PROMPT]
+    try:
+        connections = await service.list_connections(org.org_id)
+    except Exception:  # noqa: BLE001
+        connections = []
+    if connections:
+        lines = []
+        for conn in connections:
+            label = conn["name"]
+            if conn.get("description"):
+                label += f" — {conn['description']}"
+            if conn.get("database_name"):
+                label += f" ({conn['database_name']})"
+            lines.append(f"  - {label}")
+        parts.append("\nConfigured database connections:\n" + "\n".join(lines))
+    context_hints = _extract_context_hints(messages)
+    if context_hints:
+        parts.append(
+            "\nRecent conversation topics (use as hint when picking a database): "
+            + ", ".join(context_hints[:8])
+        )
+    return "".join(parts)
 
 
 # --------------------------------------------------------------------------- #
@@ -146,15 +204,22 @@ async def _search_web(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, An
     ]
 
 
-async def _get_database_schema(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
+async def _get_database_schema(
+    org: ActiveOrg, args: dict[str, Any], *, context_hints: list[str] | None = None
+) -> list[dict[str, Any]]:
     """Three granularities: no args -> connections; connection -> tables; +table -> columns."""
     from ...datasources import service
+    from ...datasources.service import ConnectionAmbiguousError, ConnectionNotFoundError
 
     connection = str(args.get("connection") or "").strip()
+    hint = str(args.get("hint") or "").strip()
     table = str(args.get("table") or "").strip()
     schema = str(args.get("schema") or "").strip() or None
 
-    if not connection:
+    if service.is_list_sentinel(connection):
+        connection = ""
+
+    if not connection and not hint and not table:
         return [
             {
                 "connection": c["name"],
@@ -165,10 +230,36 @@ async def _get_database_schema(org: ActiveOrg, args: dict[str, Any]) -> list[dic
             }
             for c in await service.list_connections(org.org_id)
         ]
+
+    try:
+        if connection:
+            try:
+                record = await service.get_connection(org.org_id, connection)
+            except ConnectionNotFoundError:
+                record = await service.resolve_connection(
+                    org.org_id,
+                    connection,
+                    context_hints=context_hints,
+                )
+        else:
+            record = await service.resolve_connection(
+                org.org_id,
+                hint or None,
+                context_hints=context_hints,
+            )
+        connection_name = record["name"]
+    except ConnectionAmbiguousError as e:
+        connections = await service.list_connections(org.org_id)
+        return [{"error": str(e), "connections": [c["name"] for c in connections]}]
+    except ConnectionNotFoundError as e:
+        connections = await service.list_connections(org.org_id)
+        return [{"error": str(e), "connections": [c["name"] for c in connections]}]
+
     if not table:
-        overview = await service.schema_overview(org.org_id, connection, schema=schema)
+        overview = await service.schema_overview(org.org_id, connection_name, schema=schema)
         return [
             {
+                "connection": connection_name,
                 "table": t["name"],
                 "description": t.get("description") or t.get("comment"),
                 "column_count": t["column_count"],
@@ -176,19 +267,47 @@ async def _get_database_schema(org: ActiveOrg, args: dict[str, Any]) -> list[dic
             }
             for t in overview["tables"]
         ]
-    detail = await service.describe_table(org.org_id, connection, table, schema=schema)
+    detail = await service.describe_table(org.org_id, connection_name, table, schema=schema)
     return [detail]
 
 
-async def _query_database(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
+async def _query_database(
+    org: ActiveOrg, args: dict[str, Any], *, context_hints: list[str] | None = None
+) -> list[dict[str, Any]]:
     from ...datasources import service
+    from ...datasources.service import ConnectionAmbiguousError, ConnectionNotFoundError
 
     connection = str(args.get("connection") or "").strip()
+    hint = str(args.get("hint") or "").strip()
     sql = str(args.get("sql") or "").strip()
-    if not connection or not sql:
-        raise ValueError("Both 'connection' and 'sql' are required")
+    if service.is_list_sentinel(connection):
+        connection = ""
+    if not sql:
+        raise ValueError("'sql' is required")
+    if not connection and not hint:
+        connections = await service.list_connections(org.org_id)
+        names = [c["name"] for c in connections]
+        raise ValueError(
+            "Specify connection or hint. "
+            + (f"Available: {', '.join(names)}" if names else "No connections configured.")
+        )
+    try:
+        if connection:
+            try:
+                record = await service.get_connection(org.org_id, connection)
+            except ConnectionNotFoundError:
+                record = await service.resolve_connection(
+                    org.org_id, connection, context_hints=context_hints
+                )
+        else:
+            record = await service.resolve_connection(
+                org.org_id, hint, context_hints=context_hints
+            )
+        connection_name = record["name"]
+    except (ConnectionAmbiguousError, ConnectionNotFoundError) as e:
+        raise ValueError(str(e)) from e
     result = await service.run_query(
-        org.org_id, connection, sql, max_rows=_arg_limit(args, default=50, cap=200), source="chat"
+        org.org_id, connection_name, sql, max_rows=_arg_limit(args, default=50, cap=200), source="chat"
     )
     return [result]
 
@@ -285,15 +404,20 @@ _OPENAI_TOOLS = [
             "name": "get_database_schema",
             "description": (
                 "Explore configured external databases. Without arguments, "
-                "lists available connections. With 'connection', lists that "
-                "database's tables (with curated descriptions and row "
-                "estimates). With 'connection' and 'table', describes the "
-                "table in depth: columns, types, keys, indexes."
+                "lists available connections. With 'connection' or 'hint', lists "
+                "that database's tables (with curated descriptions and row "
+                "estimates). With 'connection'/'hint' and 'table', describes the "
+                "table in depth: columns, types, keys, indexes. Use hint when the "
+                "user discussed a project but did not name the connection exactly."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "connection": {"type": "string", "description": "Connection name"},
+                    "connection": {"type": "string", "description": "Exact connection name"},
+                    "hint": {
+                        "type": "string",
+                        "description": "Project/repo topic to match a connection (e.g. context-forge)",
+                    },
                     "table": {"type": "string", "description": "Table to describe in depth"},
                     "schema": {"type": "string", "description": "Schema name (optional)"},
                 },
@@ -308,16 +432,21 @@ _OPENAI_TOOLS = [
             "description": (
                 "Run a single read-only SQL query (SELECT/SHOW/EXPLAIN) on a "
                 "configured database connection. Inspect the schema with "
-                "get_database_schema first and use exact table/column names."
+                "get_database_schema first and use exact table/column names. "
+                "Use hint when inferring the connection from conversation context."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "connection": {"type": "string", "description": "Connection name"},
+                    "connection": {"type": "string", "description": "Exact connection name"},
+                    "hint": {
+                        "type": "string",
+                        "description": "Project/repo topic to match a connection",
+                    },
                     "sql": {"type": "string", "description": "Read-only SQL statement"},
                     "limit": {"type": "integer", "description": "Max rows (default 50)"},
                 },
-                "required": ["connection", "sql"],
+                "required": ["sql"],
             },
         },
     },
@@ -443,18 +572,32 @@ class ChatResponse(BaseModel):
 def _trace_query(name: str, args: dict[str, Any]) -> str:
     """Human-readable summary of a tool invocation for the trace panel."""
     if name == "query_database":
-        return f"{args.get('connection', '?')}: {str(args.get('sql', '')).strip()}"
+        conn = args.get("connection") or args.get("hint") or "?"
+        return f"{conn}: {str(args.get('sql', '')).strip()}"
     if name == "get_database_schema":
-        parts = [str(args[k]) for k in ("connection", "table") if args.get(k)]
+        parts = [
+            str(args[k])
+            for k in ("connection", "hint", "table")
+            if args.get(k)
+        ]
         return " / ".join(parts) if parts else "(list connections)"
     return _arg_query(args)
 
 
-async def _run_tool(org: ActiveOrg, name: str, args: dict[str, Any]) -> ToolCallTrace:
+async def _run_tool(
+    org: ActiveOrg,
+    name: str,
+    args: dict[str, Any],
+    *,
+    context_hints: list[str] | None = None,
+) -> ToolCallTrace:
     handler, source = _TOOL_HANDLERS[name]
     query = _trace_query(name, args)
     try:
-        results = await handler(org, args)
+        if name in ("get_database_schema", "query_database"):
+            results = await handler(org, args, context_hints=context_hints)
+        else:
+            results = await handler(org, args)
         return ToolCallTrace(
             tool=name, source=source, query=query,
             result_count=len(results), results=results,
@@ -489,7 +632,9 @@ async def _chat_openai(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest) ->
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(api_key=llm["api_key"], base_url=llm.get("base_url"))
-    messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    context_hints = _extract_context_hints(req.messages)
+    system_prompt = await _build_system_prompt(org, req.messages)
+    messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
     for m in req.messages:
         messages.append({"role": m.role, "content": m.content})
 
@@ -536,7 +681,7 @@ async def _chat_openai(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest) ->
             if name not in _TOOL_HANDLERS:
                 messages.append({"role": "tool", "tool_call_id": tc.id, "content": '{"error": "unknown tool"}'})
                 continue
-            trace = await _run_tool(org, name, args)
+            trace = await _run_tool(org, name, args, context_hints=context_hints)
             traces.append(trace)
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": _trace_to_tool_content(trace)})
     else:
@@ -572,6 +717,8 @@ async def _chat_anthropic(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest)
         )
 
     client = AsyncAnthropic(api_key=llm["api_key"])
+    context_hints = _extract_context_hints(req.messages)
+    system_prompt = await _build_system_prompt(org, req.messages)
     tools = [
         {
             "name": t["function"]["name"],
@@ -588,7 +735,7 @@ async def _chat_anthropic(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest)
         resp = await client.messages.create(
             model=llm["model"],
             max_tokens=1024,
-            system=SYSTEM_PROMPT,
+            system=system_prompt,
             tools=tools,
             messages=messages,
         )
@@ -606,7 +753,7 @@ async def _chat_anthropic(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest)
             if name not in _TOOL_HANDLERS:
                 tool_results.append({"type": "tool_result", "tool_use_id": tu.id, "content": '{"error": "unknown tool"}'})
                 continue
-            trace = await _run_tool(org, name, args)
+            trace = await _run_tool(org, name, args, context_hints=context_hints)
             traces.append(trace)
             tool_results.append({"type": "tool_result", "tool_use_id": tu.id, "content": _trace_to_tool_content(trace)})
         messages.append({"role": "user", "content": tool_results})
