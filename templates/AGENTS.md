@@ -26,6 +26,10 @@ Use these tools to navigate and search across indexed codebases:
 - **`repo_list()`** — List all indexed repos with their status.
 - **`repo_index(repo?)`** — Trigger re-indexing (after major changes).
 - **`repo_relationships(repo?)`** — Discover semantically related repositories.
+- **`repo_references(symbol, repo?, limit?)`** — Find all references to a function, class, or variable across indexed repos. Returns each usage with file path, line numbers, and content.
+- **`code_explain(repo, file_path, start_line?, end_line?)`** — Get an AI explanation of what a piece of code does. Reads code from the repo and sends it to the configured LLM.
+- **`repo_annotate(repo, file_path, note, start_line?, end_line?)`** — Add a persistent note/annotation on a file or code chunk visible to the whole organization.
+- **`repo_annotations(repo, file_path?, limit?)`** — Read existing annotations on a repo's files.
 
 **When to use repo tools:**
 - Before modifying a module → `repo_search("authentication middleware")` to find related code

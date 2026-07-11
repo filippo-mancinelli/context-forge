@@ -100,6 +100,40 @@ async def list_gitlab_repos(
     return [_map_repo(project) for project in resp.json()]
 
 
+@router.get("/branches")
+async def list_gitlab_branches(
+    full_name: str,
+    authorization: str | None = Header(default=None),
+):
+    """List branches for a GitLab repository."""
+    await require_valid_token_or_raise(authorization)
+
+    settings = get_settings()
+    if not settings.gitlab_token:
+        raise HTTPException(status_code=400, detail="GitLab token not configured")
+
+    encoded = quote_plus(full_name)
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{_gitlab_base_url()}/projects/{encoded}/repository/branches",
+            headers=_gitlab_headers(settings.gitlab_token),
+            params={"per_page": 100},
+            timeout=30.0,
+        )
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=f"GitLab API error: {resp.text}")
+
+    branches = resp.json()
+    # GitLab sometimes returns a dict with an error key for missing projects
+    if isinstance(branches, dict):
+        raise HTTPException(status_code=404, detail=branches.get("message", "Project not found"))
+    return [
+        {"name": b["name"], "is_default": b.get("default", False)}
+        for b in branches
+    ]
+
+
 @router.get("/search")
 async def search_gitlab_repos(
     q: str,

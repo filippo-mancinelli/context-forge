@@ -331,7 +331,7 @@ export default function DataSources() {
             read-only query access.
           </div>
         ) : (
-          <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto">
+          <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto max-w-5xl">
             <Table>
               <Thead>
                 <Tr>

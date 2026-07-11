@@ -534,7 +534,7 @@ export default function Knowledge() {
           </div>
 
           {/* Desktop: table */}
-          <div style={{ border: '1px solid var(--border)' }} className="hidden md:block overflow-x-auto">
+          <div style={{ border: '1px solid var(--border)' }} className="hidden md:block overflow-x-auto max-w-5xl">
             <table className="w-full min-w-[640px]">
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border)' }} className="text-left">

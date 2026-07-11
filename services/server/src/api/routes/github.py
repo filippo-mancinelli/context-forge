@@ -133,6 +133,44 @@ async def add_github_repo(
     }
 
 
+@router.get("/branches")
+async def list_github_branches(
+    owner: str,
+    repo: str,
+    authorization: str | None = Header(default=None),
+):
+    """List branches for a GitHub repository."""
+    await require_valid_token_or_raise(authorization)
+
+    settings = get_settings()
+    if not settings.github_token:
+        raise HTTPException(status_code=400, detail="GitHub token not configured")
+
+    headers = {
+        "Authorization": f"token {settings.github_token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"https://api.github.com/repos/{owner}/{repo}/branches",
+            headers=headers,
+            params={"per_page": 100},
+            timeout=30.0,
+        )
+        if resp.status_code != 200:
+            raise HTTPException(
+                status_code=resp.status_code,
+                detail=f"GitHub API error: {resp.text}",
+            )
+
+        branches = resp.json()
+        return [
+            {"name": b["name"], "is_default": False}
+            for b in branches
+        ]
+
+
 @router.get("/search")
 async def search_github_repos(
     q: str,

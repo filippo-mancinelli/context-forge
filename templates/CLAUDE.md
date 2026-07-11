@@ -29,7 +29,11 @@ memory_add("Implemented X using Y approach because Z")
 |------|-------------|
 | `repo_search(query)` | Finding where patterns/features are implemented |
 | `repo_get_file(repo, path)` | Reading specific files |
+| `repo_references(symbol)` | Find all references to a function/class/variable |
 | `repo_relationships()` | Understanding cross-repo dependencies |
+| `code_explain(repo, file)` | Get an LLM explanation of what code does |
+| `repo_annotate(repo, file, note)` | Leave persistent notes on files/chunks |
+| `repo_annotations(repo)` | Read annotations left by the team |
 
 ### Async Jobs (for slow services)
 | Tool | When to use |
