@@ -92,6 +92,14 @@ class Settings(BaseSettings):
     # (any non-empty string; it is hashed to derive the actual Fernet key).
     # Empty means credentials are stored obfuscated but NOT encrypted.
     encryption_key: str = ""
+    # Telegram quick-capture channel: bot token from BotFather, secret token
+    # verified against the X-Telegram-Bot-Api-Secret-Token header (set via
+    # setWebhook), and a comma-separated allowlist of chat IDs permitted to
+    # feed the capture pipeline. Empty token disables the channel.
+    telegram_bot_token: str = ""
+    telegram_webhook_secret: str = ""
+    telegram_allowed_chat_ids: str = ""
+    telegram_org_id: int = 0
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

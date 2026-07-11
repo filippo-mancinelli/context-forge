@@ -26,6 +26,7 @@ from .routes import webhooks as webhooks_routes
 from .routes import datasources as datasources_routes
 from .routes import contracts as contracts_routes
 from .routes import ci as ci_routes
+from .routes import telegram as telegram_routes
 
 api = FastAPI(
     title="context-forge API",
@@ -89,6 +90,7 @@ api.include_router(webhooks_routes.router, prefix="/api")
 api.include_router(datasources_routes.router, prefix="/api")
 api.include_router(contracts_routes.router, prefix="/api")
 api.include_router(ci_routes.router, prefix="/api")
+api.include_router(telegram_routes.router, prefix="/api")
 
 
 @api.middleware("http")
@@ -109,6 +111,7 @@ async def auth_guard(request, call_next):
         "/api/invitations",  # public invite preview/accept
         "/api/webhooks",     # external git hooks; authenticated by shared secret
         "/api/chat/shared",  # public chat snapshots; authorized by share token
+        "/api/telegram",     # Telegram webhook; authenticated by Telegram's own secret token
     )
     if path.startswith(open_paths):
         return await call_next(request)
