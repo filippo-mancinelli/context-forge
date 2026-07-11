@@ -1005,6 +1005,8 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ url }),
       }),
+    getWebhookInfo: () =>
+      request<{ status: string; url: string; has_custom_certificate: boolean; pending_update_count: number; last_error_date?: number; last_error_message?: string }>('/api/telegram/webhook-info'),
   },
   health: () => request<{ status: string }>('/api/health'),
 }

@@ -129,6 +129,22 @@ def _extract_message(update: dict[str, Any]) -> Optional[dict[str, Any]]:
     return update.get("message") or update.get("edited_message")
 
 
+@router.get("/webhook-info")
+async def get_webhook_info(org: ActiveOrg = Depends(require_role("admin"))):
+    """Return the current webhook URL registered with Telegram, if any."""
+    settings = get_settings()
+    if not settings.telegram_bot_token:
+        raise HTTPException(status_code=400, detail="Bot token not configured")
+    try:
+        result = await client.get_webhook_info(settings.telegram_bot_token)
+    except client.TelegramAPIError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    if not result.get("ok"):
+        raise HTTPException(status_code=502, detail=f"Telegram getWebhookInfo failed: {result}")
+    info = result.get("result", {})
+    return {"status": "ok", "url": info.get("url", ""), "has_custom_certificate": info.get("has_custom_certificate", False), "pending_update_count": info.get("pending_update_count", 0), "last_error_date": info.get("last_error_date"), "last_error_message": info.get("last_error_message")}
+
+
 @router.post("/register-webhook")
 async def register_webhook(
     req: RegisterWebhookRequest, org: ActiveOrg = Depends(require_role("admin"))
@@ -163,12 +179,12 @@ async def telegram_webhook(
     """Receive a Telegram update, verify it, and dispatch capture in the background."""
     settings = get_settings()
     secret = (settings.telegram_webhook_secret or "").strip()
-    if not secret or not settings.telegram_bot_token or not settings.telegram_org_id:
+    if not secret or not settings.telegram_bot_token:
         raise HTTPException(
             status_code=503,
             detail=(
-                "Telegram channel is disabled (set TELEGRAM_BOT_TOKEN, "
-                "TELEGRAM_WEBHOOK_SECRET, and TELEGRAM_ORG_ID)"
+                "Telegram channel is disabled (set TELEGRAM_BOT_TOKEN "
+                "and TELEGRAM_WEBHOOK_SECRET)"
             ),
         )
 
