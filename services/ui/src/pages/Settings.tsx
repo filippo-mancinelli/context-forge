@@ -3,7 +3,7 @@ import { AlertCircle, Check, Clipboard, Plus, Save, Trash2, X } from 'lucide-rea
 import { api, type Repo, type MCPApiKey } from '../lib/api'
 import { Button, Input, Textarea, Select, Tabs, TabsList, TabsTrigger, TabsContent, Badge, Dialog, DialogFooter, useConfirm, useToast } from '../components/ui'
 
-type Tab = 'access' | 'models' | 'runtime' | 'mcp_keys'
+type Tab = 'access' | 'models' | 'runtime' | 'mcp_keys' | 'channels'
 
 interface SettingsData {
   forge_config: {
@@ -31,6 +31,10 @@ interface SettingsData {
     llm_model?: string
     github_token?: string
     gitlab_token?: string
+    telegram_bot_token?: string
+    telegram_webhook_secret?: string
+    telegram_allowed_chat_ids?: string
+    telegram_org_id?: number
   }
   // Global model/provider settings are shared and only editable by org admins.
   settings_overrides_editable?: boolean
@@ -120,6 +124,97 @@ function AccessTab({
         <div className="space-y-3">
           <SecretField label="GitHub token" value={settings.github_token} onChange={v => onChange('github_token', v)} placeholder="ghp_..." hint="Needed for private repos or high-volume API use." />
           <SecretField label="GitLab token" value={settings.gitlab_token} onChange={v => onChange('gitlab_token', v)} placeholder="glpat-..." />
+        </div>
+      </section>
+    </div>
+    </fieldset>
+  )
+}
+
+function ChannelsTab({
+  settings,
+  onChange,
+  editable = true,
+  onSaveSettings,
+}: {
+  settings: SettingsData['settings_overrides']
+  onChange: (key: keyof SettingsData['settings_overrides'], value: string | number) => void
+  editable?: boolean
+  onSaveSettings: () => Promise<void>
+}) {
+  const toast = useToast()
+  const [webhookUrl, setWebhookUrl] = useState('')
+  const [registering, setRegistering] = useState(false)
+
+  const handleRegister = async () => {
+    if (!webhookUrl.trim()) {
+      toast.error('Enter the public webhook URL first')
+      return
+    }
+    setRegistering(true)
+    try {
+      // Persist bot token/secret before asking Telegram to call back that URL.
+      await onSaveSettings()
+      await api.telegram.registerWebhook(webhookUrl.trim())
+      toast.success('Telegram webhook registered')
+    } catch (e) {
+      toast.error(String(e))
+    } finally {
+      setRegistering(false)
+    }
+  }
+
+  return (
+    <fieldset disabled={!editable} className="contents">
+    {!editable && <GlobalSettingsNotice />}
+    <div className="grid gap-6 lg:grid-cols-2">
+      <section>
+        <h3 className="text-sm font-semibold mb-3">Telegram quick-capture</h3>
+        <div className="space-y-3">
+          <SecretField
+            label="Bot token"
+            value={settings.telegram_bot_token}
+            onChange={v => onChange('telegram_bot_token', v)}
+            placeholder="123456789:AA..."
+            hint="From @BotFather on Telegram."
+          />
+          <SecretField
+            label="Webhook secret"
+            value={settings.telegram_webhook_secret}
+            onChange={v => onChange('telegram_webhook_secret', v)}
+            placeholder="any random string"
+            hint="Verifies incoming requests really come from Telegram."
+          />
+          <Field label="Allowed chat IDs" hint="Comma-separated. Only these chats can feed the capture pipeline.">
+            <Input
+              value={settings.telegram_allowed_chat_ids || ''}
+              onChange={e => onChange('telegram_allowed_chat_ids', e.target.value)}
+              placeholder="123456789, 987654321"
+            />
+          </Field>
+          <Field label="Org ID" hint="The organization that captured messages are saved under.">
+            <Input
+              type="number"
+              value={settings.telegram_org_id ?? ''}
+              onChange={e => onChange('telegram_org_id', e.target.value === '' ? 0 : Number(e.target.value))}
+              placeholder="1"
+            />
+          </Field>
+        </div>
+      </section>
+      <section>
+        <h3 className="text-sm font-semibold mb-3">Register webhook</h3>
+        <div className="space-y-3">
+          <Field label="Public URL" hint="e.g. https://your-domain.com/api/telegram/webhook — saves the fields above first.">
+            <Input
+              value={webhookUrl}
+              onChange={e => setWebhookUrl(e.target.value)}
+              placeholder="https://your-domain.com/api/telegram/webhook"
+            />
+          </Field>
+          <Button variant="secondary" onClick={handleRegister} loading={registering} disabled={registering}>
+            Register webhook
+          </Button>
         </div>
       </section>
     </div>
@@ -625,6 +720,7 @@ export default function Settings() {
             <TabsTrigger value="models">Models</TabsTrigger>
             <TabsTrigger value="runtime">Runtime</TabsTrigger>
             <TabsTrigger value="mcp_keys">MCP keys</TabsTrigger>
+            <TabsTrigger value="channels">Channels</TabsTrigger>
           </TabsList>
 
           <TabsContent value="access">
@@ -638,6 +734,9 @@ export default function Settings() {
           </TabsContent>
           <TabsContent value="mcp_keys">
             <McpKeysTab />
+          </TabsContent>
+          <TabsContent value="channels">
+            <ChannelsTab settings={data.settings_overrides} onChange={updateOverride} editable={overridesEditable} onSaveSettings={handleSave} />
           </TabsContent>
         </Tabs>
       </div>

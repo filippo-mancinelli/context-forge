@@ -999,5 +999,12 @@ export const api = {
       }),
     revoke: (keyId: number) => request<{ status: string }>(`/api/mcp/keys/${keyId}`, { method: 'DELETE' }),
   },
+  telegram: {
+    registerWebhook: (url: string) =>
+      request<{ status: string; result: Record<string, unknown> }>('/api/telegram/register-webhook', {
+        method: 'POST',
+        body: JSON.stringify({ url }),
+      }),
+  },
   health: () => request<{ status: string }>('/api/health'),
 }
