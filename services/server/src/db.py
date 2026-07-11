@@ -458,6 +458,25 @@ CREATE INDEX IF NOT EXISTS web_chunks_page_idx ON web_chunks (page_id);
 ALTER TABLE web_chunks ADD COLUMN IF NOT EXISTS
     content_tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
 CREATE INDEX IF NOT EXISTS web_chunks_tsv_idx ON web_chunks USING GIN (content_tsv);
+
+-- ===== Chunk annotations: persistent notes on code chunks =====
+-- Organization members can annotate specific files or line ranges with notes
+-- (design decisions, tech debt, review comments). Persists across re-indexing.
+CREATE TABLE IF NOT EXISTS chunk_annotations (
+    id            BIGSERIAL PRIMARY KEY,
+    org_id        BIGINT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    repo_name     TEXT NOT NULL,
+    file_path     TEXT NOT NULL,
+    start_line    INTEGER,
+    end_line      INTEGER,
+    note          TEXT NOT NULL,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS chunk_annotations_org_repo_idx
+    ON chunk_annotations (org_id, repo_name);
+CREATE INDEX IF NOT EXISTS chunk_annotations_file_idx
+    ON chunk_annotations (org_id, repo_name, file_path);
 """
 
 

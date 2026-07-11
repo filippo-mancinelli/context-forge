@@ -391,26 +391,74 @@ function RepoDialog({
 
 function AddBranchDialog({
   repo,
+  existingRepos,
   onClose,
   onSaved,
 }: {
   repo: Repo | null
+  existingRepos: Repo[]
   onClose: () => void
   onSaved: () => void
 }) {
   const [branch, setBranch] = useState('')
+  const [branches, setBranches] = useState<{ name: string; is_default: boolean }[]>([])
+  const [loadingBranches, setLoadingBranches] = useState(false)
+  const [branchSearch, setBranchSearch] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const toast = useToast()
 
+  const baseName = repo ? repo.name.split('@')[0] : ''
+
+  // Fetch branches from the provider when dialog opens
   useEffect(() => {
-    if (repo) {
-      setBranch('')
-      setError(null)
+    if (!repo) return
+    setBranch('')
+    setBranchSearch('')
+    setError(null)
+    setBranches([])
+
+    setLoadingBranches(true)
+    const fetchBranches = async () => {
+      try {
+        let data: { name: string; is_default: boolean }[] = []
+        if (repo.type === 'github') {
+          const match = repo.url?.match(/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/)
+          if (match) {
+            data = await api.github.listBranches(match[1], match[2])
+          }
+        } else if (repo.type === 'gitlab') {
+          // Extract full path from URL: gitlab.com/owner/repo or self-hosted
+          const match = repo.url?.match(/(?:gitlab\.[^/]+\/|:\d+\/)?(.+?)(?:\.git)?$/)
+          if (match) {
+            data = await api.gitlab.listBranches(match[1])
+          }
+        }
+        // Mark the repo's current/default branch
+        const defaultBranch = repo.branch || 'main'
+        setBranches(data.map(b => ({ ...b, is_default: b.name === defaultBranch })))
+      } catch (e) {
+        setError('Failed to load branches: ' + String(e))
+      } finally {
+        setLoadingBranches(false)
+      }
     }
+    fetchBranches()
   }, [repo])
 
-  const baseName = repo ? repo.name.split('@')[0] : ''
+  // Filter branches client-side for quick search
+  const filteredBranches = useMemo(() => {
+    const q = branchSearch.toLowerCase().trim()
+    if (!q) return branches
+    return branches.filter(b => b.name.toLowerCase().includes(q))
+  }, [branches, branchSearch])
+
+  // Exclude branches already indexed (named baseName@branch)
+  const alreadyIndexed = useMemo(
+    () => new Set(existingRepos.filter(r => r.name.startsWith(baseName + '@')).map(r => r.branch)),
+    [existingRepos, baseName]
+  )
+
   const newName = branch ? `${baseName}@${branch}` : ''
 
   const submit = async () => {
@@ -445,13 +493,45 @@ function AddBranchDialog({
     >
       <div className="space-y-3">
         {error && <p className="text-xs text-danger break-words">{error}</p>}
-        <Input
-          label="Branch"
-          value={branch}
-          onChange={e => setBranch(e.target.value)}
-          placeholder="develop"
-        />
-        {newName && (
+
+        {loadingBranches ? (
+          <p className="text-sm text-muted py-2">Loading branches...</p>
+        ) : branches.length === 0 && !error ? (
+          <>
+            <p className="text-xs text-muted">Could not fetch branches. Enter manually:</p>
+            <Input
+              label="Branch"
+              value={branch}
+              onChange={e => setBranch(e.target.value)}
+              placeholder="develop"
+            />
+          </>
+        ) : (
+          <>
+            {branches.length > 15 && (
+              <Input
+                value={branchSearch}
+                onChange={e => setBranchSearch(e.target.value)}
+                placeholder="Filter branches..."
+              />
+            )}
+            <Select
+              label="Branch"
+              value={branch}
+              onValueChange={setBranch}
+              options={filteredBranches.map(b => ({
+                value: b.name,
+                label: b.is_default
+                  ? `${b.name} (default)`
+                  : alreadyIndexed.has(b.name)
+                    ? `${b.name} (already indexed)`
+                    : b.name,
+              }))}
+            />
+          </>
+        )}
+
+        {newName && branch && (
           <p className="text-xs text-muted">
             Will be indexed as <code className="font-mono text-text">{newName}</code>.
           </p>
@@ -708,15 +788,15 @@ export default function Repos() {
           </div>
 
           {/* Desktop: full table */}
-          <div style={{ border: '1px solid var(--border)' }} className="hidden md:block overflow-x-auto">
-            <table className="w-full table-fixed min-w-[600px]">
+          <div style={{ border: '1px solid var(--border)' }} className="hidden md:block overflow-x-auto max-w-5xl">
+            <table className="w-full table-fixed min-w-[520px]">
               <colgroup>
-                <col className="w-[40%]" />
+                <col className="w-[36%]" />
+                <col className="w-[12%]" />
                 <col className="w-[10%]" />
                 <col className="w-[10%]" />
-                <col className="w-[10%]" />
-                <col className="w-[15%]" />
-                <col className="w-[15%]" />
+                <col className="w-[16%]" />
+                <col className="w-[16%]" />
               </colgroup>
               <thead>
                 <tr style={{ borderBottom: '2px solid var(--border)' }}>
@@ -841,6 +921,7 @@ export default function Repos() {
       />
       <AddBranchDialog
         repo={branchRepo}
+        existingRepos={repos}
         onClose={() => setBranchRepo(null)}
         onSaved={load}
       />

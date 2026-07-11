@@ -719,6 +719,8 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ full_name: fullName, branch }),
       }),
+    listBranches: (owner: string, repo: string) =>
+      request<{ name: string; is_default: boolean }[]>(`/api/github/branches?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`),
   },
   gitlab: {
     listRepos: () => request<GitLabRepo[]>('/api/gitlab/repos'),
@@ -729,6 +731,8 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ full_name: fullName, branch }),
       }),
+    listBranches: (fullName: string) =>
+      request<{ name: string; is_default: boolean }[]>(`/api/gitlab/branches?full_name=${encodeURIComponent(fullName)}`),
   },
   memory: {
     create: (req: MemoryCreateRequest) =>

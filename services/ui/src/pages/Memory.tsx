@@ -264,7 +264,7 @@ export default function Memory() {
             {isSearchMode ? 'No memories match your query.' : 'No memories stored yet.'}
           </p>
         ) : (
-          <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto">
+          <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto max-w-5xl">
             <table className="w-full">
               <tbody>
                 {memories.map(memory => (
