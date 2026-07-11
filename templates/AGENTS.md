@@ -49,6 +49,25 @@ status = job_status(job["job_id"])
 result = job_result(job["job_id"])
 ```
 
+## Data Sources (external databases)
+
+Use these tools to explore configured database connections and run read-only SQL:
+
+- **`db_list()`** — List all database connections (name, engine, database, description). **Always call this first** when you need a database but don't know the exact connection name.
+- **`db_schema(connection?, hint?, schema?)`** — Schema overview (tables, views, row estimates). Omit `connection` to list connections. Use `hint` when inferring from conversation (e.g. user discussed "context-forge" → `hint="context-forge"`).
+- **`db_describe(table, connection?, hint?, schema?)`** — Full table detail: columns, keys, indexes, curated descriptions.
+- **`db_query(sql, connection?, hint?)`** — Run a single read-only SELECT/SHOW/EXPLAIN query.
+
+**Workflow:**
+```
+db_list()                                    # see what's available
+db_schema(hint="context-forge")              # infer connection from project name
+db_describe("users", hint="context-forge")     # inspect a table
+db_query("SELECT count(*) FROM users", hint="context-forge")
+```
+
+**Important:** Connection names often match project/repo names. Never pass placeholders like `__list__` — use `db_list()` or omit `connection`.
+
 ## Best Practices
 
 1. **Always search memory first** when starting work on a project you've touched before.

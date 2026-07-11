@@ -14,6 +14,7 @@ import decimal
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from typing import Any, Optional
@@ -39,6 +40,99 @@ _CONN_FIELDS = (
 
 class ConnectionNotFoundError(Exception):
     pass
+
+
+class ConnectionAmbiguousError(Exception):
+    pass
+
+
+_LIST_SENTINELS = frozenset({"__list__", "__all__", "list", "all", "*"})
+
+
+def is_list_sentinel(ref: str | None) -> bool:
+    """True when an agent passed a placeholder instead of a real connection name."""
+    if ref is None:
+        return False
+    return not str(ref).strip() or str(ref).strip().lower() in _LIST_SENTINELS
+
+
+def _normalize_hint(value: str) -> str:
+    return re.sub(r"[\s_\-]+", " ", str(value).lower()).strip()
+
+
+def _score_connection(conn: dict[str, Any], hint: str) -> float:
+    hint_norm = _normalize_hint(hint)
+    if not hint_norm:
+        return 0.0
+    best = 0.0
+    for field in ("name", "description", "database_name"):
+        val = conn.get(field) or ""
+        val_norm = _normalize_hint(val)
+        if not val_norm:
+            continue
+        if hint_norm == val_norm:
+            return 100.0
+        if hint_norm in val_norm or val_norm in hint_norm:
+            best = max(best, 85.0)
+        hint_tokens = set(hint_norm.split())
+        val_tokens = set(val_norm.split())
+        if hint_tokens and val_tokens:
+            overlap = len(hint_tokens & val_tokens) / len(hint_tokens | val_tokens)
+            best = max(best, overlap * 75.0)
+    return best
+
+
+def _connection_not_found_message(ref: str | int, connections: list[dict[str, Any]]) -> str:
+    names = [c["name"] for c in connections]
+    if names:
+        return f"Database connection '{ref}' not found. Available: {', '.join(names)}"
+    return f"Database connection '{ref}' not found. No connections are configured."
+
+
+async def resolve_connection(
+    org_id: int,
+    hint: str | None = None,
+    *,
+    context_hints: list[str] | None = None,
+    min_score: float = 35.0,
+) -> dict[str, Any]:
+    """Pick the best-matching connection for a hint and optional conversation context."""
+    connections = await list_connections(org_id)
+    if not connections:
+        raise ConnectionNotFoundError("No database connections configured")
+
+    hints = [h.strip() for h in ([hint] if hint else []) + (context_hints or []) if h and h.strip()]
+    if not hints:
+        raise ConnectionNotFoundError(
+            "No connection specified. Call db_list() or get_database_schema with no arguments."
+        )
+
+    for h in hints:
+        if is_list_sentinel(h):
+            continue
+        try:
+            return await get_connection(org_id, h)
+        except ConnectionNotFoundError:
+            pass
+
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for conn in connections:
+        score = max((_score_connection(conn, h) for h in hints), default=0.0)
+        if score >= min_score:
+            scored.append((score, conn))
+
+    if not scored:
+        primary = hints[0]
+        raise ConnectionNotFoundError(_connection_not_found_message(primary, connections))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    if len(scored) > 1 and scored[0][0] - scored[1][0] < 12:
+        names = [c["name"] for _, c in scored[:3]]
+        raise ConnectionAmbiguousError(
+            f"Multiple database connections match ({', '.join(names)}). "
+            "Specify the exact connection name."
+        )
+    return scored[0][1]
 
 
 # --------------------------------------------------------------------------- #
@@ -100,7 +194,8 @@ async def get_connection(org_id: int, ref: int | str, include_secret: bool = Fal
                 ref,
             )
     if row is None:
-        raise ConnectionNotFoundError(f"Database connection '{ref}' not found")
+        connections = await list_connections(org_id)
+        raise ConnectionNotFoundError(_connection_not_found_message(ref, connections))
     return _record_to_dict(row, include_secret=include_secret)
 
 

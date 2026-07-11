@@ -38,6 +38,16 @@ memory_add("Implemented X using Y approach because Z")
 | `job_status(job_id)` | Polling for completion |
 | `job_result(job_id)` | Getting the result |
 
+### Data Sources (external databases)
+| Tool | When to use |
+|------|-------------|
+| `db_list()` | First step — see configured connections |
+| `db_schema(hint=...)` | Browse tables; use `hint` to match project name from conversation |
+| `db_describe(table, hint=...)` | Inspect columns, keys, indexes |
+| `db_query(sql, hint=...)` | Read-only SQL after inspecting schema |
+
+Connection names usually match project/repo names (e.g. `context-forge`). Call `db_list()` — never use placeholders like `__list__`.
+
 ## Memory Examples
 
 ```python
