@@ -167,6 +167,82 @@ async def search_repo_chunks(
 
 
 # --------------------------------------------------------------------------- #
+# Repository symbol search: exact-name lookup over parsed definitions
+# --------------------------------------------------------------------------- #
+# Populated by tree-sitter chunking (see indexer.py): a "symbol" chunk is a
+# top-level function/class/method/type definition whose name tree-sitter could
+# extract, stored as chunk_type + metadata->>'name'. Unlike the semantic search
+# above, this is a lexical name lookup — the right tool when the caller already
+# knows (or half-remembers) an identifier and wants its definition, not
+# something merely related in meaning. No embedding call needed.
+SYMBOL_CHUNK_TYPES = (
+    "function_definition", "class_definition", "decorated_definition",
+    "function_declaration", "class_declaration", "arrow_function", "method_definition",
+    "interface_declaration", "type_alias_declaration",
+    "method_declaration", "type_declaration",
+)
+
+_SYMBOL_SEARCH_SQL = """
+SELECT repo_name, file_path, chunk_type, metadata, content
+FROM repo_chunks
+WHERE org_id = $1
+  AND chunk_type = ANY($2::text[])
+  AND metadata->>'name' IS NOT NULL
+  AND metadata->>'name' ILIKE $3
+  AND ($4::text[] IS NULL OR repo_name = ANY($4))
+ORDER BY
+  (lower(metadata->>'name') = lower($5)) DESC,
+  (lower(metadata->>'name') LIKE lower($5) || '%') DESC,
+  length(metadata->>'name') ASC,
+  repo_name, file_path
+LIMIT $6
+"""
+
+
+def _symbol_preview(content: str, max_chars: int = 240) -> str:
+    """First non-blank line of a symbol's content (its signature), truncated."""
+    stripped = content.strip()
+    first_line = stripped.splitlines()[0] if stripped else ""
+    return first_line if len(first_line) <= max_chars else first_line[: max_chars - 1] + "…"
+
+
+async def search_repo_symbols(
+    org_id: int,
+    query: str,
+    repos: Optional[list[str]] = None,
+    symbol_types: Optional[list[str]] = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Look up function/class/method/type definitions by name.
+
+    A lexical name search, not semantic similarity: matches substrings of
+    ``query`` against parsed definition names, ranked exact match first, then
+    prefix match, then shortest name. Returns dicts with repo_name, file_path,
+    chunk_type, name, a one-line signature preview, and start_line (when the
+    parser recorded one).
+    """
+    types = list(symbol_types) if symbol_types else list(SYMBOL_CHUNK_TYPES)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            _SYMBOL_SEARCH_SQL, org_id, types, f"%{query}%", repos, query, limit
+        )
+
+    results = []
+    for r in rows:
+        meta = _parse_metadata(r["metadata"])
+        results.append({
+            "repo_name": r["repo_name"],
+            "file_path": r["file_path"],
+            "chunk_type": r["chunk_type"],
+            "name": meta.get("name"),
+            "start_line": meta.get("start_line"),
+            "signature": _symbol_preview(r["content"]),
+        })
+    return results
+
+
+# --------------------------------------------------------------------------- #
 # Web-page chunk search
 # --------------------------------------------------------------------------- #
 #   $1 embedding  $2 org_id  $3 candidate pool  $4 query text

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
   UploadCloud,
   FileText,
@@ -10,9 +10,10 @@ import {
   Download,
   Search as SearchIcon,
   AlertCircle,
+  PenLine,
 } from 'lucide-react'
 import { api, type KbDocument, type KbSearchResult } from '../lib/api'
-import { Button, Input, Badge, useConfirm, useToast } from '../components/ui'
+import { Button, Input, Badge, Dialog, DialogFooter, Textarea, useConfirm, useToast } from '../components/ui'
 
 const STATUS_VARIANT: Record<KbDocument['status'], 'success' | 'accent' | 'warning' | 'danger'> = {
   ready: 'success',
@@ -122,6 +123,85 @@ function DropZone({
         PDF, Word, Excel, PowerPoint, images (OCR), text & more — up to 100 MB each
       </p>
     </div>
+  )
+}
+
+function TextNoteDialog({
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onSaved: (title: string) => void
+}) {
+  const [title, setTitle] = useState('')
+  const [content, setContent] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (open) {
+      setTitle('')
+      setContent('')
+      setError(null)
+    }
+  }, [open])
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const trimmedContent = content.trim()
+    if (!trimmedContent) {
+      setError('Write some content before saving.')
+      return
+    }
+    setSaving(true)
+    setError(null)
+    try {
+      const trimmedTitle = title.trim() || 'Untitled note'
+      await api.kb.addText(trimmedTitle, trimmedContent)
+      onOpenChange(false)
+      onSaved(trimmedTitle)
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Write a note"
+      description="Add text directly to the knowledge base — no file needed. Stored and indexed like an uploaded document."
+      maxWidth="640px"
+    >
+      <form onSubmit={handleSubmit} className="space-y-3">
+        <Input
+          label="Title"
+          value={title}
+          onChange={e => setTitle(e.target.value)}
+          placeholder="Deployment runbook"
+        />
+        <Textarea
+          label="Content"
+          value={content}
+          onChange={e => setContent(e.target.value)}
+          rows={12}
+          placeholder="Write or paste the text you want your agents to be able to search..."
+        />
+        {error && <p style={{ color: 'var(--danger)' }} className="text-sm">{error}</p>}
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="primary" loading={saving} disabled={saving || !content.trim()}>
+            Save
+          </Button>
+        </DialogFooter>
+      </form>
+    </Dialog>
   )
 }
 
@@ -382,6 +462,7 @@ export default function Knowledge() {
   const [pageError, setPageError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [accept, setAccept] = useState('')
+  const [showTextDialog, setShowTextDialog] = useState(false)
 
   const load = useCallback(async () => {
     try {
@@ -510,7 +591,21 @@ export default function Knowledge() {
 
         <div className="mb-6">
           <DropZone onFiles={handleFiles} uploading={uploading} accept={accept} />
+          <div className="flex justify-center mt-2">
+            <Button variant="ghost" size="sm" onClick={() => setShowTextDialog(true)}>
+              <PenLine className="w-3.5 h-3.5" /> Or write text instead
+            </Button>
+          </div>
         </div>
+
+        <TextNoteDialog
+          open={showTextDialog}
+          onOpenChange={setShowTextDialog}
+          onSaved={(title) => {
+            setNotice(`"${title}" saved`)
+            void load()
+          }}
+        />
 
         <SearchPanel />
 

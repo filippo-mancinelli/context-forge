@@ -195,6 +195,39 @@ async def upload_documents(
     return {"status": "ok", "created": created, "rejected": rejected}
 
 
+class KbTextRequest(BaseModel):
+    title: str
+    content: str
+
+
+@router.post("/documents/text", status_code=201)
+async def add_text_document(
+    req: KbTextRequest,
+    background_tasks: BackgroundTasks,
+    org: ActiveOrg = Depends(require_role("member")),
+):
+    """Add a knowledge-base document from typed/pasted text instead of a file upload.
+
+    Stored and processed exactly like an uploaded ``.md`` file, so it goes
+    through the same extraction → chunk → embed pipeline.
+    """
+    content = req.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Content must not be empty")
+    data = content.encode("utf-8")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Content exceeds the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit",
+        )
+    title = req.title.strip() or "Untitled note"
+    filename = f"{title}.md"
+
+    record = await store.save_upload(org.org_id, filename, data)
+    background_tasks.add_task(store.process_document, record["id"])
+    return {"status": "ok", "created": record}
+
+
 @router.post("/documents/{doc_id}/reprocess")
 async def reprocess_document(
     doc_id: int,

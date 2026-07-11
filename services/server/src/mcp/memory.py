@@ -114,6 +114,7 @@ async def memory_add(
     content: str,
     metadata: Optional[dict[str, Any] | str] = None,
     user_id: Optional[str] = None,
+    infer: bool = False,
 ) -> dict:
     """Save a memory, fact, or note that should persist across sessions.
 
@@ -125,6 +126,10 @@ async def memory_add(
         metadata: Optional key-value metadata tags as a dict or JSON object string
             (e.g. {"project": "backend", "type": "decision"})
         user_id: User or agent identifier (defaults to the configured default)
+        infer: If True, runs LLM-based fact extraction that may split content into
+            several smaller atomic memories. Defaults to False, which stores content
+            verbatim as a single memory — use this when saving a block of instructions,
+            a golden-standard note, or anything that should stay intact.
 
     Returns:
         dict with the created memory id and content
@@ -133,7 +138,9 @@ async def memory_add(
     from .context import get_current_namespace
     uid = user_id or get_current_namespace() or get_forge_config().memory.user_id
     try:
-        result = _get_memory().add(content, user_id=uid, metadata=_normalize_metadata(metadata))
+        result = _get_memory().add(
+            content, user_id=uid, metadata=_normalize_metadata(metadata), infer=infer
+        )
         return {"status": "ok", "memory": result}
     except Exception as e:
         logger.error("memory_add failed: %s", e)
