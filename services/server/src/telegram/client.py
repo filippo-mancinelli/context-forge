@@ -56,3 +56,8 @@ async def download_file(file_path: str, bot_token: str) -> bytes:
 async def set_webhook(url: str, secret_token: str, bot_token: str) -> dict:
     """Register the webhook URL and secret token with Telegram."""
     return await _call("setWebhook", bot_token, {"url": url, "secret_token": secret_token})
+
+
+async def get_webhook_info(bot_token: str) -> dict:
+    """Return current webhook status from Telegram."""
+    return await _call("getWebhookInfo", bot_token, {})

@@ -146,6 +146,13 @@ function ChannelsTab({
   const [webhookUrl, setWebhookUrl] = useState('')
   const [registering, setRegistering] = useState(false)
 
+  // Auto-fill the webhook URL from Telegram on mount.
+  useEffect(() => {
+    api.telegram.getWebhookInfo().then(info => {
+      if (info.url) setWebhookUrl(info.url)
+    }).catch(() => { /* bot token not configured yet, ignore */ })
+  }, [])
+
   const handleRegister = async () => {
     if (!webhookUrl.trim()) {
       toast.error('Enter the public webhook URL first')
