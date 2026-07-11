@@ -39,7 +39,11 @@ SYSTEM_PROMPT = (
     "database's tables, or describe one table in depth (columns, keys, "
     "curated descriptions).\n"
     "- query_database: run a single read-only SQL query on a configured "
-    "database connection.\n\n"
+    "database connection.\n"
+    "- add_memory: save a memory, fact, or decision so it persists across "
+    "sessions. Use this when the user asks you to remember something.\n"
+    "- list_memories: list all stored memories for this organization.\n"
+    "- delete_memory: delete a memory by its ID.\n\n"
     "For any question that could benefit from stored context, call the "
     "relevant tool(s) before answering — prefer searching over guessing.\n\n"
     "Survey broadly, then answer: a project or topic usually spans several "
@@ -312,6 +316,43 @@ async def _query_database(
     return [result]
 
 
+async def _add_memory(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
+    from ...mcp.memory import _get_memory
+
+    content = str(args.get("content", "")).strip()
+    if not content:
+        raise ValueError("'content' is required")
+    mem = _get_memory()
+    result = mem.add(content, user_id=org.namespace)
+    return [{"id": result.get("id") if isinstance(result, dict) else str(result), "status": "ok"}]
+
+
+async def _list_memories(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
+    from ...mcp.memory import _get_memory
+
+    mem = _get_memory()
+    results = mem.get_all(user_id=org.namespace)
+    memories = results.get("results", results) if isinstance(results, dict) else results
+    out: list[dict[str, Any]] = []
+    for m in memories or []:
+        if isinstance(m, dict):
+            out.append({"id": m.get("id"), "memory": m.get("memory") or m.get("content"), "created_at": m.get("created_at")})
+        else:
+            out.append({"memory": str(m)})
+    return out
+
+
+async def _delete_memory(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
+    from ...mcp.memory import _get_memory
+
+    memory_id = str(args.get("memory_id", "")).strip()
+    if not memory_id:
+        raise ValueError("'memory_id' is required")
+    mem = _get_memory()
+    mem.delete(memory_id)
+    return [{"status": "ok", "deleted": memory_id}]
+
+
 # Map tool name -> (handler, human label). Handlers take (org, tool_args).
 _TOOL_HANDLERS = {
     "search_repositories": (_search_repositories, "repositories"),
@@ -320,6 +361,9 @@ _TOOL_HANDLERS = {
     "search_web": (_search_web, "web"),
     "get_database_schema": (_get_database_schema, "databases"),
     "query_database": (_query_database, "databases"),
+    "add_memory": (_add_memory, "memory"),
+    "list_memories": (_list_memories, "memory"),
+    "delete_memory": (_delete_memory, "memory"),
 }
 
 # OpenAI-style tool schemas (also reshaped for Anthropic below).
@@ -447,6 +491,53 @@ _OPENAI_TOOLS = [
                     "limit": {"type": "integer", "description": "Max rows (default 50)"},
                 },
                 "required": ["sql"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_memory",
+            "description": (
+                "Save a memory, fact, decision, or note so it persists across "
+                "sessions. Use this when the user explicitly asks you to remember "
+                "something, or to store important decisions and context."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "The text to remember (fact, decision, note, etc.)"},
+                },
+                "required": ["content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_memories",
+            "description": (
+                "List all memories stored for this organization. Useful when "
+                "the user asks what you remember or what's been saved."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_memory",
+            "description": "Delete a memory by its ID.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "memory_id": {"type": "string", "description": "The ID of the memory to delete"},
+                },
+                "required": ["memory_id"],
             },
         },
     },
@@ -581,6 +672,13 @@ def _trace_query(name: str, args: dict[str, Any]) -> str:
             if args.get(k)
         ]
         return " / ".join(parts) if parts else "(list connections)"
+    if name == "add_memory":
+        content = str(args.get("content", "")).strip()
+        return content[:100] + ("…" if len(content) > 100 else "")
+    if name == "delete_memory":
+        return f"delete {args.get('memory_id', '?')}"
+    if name == "list_memories":
+        return "(list all)"
     return _arg_query(args)
 
 
