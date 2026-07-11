@@ -8,7 +8,13 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     # MCP server
-    "fastmcp>=2.0.0",
+    # >=3.2.3 required: older releases' StreamableHTTP transport enabled DNS-rebinding
+    # protection by default (Host header allowlist restricted to localhost/127.0.0.1),
+    # which rejects every request coming through a reverse proxy with 421 Misdirected
+    # Request. 3.2.3+ disables that protection by default (mcp SDK's documented
+    # backwards-compat behavior), matching how this server is actually deployed
+    # (behind Traefik, terminating at contextapi.edia.cloud).
+    "fastmcp>=3.2.3,<4.0.0",
 
     # REST API
     "fastapi>=0.115.0",
