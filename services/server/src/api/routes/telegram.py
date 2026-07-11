@@ -23,7 +23,8 @@ import hmac
 import logging
 from typing import Any, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
+from pydantic import BaseModel
 
 from ...config import get_settings
 from ...db import get_pool
@@ -31,10 +32,15 @@ from ...kb import store
 from ...kb.extract import is_supported
 from ...telegram import client
 from ...telegram.capture_agent import run_capture
+from ..deps import ActiveOrg, require_role
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/telegram", tags=["telegram"])
+
+
+class RegisterWebhookRequest(BaseModel):
+    url: str
 
 
 def _allowed_chat_ids(raw: str) -> set[int]:
@@ -121,6 +127,31 @@ async def _handle_attachment(
 
 def _extract_message(update: dict[str, Any]) -> Optional[dict[str, Any]]:
     return update.get("message") or update.get("edited_message")
+
+
+@router.post("/register-webhook")
+async def register_webhook(
+    req: RegisterWebhookRequest, org: ActiveOrg = Depends(require_role("admin"))
+):
+    """Register the given URL as the Telegram webhook, using the configured bot token/secret.
+
+    Admin-only: this calls out to Telegram with the bot's credentials, equivalent to running
+    ``scripts/setup_telegram_webhook.py`` by hand. Requires TELEGRAM_BOT_TOKEN and
+    TELEGRAM_WEBHOOK_SECRET to already be saved (via ``PUT /settings``) before calling.
+    """
+    settings = get_settings()
+    if not settings.telegram_bot_token or not settings.telegram_webhook_secret:
+        raise HTTPException(
+            status_code=400,
+            detail="Save a bot token and webhook secret first, then register the webhook.",
+        )
+    try:
+        result = await client.set_webhook(req.url, settings.telegram_webhook_secret, settings.telegram_bot_token)
+    except client.TelegramAPIError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    if not result.get("ok"):
+        raise HTTPException(status_code=502, detail=f"Telegram setWebhook failed: {result}")
+    return {"status": "ok", "result": result}
 
 
 @router.post("/webhook")

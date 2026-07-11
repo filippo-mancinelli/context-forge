@@ -111,7 +111,9 @@ async def auth_guard(request, call_next):
         "/api/invitations",  # public invite preview/accept
         "/api/webhooks",     # external git hooks; authenticated by shared secret
         "/api/chat/shared",  # public chat snapshots; authorized by share token
-        "/api/telegram",     # Telegram webhook; authenticated by Telegram's own secret token
+        "/api/telegram/webhook",  # Telegram webhook only; authenticated by Telegram's own secret token.
+                                  # Other /api/telegram/* routes (e.g. register-webhook) stay behind
+                                  # the normal session-auth guard below.
     )
     if path.startswith(open_paths):
         return await call_next(request)

@@ -121,6 +121,10 @@ RUNTIME_OVERRIDE_FIELDS = (
     "llm_model",
     "github_token",
     "gitlab_token",
+    "telegram_bot_token",
+    "telegram_webhook_secret",
+    "telegram_allowed_chat_ids",
+    "telegram_org_id",
 )
 DEFAULT_RUNTIME_OVERRIDE_VALUES = {
     "openai_api_key": "",
@@ -135,6 +139,10 @@ DEFAULT_RUNTIME_OVERRIDE_VALUES = {
     "llm_model": "gpt-4o-mini",
     "github_token": "",
     "gitlab_token": "",
+    "telegram_bot_token": "",
+    "telegram_webhook_secret": "",
+    "telegram_allowed_chat_ids": "",
+    "telegram_org_id": 0,
 }
 
 
