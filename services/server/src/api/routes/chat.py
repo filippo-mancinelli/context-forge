@@ -24,8 +24,23 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-# Cap the agent loop so a misbehaving model can't spin forever.
+# Cap the agent loop so a misbehaving model can't spin forever. Also doubles as
+# the budget for auto-continuing a response that got cut off by max_tokens (see
+# CONTINUE_NUDGE below) — a few rounds is enough for either case.
 MAX_TOOL_ITERATIONS = 6
+
+# Anthropic requires an explicit max_tokens per request. The previous values
+# (1024 non-streaming, 2048 streaming) were low enough that a normal answer
+# with code blocks/tables/citations would get cut off mid-markdown — breaking
+# rendering — and, since nothing checked stop_reason, the turn silently ended
+# instead of continuing, leaving the user to type "continue" manually. All
+# current Claude models support 8192 output tokens.
+ANTHROPIC_MAX_TOKENS = 8192
+
+# Appended as a synthetic user turn when a response was cut off by the token
+# limit (not a real stop) so the model keeps generating instead of the turn
+# ending prematurely.
+CONTINUE_NUDGE = "Continue exactly where you left off. Do not repeat any earlier text."
 
 SYSTEM_PROMPT = (
     "You are the context-forge test agent. You help a developer verify that "
@@ -752,7 +767,13 @@ async def _chat_openai(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest) ->
         msg = choice.message
         tool_calls = msg.tool_calls or []
         if not tool_calls:
-            reply = msg.content or ""
+            if choice.finish_reason == "length":
+                logger.warning("chat: response truncated by max_tokens, auto-continuing")
+                messages.append({"role": "assistant", "content": msg.content or ""})
+                messages.append({"role": "user", "content": CONTINUE_NUDGE})
+                reply += (msg.content or "")
+                continue
+            reply += (msg.content or "")
             break
 
         # Record the assistant turn (with its tool calls) before answering them.
@@ -832,7 +853,7 @@ async def _chat_anthropic(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest)
     for _ in range(MAX_TOOL_ITERATIONS):
         resp = await client.messages.create(
             model=llm["model"],
-            max_tokens=1024,
+            max_tokens=ANTHROPIC_MAX_TOKENS,
             system=system_prompt,
             tools=tools,
             messages=messages,
@@ -840,7 +861,12 @@ async def _chat_anthropic(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest)
         tool_uses = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
         text_parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
         if not tool_uses:
-            reply = "".join(text_parts)
+            reply += "".join(text_parts)
+            if resp.stop_reason == "max_tokens":
+                logger.warning("chat: response truncated by max_tokens, auto-continuing")
+                messages.append({"role": "assistant", "content": [b.model_dump() for b in resp.content]})
+                messages.append({"role": "user", "content": CONTINUE_NUDGE})
+                continue
             break
 
         messages.append({"role": "assistant", "content": [b.model_dump() for b in resp.content]})
@@ -941,14 +967,24 @@ async def _stream_openai(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest):
     traces: list[ToolCallTrace] = []
     emitted_text = False
     answered = False
+    # Set right before an auto-continue so the next round's first delta skips
+    # the "\n\n" turn-separator below — a truncation continuation resumes
+    # mid-text and must join seamlessly, unlike a genuinely new turn after a
+    # tool call.
+    suppress_next_spacer = False
     for _ in range(MAX_TOOL_ITERATIONS):
+        skip_spacer = suppress_next_spacer
+        suppress_next_spacer = False
         stream = await client.chat.completions.create(**_kwargs(with_tools=True))
         calls: dict[int, dict[str, str]] = {}
         round_text = ""
         round_reasoning = ""
+        finish_reason: Optional[str] = None
         async for chunk in stream:
             if not chunk.choices:
                 continue
+            if chunk.choices[0].finish_reason:
+                finish_reason = chunk.choices[0].finish_reason
             delta = chunk.choices[0].delta
             # DeepSeek reasoner (and compatible endpoints) stream reasoning here.
             reasoning = getattr(delta, "reasoning_content", None)
@@ -956,7 +992,7 @@ async def _stream_openai(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest):
                 round_reasoning += reasoning
                 yield {"type": "reasoning", "delta": reasoning}
             if delta.content:
-                if emitted_text and not round_text:
+                if emitted_text and not round_text and not skip_spacer:
                     yield {"type": "text", "delta": "\n\n"}
                 round_text += delta.content
                 emitted_text = True
@@ -971,6 +1007,15 @@ async def _stream_openai(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest):
                     acc["arguments"] += tc.function.arguments
 
         if not calls:
+            if finish_reason == "length":
+                # Cut off by the token limit, not a real stop — keep the model
+                # going instead of silently ending the turn on a half-written
+                # answer (broken code fences/tables and no more text).
+                logger.warning("chat: response truncated by max_tokens, auto-continuing")
+                messages.append({"role": "assistant", "content": round_text})
+                messages.append({"role": "user", "content": CONTINUE_NUDGE})
+                suppress_next_spacer = True
+                continue
             dsml_calls = _parse_dsml_tool_calls(round_text + "\n" + round_reasoning)
             if not dsml_calls:
                 answered = True
@@ -1067,11 +1112,18 @@ async def _stream_anthropic(llm: dict[str, Any], org: ActiveOrg, req: ChatReques
     traces: list[ToolCallTrace] = []
     emitted_text = False
     answered = False
+    # Set right before an auto-continue so the next round's first delta skips
+    # the "\n\n" turn-separator below — a truncation continuation resumes
+    # mid-text and must join seamlessly, unlike a genuinely new turn after a
+    # tool call.
+    suppress_next_spacer = False
     for _ in range(MAX_TOOL_ITERATIONS):
+        skip_spacer = suppress_next_spacer
+        suppress_next_spacer = False
         round_text = False
         async with client.messages.stream(
             model=llm["model"],
-            max_tokens=2048,
+            max_tokens=ANTHROPIC_MAX_TOKENS,
             system=SYSTEM_PROMPT,
             tools=tools,
             messages=messages,
@@ -1081,7 +1133,7 @@ async def _stream_anthropic(llm: dict[str, Any], org: ActiveOrg, req: ChatReques
                     continue
                 d = event.delta
                 if getattr(d, "type", None) == "text_delta" and d.text:
-                    if emitted_text and not round_text:
+                    if emitted_text and not round_text and not skip_spacer:
                         yield {"type": "text", "delta": "\n\n"}
                     round_text = True
                     emitted_text = True
@@ -1092,6 +1144,15 @@ async def _stream_anthropic(llm: dict[str, Any], org: ActiveOrg, req: ChatReques
 
         tool_uses = [b for b in final.content if getattr(b, "type", None) == "tool_use"]
         if not tool_uses:
+            if final.stop_reason == "max_tokens":
+                # Cut off by the token limit, not a real stop — keep the model
+                # going instead of silently ending the turn on a half-written
+                # answer (broken code fences/tables and no more text).
+                logger.warning("chat: response truncated by max_tokens, auto-continuing")
+                messages.append({"role": "assistant", "content": [b.model_dump() for b in final.content]})
+                messages.append({"role": "user", "content": CONTINUE_NUDGE})
+                suppress_next_spacer = True
+                continue
             answered = True
             break
 

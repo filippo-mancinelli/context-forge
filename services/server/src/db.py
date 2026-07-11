@@ -477,6 +477,31 @@ CREATE INDEX IF NOT EXISTS chunk_annotations_org_repo_idx
     ON chunk_annotations (org_id, repo_name);
 CREATE INDEX IF NOT EXISTS chunk_annotations_file_idx
     ON chunk_annotations (org_id, repo_name, file_path);
+
+-- ===== Environments: deployment targets (staging/production/...) =====
+-- A curated reference of where an org's projects actually run: the URL,
+-- which managed DB connection (if any) it points to, and which repo/branch
+-- deploys there. Free-text notes cover anything a live system can't tell you.
+CREATE TABLE IF NOT EXISTS environments (
+    id               BIGSERIAL PRIMARY KEY,
+    org_id           BIGINT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    name             TEXT NOT NULL,
+    kind             TEXT NOT NULL DEFAULT 'staging',
+    url              TEXT,
+    domains          TEXT[] NOT NULL DEFAULT '{{}}',
+    db_connection_id BIGINT REFERENCES db_connections(id) ON DELETE SET NULL,
+    database_notes   TEXT,
+    repo             TEXT,
+    branch           TEXT,
+    config_notes     TEXT,
+    notes            TEXT,
+    created_at       TIMESTAMPTZ DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (org_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS environments_org_idx ON environments (org_id);
+CREATE INDEX IF NOT EXISTS environments_db_connection_idx ON environments (db_connection_id);
 """
 
 

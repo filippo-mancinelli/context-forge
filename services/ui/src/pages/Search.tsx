@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, type Job, type Memory, type RepoRelationship, type RepoSearchResult } from '../lib/api'
+import { api, type Job, type Memory, type RepoRelationship, type RepoSearchResult, type RepoSymbol } from '../lib/api'
 import { Button, Input } from '../components/ui'
 
 function snippet(content: string, max = 260) {
@@ -13,6 +13,7 @@ export default function Search() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [repoResults, setRepoResults] = useState<RepoSearchResult[]>([])
+  const [symbolResults, setSymbolResults] = useState<RepoSymbol[]>([])
   const [memories, setMemories] = useState<Memory[]>([])
   const [jobMatches, setJobMatches] = useState<Job[]>([])
   const [relationships, setRelationships] = useState<RepoRelationship[]>([])
@@ -32,8 +33,9 @@ export default function Search() {
     setLoading(true)
     setError(null)
     try {
-      const [repoData, memoryData, jobsData, relationshipsData] = await Promise.all([
+      const [repoData, symbolData, memoryData, jobsData, relationshipsData] = await Promise.all([
         api.repos.search(query.trim(), undefined, 30),
+        api.repos.symbols(query.trim(), undefined, 15),
         api.memory.search(query.trim(), 10),
         api.jobs.list(100),
         api.repos.relationships(),
@@ -54,6 +56,7 @@ export default function Search() {
       )
 
       setRepoResults(repoData.results)
+      setSymbolResults(symbolData.results)
       setMemories(memoryData.memories)
       setJobMatches(matchedJobs.slice(0, 8))
       setRelationships(filteredRelationships.slice(0, 10))
@@ -148,6 +151,45 @@ export default function Search() {
                 </div>
               )}
             </section>
+
+            {/* Symbols */}
+            {symbolResults.length > 0 && (
+              <section>
+                <h2 className="text-base font-semibold mb-3">
+                  Symbols
+                  <span className="text-muted font-normal text-sm ml-2">({symbolResults.length})</span>
+                </h2>
+                <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto">
+                  <table className="w-full min-w-[480px]">
+                    <tbody>
+                      {symbolResults.map((sym, idx) => (
+                        <tr
+                          key={`${sym.repo_name}-${sym.file_path}-${sym.name}-${idx}`}
+                          style={{ borderBottom: '1px solid var(--border)' }}
+                          className="last:border-b-0"
+                        >
+                          <td className="px-3 py-2 align-top">
+                            <div className="flex items-center gap-2">
+                              <code className="text-sm font-mono text-text">{sym.name}</code>
+                              <span className="text-xs text-muted">{sym.chunk_type}</span>
+                            </div>
+                            <p className="text-xs text-muted font-mono mt-0.5 truncate">{sym.signature}</p>
+                          </td>
+                          <td className="px-3 py-2 align-top text-xs text-muted whitespace-nowrap">
+                            <Link to={`/repos/${encodeURIComponent(sym.repo_name)}`} className="hover:text-accent">
+                              {sym.repo_name}
+                            </Link>
+                            <div className="truncate max-w-[220px]">
+                              {sym.file_path}{sym.start_line != null ? `:${sym.start_line + 1}` : ''}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            )}
 
             {/* Memory + Jobs */}
             {(memories.length > 0 || jobMatches.length > 0) && (

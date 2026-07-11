@@ -27,6 +27,7 @@ from .routes import datasources as datasources_routes
 from .routes import contracts as contracts_routes
 from .routes import ci as ci_routes
 from .routes import telegram as telegram_routes
+from .routes import environments as environments_routes
 
 api = FastAPI(
     title="context-forge API",
@@ -91,6 +92,7 @@ api.include_router(datasources_routes.router, prefix="/api")
 api.include_router(contracts_routes.router, prefix="/api")
 api.include_router(ci_routes.router, prefix="/api")
 api.include_router(telegram_routes.router, prefix="/api")
+api.include_router(environments_routes.router, prefix="/api")
 
 
 @api.middleware("http")
@@ -163,6 +165,7 @@ async def list_tools():
             {"name": "kb_get_document", "description": "Retrieve the full extracted text of a knowledge-base document."},
             {"name": "repo_list", "description": "List all configured repositories and their indexing status."},
             {"name": "repo_search", "description": "Search across indexed repositories using semantic similarity."},
+            {"name": "repo_symbols", "description": "Look up function/class/method/type definitions by name (lexical, not semantic)."},
             {"name": "repo_get_file", "description": "Read the full content of a file from an indexed repository."},
             {"name": "repo_index", "description": "Trigger re-indexing of one or all repositories."},
             {"name": "repo_relationships", "description": "Discover semantic relationships between repositories."},

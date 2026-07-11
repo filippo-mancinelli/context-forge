@@ -141,6 +141,15 @@ export interface RepoSearchResult {
   score: number
 }
 
+export interface RepoSymbol {
+  repo_name: string
+  file_path: string
+  chunk_type: string
+  name: string
+  start_line?: number | null
+  signature: string
+}
+
 export interface RepoRelationship {
   repo_a: string
   repo_b: string
@@ -435,6 +444,38 @@ export interface DbConnectionRequest {
   description?: string
 }
 
+export type EnvironmentKind = 'production' | 'staging' | 'development' | 'other'
+
+export interface Environment {
+  id: number
+  name: string
+  kind: EnvironmentKind
+  url?: string
+  domains: string[]
+  db_connection_id?: number
+  db_connection_name?: string
+  database_notes?: string
+  repo?: string
+  branch?: string
+  config_notes?: string
+  notes?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface EnvironmentRequest {
+  name: string
+  kind: EnvironmentKind
+  url?: string
+  domains?: string[]
+  db_connection_id?: number | null
+  database_notes?: string
+  repo?: string
+  branch?: string
+  config_notes?: string
+  notes?: string
+}
+
 export interface DbSchemaTable {
   name: string
   comment?: string | null
@@ -697,6 +738,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ query, repos, limit }),
       }),
+    symbols: (query: string, repos?: string[], limit = 20) =>
+      request<{ results: RepoSymbol[]; count: number }>('/api/repos/symbols', {
+        method: 'POST',
+        body: JSON.stringify({ query, repos, limit }),
+      }),
     relationships: (repo?: string) =>
       request<{ relationships: RepoRelationship[]; count: number }>(
         `/api/repos/relationships${repo ? `?repo=${encodeURIComponent(repo)}` : ''}`
@@ -761,6 +807,11 @@ export const api = {
       for (const file of files) form.append('files', file, file.name)
       return uploadRequest<KbUploadResult>('/api/kb/documents', form)
     },
+    addText: (title: string, content: string) =>
+      request<{ status: string; created: KbUploadResult['created'][number] }>('/api/kb/documents/text', {
+        method: 'POST',
+        body: JSON.stringify({ title, content }),
+      }),
     reprocess: (id: number) =>
       request<{ status: string; id: number }>(`/api/kb/documents/${id}/reprocess`, { method: 'POST' }),
     delete: (id: number) =>
@@ -952,6 +1003,14 @@ export const api = {
       }),
     log: (id: number, limit = 50) =>
       request<{ log: DbQueryLogEntry[]; count: number }>(`/api/datasources/${id}/log?limit=${limit}`),
+  },
+  environments: {
+    list: () => request<Environment[]>('/api/environments'),
+    create: (req: EnvironmentRequest) =>
+      request<Environment>('/api/environments', { method: 'POST', body: JSON.stringify(req) }),
+    update: (id: number, req: EnvironmentRequest) =>
+      request<Environment>(`/api/environments/${id}`, { method: 'PUT', body: JSON.stringify(req) }),
+    delete: (id: number) => request<{ status: string }>(`/api/environments/${id}`, { method: 'DELETE' }),
   },
   contracts: {
     list: () => request<{ contracts: ApiContract[]; types: ApiContractType[] }>('/api/contracts'),

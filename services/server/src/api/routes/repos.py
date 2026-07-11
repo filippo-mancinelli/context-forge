@@ -79,6 +79,29 @@ async def search_repos(req: RepoSearchRequest, org: ActiveOrg = Depends(get_acti
     return {"results": results, "count": len(results)}
 
 
+class RepoSymbolSearchRequest(BaseModel):
+    query: str
+    repos: Optional[list[str]] = None
+    limit: int = 20
+
+
+@router.post("/symbols")
+async def search_symbols(req: RepoSymbolSearchRequest, org: ActiveOrg = Depends(get_active_org)):
+    """Look up function/class/method/type definitions by name (lexical, not semantic)."""
+    from ...search import search_repo_symbols
+
+    if not req.query.strip():
+        raise HTTPException(status_code=400, detail="Query must not be empty")
+    try:
+        results = await search_repo_symbols(
+            org.org_id, req.query.strip(), repos=req.repos, limit=req.limit
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Symbol search failed: {e}")
+
+    return {"results": results, "count": len(results)}
+
+
 @router.get("/relationships")
 async def list_relationships(repo: Optional[str] = None, org: ActiveOrg = Depends(get_active_org)):
     """Get semantic relationships between repositories (org-scoped)."""

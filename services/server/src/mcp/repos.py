@@ -76,6 +76,44 @@ async def repo_search(
 
 
 @mcp.tool()
+async def repo_symbols(
+    query: str,
+    repos: Optional[list[str]] = None,
+    limit: int = 20,
+) -> dict:
+    """Look up function/class/method/type definitions by name across indexed repos.
+
+    Use this instead of repo_search when you already know (or can guess) the
+    identifier you're after — e.g. "find the definition of resolve_org_id" or
+    "where is the Memory class". It's a lexical name lookup over parsed
+    definitions, not semantic similarity, so it's precise for "go to
+    definition"-style questions and won't return loosely related code the way
+    repo_search can. Only covers tree-sitter-parseable languages (Python, JS/TS,
+    Go, Java); other file types aren't indexed as symbols.
+
+    Args:
+        query: Symbol name or substring (e.g. "resolve_org_id", "Memory")
+        repos: Optional list of repo names to search in (default: all repos)
+        limit: Maximum number of results (default 20)
+
+    Returns:
+        dict with list of results, each with repo_name, file_path, chunk_type,
+        name, a one-line signature preview, and start_line
+    """
+    from ..search import search_repo_symbols
+    from .context import resolve_org_id
+
+    org_id = await resolve_org_id()
+
+    try:
+        results = await search_repo_symbols(org_id, query, repos=repos, limit=limit)
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "error": f"Symbol search failed: {e}"}
+
+    return {"status": "ok", "results": results, "count": len(results)}
+
+
+@mcp.tool()
 async def repo_get_file(repo: str, path: str) -> dict:
     """Read the full content of a file from an indexed repository.
 
