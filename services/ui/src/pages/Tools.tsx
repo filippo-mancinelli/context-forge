@@ -79,24 +79,95 @@ function ToolCard({ tool }: { tool: Tool }) {
 
 const MCP_SNIPPETS = [
   {
+    key: 'pi',
+    title: 'Pi',
+    path: '~/.pi/agent/mcp.json',
+    value: `{
+  "mcpServers": {
+    "context-forge": {
+      "url": "{MCP_URL}",
+      "headers": {
+        "X-API-Key": "{YOUR_API_KEY}"
+      }
+    }
+  }
+}`,
+  },
+  {
     key: 'claude',
     title: 'Claude Code',
-    value: `claude mcp add context-forge {MCP_URL} \\
-  --transport http --scope user \\
-  --header "X-API-Key: {YOUR_API_KEY}"`,
+    path: '~/.claude/mcp.json',
+    value: `{
+  "mcpServers": {
+    "context-forge": {
+      "type": "remote",
+      "url": "{MCP_URL}",
+      "headers": {
+        "X-API-Key": "{YOUR_API_KEY}"
+      }
+    }
+  }
+}`,
   },
   {
     key: 'codex',
     title: 'Codex CLI',
+    path: '~/.codex/config.json (mcpServers key)',
     value: `codex mcp add context-forge \\
   --url {MCP_URL} \\
   --header "X-API-Key: {YOUR_API_KEY}"`,
   },
   {
+    key: 'cursor',
+    title: 'Cursor',
+    path: '.cursor/mcp.json',
+    value: `{
+  "mcpServers": {
+    "context-forge": {
+      "url": "{MCP_URL}",
+      "headers": {
+        "X-API-Key": "{YOUR_API_KEY}"
+      }
+    }
+  }
+}`,
+  },
+  {
+    key: 'vscode',
+    title: 'VS Code',
+    path: '.vscode/mcp.json',
+    value: `{
+  "servers": {
+    "context-forge": {
+      "type": "http",
+      "url": "{MCP_URL}",
+      "headers": {
+        "X-API-Key": "{YOUR_API_KEY}"
+      }
+    }
+  }
+}`,
+  },
+  {
+    key: 'windsurf',
+    title: 'Windsurf',
+    path: '~/.windsurf/mcp.json',
+    value: `{
+  "mcpServers": {
+    "context-forge": {
+      "url": "{MCP_URL}",
+      "headers": {
+        "X-API-Key": "{YOUR_API_KEY}"
+      }
+    }
+  }
+}`,
+  },
+  {
     key: 'opencode',
     title: 'OpenCode',
-    value: `~/.opencode/config.json:
-{
+    path: '~/.opencode/config.json',
+    value: `{
   "mcp": {
     "context-forge": {
       "type": "remote",
@@ -109,30 +180,36 @@ const MCP_SNIPPETS = [
   }
 }`,
   },
-  {
-    key: 'cursor',
-    title: 'Cursor',
-    value: `.cursor/mcp.json:
-{
-  "mcpServers": {
-    "context-forge": {
-      "url": "{MCP_URL}",
-      "headers": {
-        "X-API-Key": "{YOUR_API_KEY}"
-      }
-    }
-  }
-}`,
-  },
 ]
 
 function QuickConnect() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
-  const [selectedKey, setSelectedKey] = useState('claude')
+  const [copiedUrl, setCopiedUrl] = useState(false)
+  const [selectedKey, setSelectedKey] = useState('pi')
   const [expanded, setExpanded] = useState(false)
-  const mcpUrl = (import.meta.env.VITE_API_URL || window.location.origin) + '/mcp'
+
+  // Prefer VITE_MCP_URL (explicit MCP endpoint), then VITE_API_URL (API base),
+  // then window.location.origin with a warning.
+  const explicitMcpUrl = import.meta.env.VITE_MCP_URL
+  const apiUrl = import.meta.env.VITE_API_URL
+  const mcpUrl = explicitMcpUrl
+    ? explicitMcpUrl + '/mcp'
+    : apiUrl
+      ? apiUrl + '/mcp'
+      : window.location.origin + '/mcp'
+  const urlIsDerived = !explicitMcpUrl && !apiUrl
+
   const raw = MCP_SNIPPETS.find(s => s.key === selectedKey) ?? MCP_SNIPPETS[0]
-  const selectedSnippet = { ...raw, value: raw.value.split('{MCP_URL}').join(mcpUrl) }
+  const selectedSnippet = {
+    ...raw,
+    value: raw.value.split('{MCP_URL}').join(mcpUrl),
+  }
+
+  const copyUrl = () => {
+    navigator.clipboard.writeText(mcpUrl)
+    setCopiedUrl(true)
+    setTimeout(() => setCopiedUrl(false), 1500)
+  }
 
   return (
     <div style={{ border: '1px solid var(--border)' }} className="mb-8">
@@ -150,8 +227,25 @@ function QuickConnect() {
 
       {expanded && (
         <div className="px-4 py-4">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-xs text-muted">MCP endpoint:</span>
+            <code className="text-xs font-mono bg-surface px-2 py-0.5 rounded">{mcpUrl}</code>
+            <button
+              onClick={copyUrl}
+              className="text-muted hover:text-text transition-colors"
+              title="Copy MCP URL"
+            >
+              {copiedUrl ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+          {urlIsDerived && (
+            <div style={{ border: '1px solid var(--warning)', color: 'var(--warning)' }} className="text-xs p-2 mb-3 bg-[#fef9e7]">
+              ⚠️ MCP URL derived from browser origin. If the MCP server runs on a different host,
+              set <code>VITE_MCP_URL</code> or <code>VITE_API_URL</code> at build time.
+            </div>
+          )}
           <p className="text-xs text-muted mb-3">
-            🔑 Generate an API key in <strong>Settings → API Keys</strong> and replace <code className="text-xs">{'{YOUR_API_KEY}'}</code> in the examples below
+            🔑 Generate an API key in <strong>Settings → MCP keys</strong> and replace <code className="text-xs">{'{YOUR_API_KEY}'}</code> below.
           </p>
           <div className="flex gap-2 mb-3 flex-wrap">
             {MCP_SNIPPETS.map(snippet => (
@@ -165,8 +259,11 @@ function QuickConnect() {
               </Button>
             ))}
           </div>
+          {'path' in raw && (
+            <p className="text-xs text-muted mb-2">📁 Save to <code className="text-xs">{(raw as typeof MCP_SNIPPETS[number] & {path: string}).path}</code></p>
+          )}
           <div className="flex items-start gap-2">
-            <pre className="flex-1 overflow-x-auto text-xs m-0">
+            <pre className="flex-1 overflow-x-auto text-xs m-0 bg-surface p-3 rounded">
               <code>{selectedSnippet.value}</code>
             </pre>
             <button
