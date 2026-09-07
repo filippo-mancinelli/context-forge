@@ -8,7 +8,7 @@ from src.mcp import approvals as mcp_approvals
 from src.mcp import datasources as mcp_datasources
 from src.mcp import ssh_files as mcp_ssh
 from src.mcp.context import set_current_org_id, set_current_project_id
-from src.mcp.permissions import set_current_permissions
+from src.mcp.permissions import PermissionDenied, set_current_permissions
 
 
 @pytest.fixture(autouse=True)
@@ -152,7 +152,7 @@ def test_db_execute_with_neither_permission_is_denied():
     set_current_org_id(1)
     set_current_project_id(2)
     set_current_permissions(frozenset({"context-read", "db-query"}))
-    with pytest.raises(Exception, match="db-write"):
+    with pytest.raises(PermissionDenied, match="db-write"):
         asyncio.run(_underlying(mcp_datasources.db_execute)(
             connection="erp", sql="UPDATE t SET a=1 WHERE id=1"))
 
@@ -259,7 +259,7 @@ def test_ssh_write_file_without_ssh_write_creates_a_request(monkeypatch):
 
 def test_ssh_write_file_with_neither_permission_is_denied():
     set_current_permissions(frozenset({"ssh-read"}))
-    with pytest.raises(Exception, match="ssh-write"):
+    with pytest.raises(PermissionDenied, match="ssh-write"):
         asyncio.run(_underlying(mcp_ssh.ssh_write_file)(
             source="web1", path="app.yml", content="x"))
 

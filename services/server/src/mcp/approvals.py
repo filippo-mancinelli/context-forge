@@ -35,7 +35,7 @@ def pending_response(request_id: int, preview: dict[str, Any]) -> dict[str, Any]
 @mcp.tool()
 @requires_permission("context-read")
 async def write_request_status(request_id: int) -> dict:
-    """Check a write request you proposed with db_execute or ssh_write_file.
+    """Check any write request in the caller's current organization and project (not just ones you proposed).
 
     A write proposed without the write permission is not executed until an
     organization admin approves it. This returns where it stands and, once

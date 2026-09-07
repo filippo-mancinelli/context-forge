@@ -188,7 +188,7 @@ The identity provider only authenticates. Authorization of MCP tools is managed 
 | Permission | Grants |
 |---|---|
 | `context-read` | search and read memory, repositories, knowledge base, web pages, API contracts, CI runs, database schemas |
-| `context-write` | add or delete memories, annotate code, add and refetch web pages |
+| `context-write` | add or delete memories, annotate code, add and refetch web pages; also propose `db_execute` / `ssh_write_file` writes for an admin to approve |
 | `db-query` | read-only SQL on connected databases |
 | `db-write` | `db_execute` (validated single-statement DML) and approving SQL write requests |
 | `repo-write` | `repo_commit_files`, `repo_open_pr` |

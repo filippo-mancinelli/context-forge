@@ -158,6 +158,7 @@ function DetailDrawer({
             <Button
               variant="danger"
               loading={busy === 'reject'}
+              disabled={busy !== null}
               onClick={() => decide('reject')}
             >
               Reject
@@ -165,6 +166,7 @@ function DetailDrawer({
             <Button
               variant="primary"
               loading={busy === 'approve'}
+              disabled={busy !== null}
               onClick={() => decide('approve')}
             >
               Approve and run
@@ -305,7 +307,9 @@ export default function Approvals() {
                 ))}
               </Tbody>
             </Table>
-            <p className="text-xs text-muted">{total} request(s) in this view.</p>
+            <p className="text-xs text-muted">
+              Showing {requests.length} of {total} request{total === 1 ? '' : 's'}.
+            </p>
           </>
         )}
 
