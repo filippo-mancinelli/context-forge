@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from . import tenancy
 from .db import get_pool
+from .mcp.audit import scrub_text
 
 logger = logging.getLogger(__name__)
 
@@ -254,7 +255,7 @@ async def approve(request_id: int, user_id: int, note: str = "") -> dict[str, An
         result = await _execute(approved)
     except Exception as e:  # noqa: BLE001 - the failure belongs on the request
         logger.warning("Write request %s failed: %s", request_id, e)
-        return await _finish(request_id, "failed", error=str(e))
+        return await _finish(request_id, "failed", error=scrub_text(str(e)))
     return await _finish(request_id, "executed", result=result)
 
 

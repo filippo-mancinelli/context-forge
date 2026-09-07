@@ -101,6 +101,27 @@ def test_approve_records_a_failed_execution(monkeypatch):
     assert finish_args[3] == "deadlock detected"
 
 
+def test_approve_scrubs_credentials_from_the_stored_error(monkeypatch):
+    _patch_role(monkeypatch, "owner")
+
+    async def boom(record):
+        raise RuntimeError("connect failed: postgresql://user:secret@host/db")
+
+    monkeypatch.setattr(write_requests, "_run_db_execute", boom)
+    conn = FakeConn(fetchrow_results=[
+        _row(),
+        _row(status="approved"),
+        _row(status="failed", error="connect failed: postgresql://host/db"),
+    ])
+    _patch_pool(monkeypatch, conn)
+
+    out = asyncio.run(write_requests.approve(12, user_id=9))
+    assert out["status"] == "failed"
+    finish_sql, finish_args = conn.executed[2]
+    assert finish_args[3] == "connect failed: postgresql://host/db"
+    assert "secret" not in finish_args[3]
+
+
 def test_approve_requires_the_write_permission(monkeypatch):
     _patch_role(monkeypatch, "admin", perms=frozenset({"context-read", "jobs"}))
     _patch_pool(monkeypatch, FakeConn(fetchrow_results=[_row()]))
