@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,6 +14,9 @@ from ..deps import get_current_user_id
 router = APIRouter(prefix="/organizations", tags=["tool-calls"])
 
 MAX_LIMIT = 200
+# Filtro principal per sottostringa, con i metacaratteri LIKE neutralizzati.
+_LIKE_ESCAPE = "\\"
+_PRINCIPAL_LIKE = r"principal ILIKE '%' || ${n} || '%' ESCAPE '\'"
 WINDOW_HOURS = {"24h": 24, "7d": 168}
 
 _COLUMNS = (
@@ -29,6 +32,12 @@ async def _require_admin(org_id: int, user_id: int) -> str:
     if not tenancy.role_at_least(role, "admin"):
         raise HTTPException(status_code=403, detail="Requires 'admin' role or higher")
     return role
+
+
+def _escape_like(value: str) -> str:
+    """Neutralizza i metacaratteri LIKE digitati dall'utente."""
+    escaped = value.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
+    return escaped.replace("%", _LIKE_ESCAPE + "%").replace("_", _LIKE_ESCAPE + "_")
 
 
 def _build_filters(
@@ -47,7 +56,13 @@ def _build_filters(
         ("principal", principal),
         ("project_id", project_id),
     ):
-        if value is not None and value != "":
+        if value is None or value == "":
+            continue
+        if column == "principal":
+            # Ricerca per sottostringa: il principal e' un'etichetta leggibile.
+            params.append(_escape_like(str(value)))
+            clauses.append(_PRINCIPAL_LIKE.format(n=len(params)))
+        else:
             params.append(value)
             clauses.append(f"{column} = ${len(params)}")
     if since is not None:
@@ -91,6 +106,9 @@ async def list_tool_calls(
             parsed_since = datetime.fromisoformat(since)
         except ValueError:
             raise HTTPException(status_code=422, detail="Invalid 'since': expected ISO 8601")
+        # Un timestamp senza offset e' inteso UTC, come created_at.
+        if parsed_since.tzinfo is None:
+            parsed_since = parsed_since.replace(tzinfo=timezone.utc)
 
     limit = max(1, min(int(limit), MAX_LIMIT))
     offset = max(0, int(offset))
