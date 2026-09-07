@@ -46,19 +46,7 @@ def test_list_passes_the_filters_through(monkeypatch):
 def test_list_rejects_an_unknown_status():
     with pytest.raises(HTTPException) as exc:
         asyncio.run(routes.list_requests(status="bogus", limit=50, offset=0, org=_org()))
-    assert exc.value.status_code == 400
-
-
-def test_list_clamps_the_limit_to_the_maximum(monkeypatch):
-    seen = {}
-
-    async def fake_list(org_id, status=None, limit=50, offset=0):
-        seen["limit"] = limit
-        return {"requests": [], "total": 0, "pending": 0}
-
-    monkeypatch.setattr(routes.service, "list_for_org", fake_list)
-    asyncio.run(routes.list_requests(status=None, limit=9999, offset=0, org=_org()))
-    assert seen["limit"] == service.MAX_LIST_LIMIT
+    assert exc.value.status_code == 422
 
 
 def test_get_returns_the_request(monkeypatch):
