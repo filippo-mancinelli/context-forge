@@ -56,6 +56,11 @@ else
         sed -i.bak "s/change_this_bootstrap_token/$BOOTSTRAP_TOKEN/" .env && rm -f .env.bak
         ok "Generated SETUP_BOOTSTRAP_TOKEN: $BOOTSTRAP_TOKEN"
         warn "The web UI setup wizard will ask for this token (it stays in .env)"
+
+        # Guard GET /metrics by default; empty METRICS_TOKEN in .env to open it up
+        METRICS_TOKEN=$(openssl rand -base64 32 | tr -d '/+=')
+        sed -i.bak "s/^METRICS_TOKEN=/METRICS_TOKEN=$METRICS_TOKEN/" .env && rm -f .env.bak
+        ok "Generated METRICS_TOKEN: $METRICS_TOKEN"
     fi
 
     echo ""

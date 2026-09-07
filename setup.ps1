@@ -50,6 +50,11 @@ if (Test-Path ".env") {
     Write-Ok "Generated SETUP_BOOTSTRAP_TOKEN: $bootstrapToken"
     Write-Warn "The web UI setup wizard will ask for this token (it stays in .env)"
 
+    # Guard GET /metrics by default; empty METRICS_TOKEN in .env to open it up
+    $metricsToken = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([System.Guid]::NewGuid().ToString("N") + [System.Guid]::NewGuid().ToString("N"))).Substring(0, 32)
+    (Get-Content ".env") -replace '^METRICS_TOKEN=$', "METRICS_TOKEN=$metricsToken" | Set-Content ".env"
+    Write-Ok "Generated METRICS_TOKEN: $metricsToken"
+
     Write-Host ""
     Write-Host "  Please edit .env and set:" -ForegroundColor Yellow
     Write-Host "    OPENAI_API_KEY   (required for OpenAI embeddings)" -ForegroundColor Yellow
