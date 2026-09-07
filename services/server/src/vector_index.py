@@ -8,6 +8,10 @@ from __future__ import annotations
 
 import logging
 
+from .db import get_pool
+from .org_config import all_org_ids
+from .org_settings import get_org_settings
+
 logger = logging.getLogger(__name__)
 
 # Tables whose ``embedding`` column is searched by cosine distance.
@@ -41,3 +45,56 @@ def create_index_sql(table: str, org_id: int, dims: int) -> str:
 
 def drop_index_sql(name: str) -> str:
     return f"DROP INDEX CONCURRENTLY IF EXISTS {name}"
+
+
+_STALE_INDEX_SQL = (
+    "SELECT indexname FROM pg_indexes WHERE tablename = $1 AND indexname LIKE $2"
+)
+
+
+async def _stale_index_names(conn, table: str, org_id: int, keep: str) -> list[str]:
+    rows = await conn.fetch(
+        _STALE_INDEX_SQL, table, f"{table}_emb_hnsw_org{int(org_id)}_d%"
+    )
+    return [r["indexname"] for r in rows if r["indexname"] != keep]
+
+
+async def ensure_org_indexes(org_id: int, dims: int) -> list[str]:
+    """Create the org's HNSW indexes and drop those of another dimension."""
+    created: list[str] = []
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # CONCURRENTLY needs autocommit: never open a transaction here.
+            await conn.execute(f"SET maintenance_work_mem = '{MAINTENANCE_WORK_MEM}'")
+            for table in HNSW_TABLES:
+                name = index_name(table, org_id, dims)
+                try:
+                    await conn.execute(create_index_sql(table, org_id, dims))
+                    created.append(name)
+                except Exception:
+                    logger.exception("HNSW index build failed: %s", name)
+                try:
+                    for stale in await _stale_index_names(conn, table, org_id, name):
+                        await conn.execute(drop_index_sql(stale))
+                except Exception:
+                    logger.exception("HNSW stale index cleanup failed: %s", name)
+    except Exception:
+        logger.exception("HNSW index maintenance failed (org=%s)", org_id)
+    return created
+
+
+async def ensure_all_indexes() -> None:
+    """Refresh the HNSW indexes of every organization."""
+    try:
+        org_ids = await all_org_ids()
+    except Exception:
+        logger.exception("HNSW index maintenance: cannot list organizations")
+        return
+    for org_id in org_ids:
+        try:
+            dims = int((await get_org_settings(org_id)).embeddings_dims)
+        except Exception:
+            logger.exception("HNSW index maintenance: no settings (org=%s)", org_id)
+            continue
+        await ensure_org_indexes(org_id, dims)
