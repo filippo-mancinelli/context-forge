@@ -21,6 +21,10 @@ MAX_QUEUE = 1000
 BATCH_SIZE = 50
 MAX_STRING = 200
 MAX_ERROR = 500
+# Tempo massimo concesso allo svuotamento della coda allo shutdown.
+DRAIN_TIMEOUT = 5.0
+# Pausa dopo un'iterazione fallita del writer: evita il giro a vuoto.
+WRITER_ERROR_BACKOFF = 1.0
 
 _REDACT = re.compile(r"secret|password|token|key|content|sql", re.IGNORECASE)
 # Chiavi il cui valore e' una URL: credenziali e query string non vanno loggate.
@@ -237,8 +241,8 @@ def _take_batch(limit: int = BATCH_SIZE) -> list[dict]:
 
 
 async def _write_batch(batch: list[dict]) -> int:
-    columns = [[row[field] for row in batch] for field in _FIELDS]
     try:
+        columns = [[row[field] for row in batch] for field in _FIELDS]
         pool = await get_pool()
         async with pool.acquire() as conn:
             await conn.execute(_INSERT_SQL, *columns)
@@ -248,20 +252,32 @@ async def _write_batch(batch: list[dict]) -> int:
     return len(batch)
 
 
-async def flush_once() -> int:
-    """Scrive un batch. Ritorna le righe scritte (0 se la insert fallisce)."""
+def queue_depth() -> int:
+    """Righe di audit ancora in attesa di essere scritte."""
+    return _queue.qsize()
+
+
+async def flush_once() -> Optional[int]:
+    """Scrive un batch: righe scritte, 0 se la insert fallisce, None se la coda era vuota."""
     batch = _take_batch()
     if not batch:
-        return 0
+        return None
     return await _write_batch(batch)
 
 
 async def _writer_loop() -> None:
     while True:
-        row = await _queue.get()
-        # The blocking get() above already claimed one slot: cap the rest so
-        # the batch never exceeds BATCH_SIZE rows.
-        await _write_batch([row] + _take_batch(BATCH_SIZE - 1))
+        try:
+            row = await _queue.get()
+            # The blocking get() above already claimed one slot: cap the rest so
+            # the batch never exceeds BATCH_SIZE rows.
+            await _write_batch([row] + _take_batch(BATCH_SIZE - 1))
+        except Exception:
+            # Un'iterazione fallita non chiude il writer; la pausa evita che un
+            # errore persistente (es. la coda legata a un altro event loop) lo
+            # faccia girare a vuoto inondando il log.
+            logger.warning("MCP audit writer iteration failed", exc_info=True)
+            await asyncio.sleep(WRITER_ERROR_BACKOFF)
 
 
 def start_audit_writer() -> None:
@@ -278,7 +294,12 @@ async def stop_audit_writer() -> None:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
-    await flush_once()
+    try:
+        async with asyncio.timeout(DRAIN_TIMEOUT):
+            while await flush_once() is not None:
+                pass
+    except TimeoutError:
+        logger.warning("MCP audit drain timed out: %d row(s) still queued", queue_depth())
 
 
 async def purge_old_calls() -> int:

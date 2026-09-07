@@ -10,7 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 from .db import get_pool
 from .indexer.git_manager import pull_all_repos
 from .indexer.indexer import run_index_repo, run_pending_index_requests, sync_repos_config
-from .mcp.audit import purge_old_calls as purge_old_tool_calls
+from .mcp.audit import purge_old_calls as purge_old_tool_calls, start_audit_writer
 from .mcp.jobs import run_claimed_job
 from .mcp.oauth_bridge import purge_expired_flows
 from .metrics import record_scheduler_tick, refresh_metrics
@@ -120,7 +120,12 @@ async def _purge_old_tool_calls() -> None:
 
 
 async def _refresh_metrics() -> None:
-    """Repopulate the Prometheus gauges and beat the scheduler heartbeat."""
+    """Repopulate the gauges, beat the heartbeat, and revive a dead audit writer."""
+    try:
+        # Idempotente: riavvia il writer solo se e' morto o non e' mai partito.
+        start_audit_writer()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("MCP audit writer restart failed: %s", exc)
     try:
         await refresh_metrics()
     except Exception as exc:  # noqa: BLE001
