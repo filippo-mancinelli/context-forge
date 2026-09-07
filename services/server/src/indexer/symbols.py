@@ -49,6 +49,14 @@ DEF_NODES: dict[str, set[str]] = {
         "constructor_declaration",
         "property_declaration",
     },
+    "php": {
+        "class_declaration",
+        "interface_declaration",
+        "trait_declaration",
+        "enum_declaration",
+        "function_definition",
+        "method_declaration",
+    },
 }
 
 # Nodi che valgono come uso di un nome.
@@ -60,7 +68,7 @@ REF_NODES = {
 }
 
 # Nodi di riferimento aggiuntivi, per grammatiche che non usano ``identifier``.
-REF_NODES_EXTRA: dict[str, set[str]] = {}
+REF_NODES_EXTRA: dict[str, set[str]] = {"php": {"name"}}
 
 # Nodi il cui nome non sta nel campo ``name``: (linguaggio, nodo) -> campo.
 NAME_FIELDS: dict[tuple[str, str], str] = {}

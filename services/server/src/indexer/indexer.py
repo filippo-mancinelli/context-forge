@@ -58,6 +58,7 @@ _LANGUAGE_LOADERS: dict[str, tuple[str, str]] = {
     "go": ("tree_sitter_go", "language"),
     "java": ("tree_sitter_java", "language"),
     "csharp": ("tree_sitter_c_sharp", "language"),
+    "php": ("tree_sitter_php", "language_php"),
 }
 
 _PARSER_CACHE: dict[str, Any] = {}
