@@ -107,6 +107,18 @@ async def _purge_expired_oauth_flows() -> None:
         logger.info("Purged %d expired OAuth bridge flow(s)", deleted)
 
 
+async def _expire_write_requests() -> None:
+    """Pending write requests must not stay approvable past their TTL."""
+    from .write_requests import expire_pending
+
+    try:
+        expired = await expire_pending()
+        if expired:
+            logger.info("Expired %d pending write request(s)", expired)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Write requests expiry tick failed: %s", exc)
+
+
 async def _purge_old_tool_calls() -> None:
     """Delete MCP tool-call audit rows older than MCP_AUDIT_RETENTION_DAYS."""
     try:
@@ -253,6 +265,13 @@ async def start_scheduler() -> None:
     _scheduler.add_job(
         _purge_expired_oauth_flows, "interval", minutes=5, id="oauth_flow_reaper",
         replace_existing=True,
+    )
+
+    # Daily: pending write requests past their expiry are no longer approvable.
+    _scheduler.add_job(
+        _expire_write_requests, CronTrigger(hour="3", minute="20"),
+        id="write_requests_expiry", replace_existing=True,
+        max_instances=1, coalesce=True, misfire_grace_time=None,
     )
 
     # Daily retention of the MCP tool-call audit trail.
