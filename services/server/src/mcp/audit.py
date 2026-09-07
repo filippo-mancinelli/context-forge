@@ -9,6 +9,7 @@ import re
 import time
 from contextlib import asynccontextmanager
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 from ..config import get_settings
 from ..db import get_pool
@@ -22,6 +23,9 @@ MAX_STRING = 200
 MAX_ERROR = 500
 
 _REDACT = re.compile(r"secret|password|token|key|content|sql", re.IGNORECASE)
+# Chiavi il cui valore e' una URL: credenziali e query string non vanno loggate.
+_URL_KEY = re.compile(r"url|uri|endpoint|href", re.IGNORECASE)
+_URL_IN_TEXT = re.compile(r"\b[a-z][a-z0-9+.-]*://\S+", re.IGNORECASE)
 
 _FIELDS = (
     "org_id",
@@ -52,6 +56,31 @@ _writer_task: Optional[asyncio.Task] = None
 _last_drop_warning = 0.0
 
 
+def scrub_url(text: str) -> str:
+    """scheme://host[:port]/path: via userinfo, query e fragment. Non-URL: invariata."""
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return text
+    if not parts.scheme or not parts.netloc:
+        return text
+    try:
+        host = parts.hostname or ""
+        port = parts.port
+    except ValueError:
+        return text
+    if port:
+        host = f"{host}:{port}"
+    return f"{parts.scheme}://{host}{parts.path}"
+
+
+def scrub_text(text: str) -> str:
+    """Riscrive ogni URL contenuta in un testo libero passandola per scrub_url."""
+    if not text:
+        return text
+    return _URL_IN_TEXT.sub(lambda m: scrub_url(m.group(0)), text)
+
+
 def summarize_args(kwargs: dict) -> dict:
     """Argomenti loggabili: chiavi conservate, valori troncati o redatti."""
     out: dict[str, Any] = {}
@@ -63,8 +92,10 @@ def summarize_args(kwargs: dict) -> dict:
             out[key] = f"<list:{len(value)}>"
         elif _REDACT.search(key) and not is_sql:
             out[key] = "<redacted>"
+        elif isinstance(value, str) and _URL_KEY.search(key):
+            out[key] = scrub_url(value)[:MAX_STRING]
         elif isinstance(value, str):
-            out[key] = value[:MAX_STRING]
+            out[key] = scrub_text(value)[:MAX_STRING]
         elif value is None or isinstance(value, (bool, int, float)):
             out[key] = value
         else:
@@ -122,7 +153,7 @@ async def record_call(
             "permission": permission,
             "outcome": outcome,
             "duration_ms": int(duration_ms),
-            "error": error[:MAX_ERROR] if error else None,
+            "error": scrub_text(error)[:MAX_ERROR] if error else None,
             # default=str is a safety net: summarize_args should already have
             # reduced every value to a JSON primitive, but a bare dict/list
             # (e.g. from record_call called directly, bypassing summarize_args)
