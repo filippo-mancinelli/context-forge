@@ -191,6 +191,11 @@ def _patch_settings(monkeypatch, current, calls):
         calls.append((org_id, dims))
         return []
 
+    async def fake_embed_text(text, org_id):
+        # The probe answers with whatever dimension was just saved.
+        return [0.0] * int(current.embeddings_dims)
+
+    monkeypatch.setattr(settings_routes, "embed_text", fake_embed_text)
     monkeypatch.setattr(settings_routes, "get_org_settings", mock_get_org_settings)
     monkeypatch.setattr(settings_routes, "persist_org_settings_overrides", mock_persist_overrides)
     monkeypatch.setattr(settings_routes, "persist_org_config", mock_persist_org_config)
