@@ -6,7 +6,8 @@ class FakeConn:
     """Records every statement; answers fetchval from a scripted queue."""
 
     def __init__(
-        self, fetchval_results=None, fetch_rows=None, fetchrow_results=None, execute_error=None
+        self, fetchval_results=None, fetch_rows=None, fetchrow_results=None, execute_error=None,
+        execute_result="OK",
     ):
         self.executed: list[tuple[str, tuple]] = []
         self.fetchval_results = list(fetchval_results or [])
@@ -17,6 +18,9 @@ class FakeConn:
         # Optional exception raised by execute() after recording the call, to
         # exercise callers that must tolerate a failed write.
         self.execute_error = execute_error
+        # Command tag returned by execute(), e.g. "DELETE 4", for callers that
+        # parse the affected-row count out of it.
+        self.execute_result = execute_result
 
     @property
     def sql(self) -> list[str]:
@@ -26,7 +30,7 @@ class FakeConn:
         self.executed.append((query, args))
         if self.execute_error is not None:
             raise self.execute_error
-        return "OK"
+        return self.execute_result
 
     async def fetchval(self, query, *args, **kwargs):
         self.executed.append((query, args))

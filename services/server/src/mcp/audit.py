@@ -10,6 +10,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
+from ..config import get_settings
 from ..db import get_pool
 from .context import get_current_org_id, get_current_principal, get_selected_project_id
 
@@ -222,3 +223,25 @@ async def stop_audit_writer() -> None:
         with contextlib.suppress(asyncio.CancelledError):
             await task
     await flush_once()
+
+
+async def purge_old_calls() -> int:
+    """Cancella l'audit più vecchio della retention configurata."""
+    days = get_settings().mcp_audit_retention_days
+    if not days or days <= 0:
+        return 0
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM mcp_tool_calls "
+                "WHERE created_at < NOW() - make_interval(days => $1)",
+                int(days),
+            )
+    except Exception:
+        logger.warning("MCP audit retention purge failed", exc_info=True)
+        return 0
+    try:
+        return int(str(result).split()[-1])
+    except (ValueError, IndexError):
+        return 0
