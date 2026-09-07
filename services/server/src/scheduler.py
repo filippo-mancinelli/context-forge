@@ -10,6 +10,7 @@ from .indexer.git_manager import pull_all_repos
 from .indexer.indexer import run_index_repo, run_pending_index_requests, sync_repos_config
 from .mcp.oauth_bridge import purge_expired_flows
 from .org_config import get_org_config, iter_org_configs
+from .vector_index import ensure_all_indexes
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,12 @@ async def start_scheduler() -> None:
     # must not outlive their TTL. Global job (not per-organization).
     _scheduler.add_job(
         _purge_expired_oauth_flows, "interval", minutes=5, id="oauth_flow_reaper",
+        replace_existing=True,
+    )
+
+    # Self-healing: rebuilds any HNSW index left INVALID by an interrupted build.
+    _scheduler.add_job(
+        ensure_all_indexes, "interval", hours=6, id="hnsw_indexes",
         replace_existing=True,
     )
 

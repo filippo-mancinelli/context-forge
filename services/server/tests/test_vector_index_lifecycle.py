@@ -7,12 +7,17 @@ from src.org_settings import OrgSettings
 
 
 class FakeConn:
-    """Records every statement; ``fetch`` answers the pg_indexes lookup."""
+    """Records every statement; ``fetch`` answers the two catalog lookups.
 
-    def __init__(self, stale=None, fail_on=()):
+    ``valid`` maps an index name to the answers of the pg_index validity query,
+    consumed in order (the last one repeats): True, False, or None for "no row".
+    """
+
+    def __init__(self, stale=None, fail_on=(), valid=None):
         self.executed = []
         self.stale = stale or {}
         self.fail_on = fail_on
+        self.valid = {k: list(v) for k, v in (valid or {}).items()}
         self.closed = False
 
     async def execute(self, sql, *args):
@@ -20,7 +25,16 @@ class FakeConn:
         if any(token in sql for token in self.fail_on):
             raise RuntimeError("boom")
 
+    def _next_validity(self, name):
+        answers = self.valid.get(name)
+        if not answers:
+            return True
+        return answers.pop(0) if len(answers) > 1 else answers[0]
+
     async def fetch(self, sql, *args):
+        if "indisvalid" in sql:
+            answer = self._next_validity(args[0])
+            return [] if answer is None else [{"indisvalid": answer}]
         table = args[0]
         return [
             {"schemaname": "public", "indexname": name}
@@ -100,6 +114,48 @@ def test_drops_only_the_stale_dimension_of_the_same_org(monkeypatch):
     assert drops == [
         'DROP INDEX CONCURRENTLY IF EXISTS "public"."repo_chunks_emb_hnsw_org42_d768"'
     ]
+
+
+def test_an_invalid_leftover_is_dropped_before_the_index_is_rebuilt(monkeypatch):
+    name = "repo_chunks_emb_hnsw_org42_d1536"
+    conn = FakeConn(valid={name: [False, True]})
+    _patch_conn(monkeypatch, conn)
+
+    created = asyncio.run(vector_index.ensure_org_indexes(42, 1536))
+
+    drop = f"DROP INDEX CONCURRENTLY IF EXISTS {name}"
+    create = [s for s in conn.executed if s.startswith(f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name}")]
+    assert drop in conn.executed
+    assert conn.executed.index(drop) < conn.executed.index(create[0])
+    assert name in created
+
+
+def test_a_build_that_leaves_the_index_invalid_is_not_reported_as_created(monkeypatch):
+    name = "kb_chunks_emb_hnsw_org42_d1536"
+    conn = FakeConn(valid={name: [None, False]})
+    _patch_conn(monkeypatch, conn)
+
+    created = asyncio.run(vector_index.ensure_org_indexes(42, 1536))
+
+    assert name not in created
+    assert created == [
+        "repo_chunks_emb_hnsw_org42_d1536",
+        "web_chunks_emb_hnsw_org42_d1536",
+    ]
+    # Nothing to drop: the pre-check found no index at all.
+    assert f"DROP INDEX CONCURRENTLY IF EXISTS {name}" not in conn.executed
+
+
+def test_hnsw_indexes_valid_reports_one_flag_per_table(monkeypatch):
+    conn = FakeConn(valid={"kb_chunks_emb_hnsw_org42_d1536": [False]})
+    _patch_conn(monkeypatch, conn)
+
+    assert asyncio.run(vector_index.hnsw_indexes_valid(42, 1536)) == {
+        "repo_chunks_emb_hnsw_org42_d1536": True,
+        "kb_chunks_emb_hnsw_org42_d1536": False,
+        "web_chunks_emb_hnsw_org42_d1536": True,
+    }
+    assert conn.closed is True
 
 
 def test_a_failing_build_is_swallowed_and_the_others_still_run(monkeypatch):
