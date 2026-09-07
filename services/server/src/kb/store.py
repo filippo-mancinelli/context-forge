@@ -49,7 +49,7 @@ def _safe_filename(filename: str) -> str:
     return cleaned[:200]
 
 
-async def save_upload(org_id: int, filename: str, data: bytes) -> dict[str, Any]:
+async def save_upload(org_id: int, project_id: int, filename: str, data: bytes) -> dict[str, Any]:
     """Persist raw upload bytes to disk and create a ``pending`` document row.
 
     Returns the created document record (as a plain dict).
@@ -66,12 +66,13 @@ async def save_upload(org_id: int, filename: str, data: bytes) -> dict[str, Any]
         row = await conn.fetchrow(
             """
             INSERT INTO kb_documents
-                (org_id, title, filename, content_type, extension, size_bytes,
-                 sha256, status, metadata)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', '{}'::jsonb)
+                (org_id, project_id, title, filename, content_type, extension,
+                 size_bytes, sha256, status, metadata)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', '{}'::jsonb)
             RETURNING id
             """,
             org_id,
+            project_id,
             title,
             filename,
             _guess_content_type(ext),
@@ -124,16 +125,25 @@ async def process_document(doc_id: int) -> bool:
             UPDATE kb_documents
             SET status='processing', error_message=NULL
             WHERE id=$1 AND status IN ('pending', 'error')
-            RETURNING id, org_id, filename, stored_path, metadata
+            RETURNING id, org_id, project_id, filename, stored_path, metadata
             """,
             doc_id,
         )
     if row is None:
         return False  # already processing/ready, or gone
 
+    project_id = row["project_id"]
+    if project_id is None:
+        # Documents created before project scoping fall back to the org's
+        # default project so processing never leaves them unscoped.
+        from ..projects import get_default_project_id
+
+        project_id = await get_default_project_id(int(row["org_id"]))
+
     await _run_extraction(
         doc_id=int(row["id"]),
         org_id=int(row["org_id"]),
+        project_id=int(project_id),
         filename=row["filename"],
         stored_path=row["stored_path"],
         existing_meta=row["metadata"],
@@ -145,6 +155,7 @@ async def _run_extraction(
     *,
     doc_id: int,
     org_id: int,
+    project_id: int,
     filename: str,
     stored_path: Optional[str],
     existing_meta: Any,
@@ -189,7 +200,7 @@ async def _run_extraction(
         embeddings: list[list[float]] = []
         batch_size = 20
         for i in range(0, len(chunk_texts), batch_size):
-            embeddings.extend(await embed_batch(chunk_texts[i:i + batch_size]))
+            embeddings.extend(await embed_batch(chunk_texts[i:i + batch_size], org_id))
 
         base_meta = existing_meta if isinstance(existing_meta, dict) else {}
         if isinstance(existing_meta, str):
@@ -205,12 +216,13 @@ async def _run_extraction(
                 await conn.executemany(
                     """
                     INSERT INTO kb_chunks
-                        (org_id, document_id, chunk_index, content, metadata, embedding)
-                    VALUES ($1, $2, $3, $4, $5::jsonb, $6::vector)
+                        (org_id, project_id, document_id, chunk_index, content, metadata, embedding)
+                    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::vector)
                     """,
                     [
                         (
                             org_id,
+                            project_id,
                             doc_id,
                             idx,
                             chunk_texts[idx],
@@ -272,19 +284,23 @@ async def reset_stale_processing() -> None:
         )
 
 
-async def delete_document(org_id: int, doc_id: int) -> bool:
+async def delete_document(org_id: int, project_id: int, doc_id: int) -> bool:
     """Delete a document (row + chunks via cascade) and its file. Returns True if found."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT stored_path FROM kb_documents WHERE id=$1 AND org_id=$2",
+            "SELECT stored_path FROM kb_documents WHERE id=$1 AND org_id=$2 AND project_id=$3",
             doc_id,
             org_id,
+            project_id,
         )
         if row is None:
             return False
         await conn.execute(
-            "DELETE FROM kb_documents WHERE id=$1 AND org_id=$2", doc_id, org_id
+            "DELETE FROM kb_documents WHERE id=$1 AND org_id=$2 AND project_id=$3",
+            doc_id,
+            org_id,
+            project_id,
         )
 
     stored = row["stored_path"]
@@ -298,13 +314,14 @@ async def delete_document(org_id: int, doc_id: int) -> bool:
 
 async def search_documents(
     org_id: int,
+    project_id: int,
     query: str,
     limit: int = 10,
     document_ids: Optional[list[int]] = None,
 ) -> list[dict[str, Any]]:
-    """Search a tenant's knowledge-base chunks (hybrid vector + full-text)."""
+    """Search a project's knowledge-base chunks (hybrid vector + full-text)."""
     from ..search import search_kb_chunks
 
     return await search_kb_chunks(
-        org_id, query, document_ids=document_ids, limit=limit
+        org_id, query, document_ids=document_ids, limit=limit, project_id=project_id
     )

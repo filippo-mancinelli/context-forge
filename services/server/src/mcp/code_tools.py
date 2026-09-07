@@ -7,12 +7,14 @@ from pathlib import Path
 from typing import Optional
 
 from .server import mcp
+from .permissions import requires_permission
 from ..db import get_pool
 
 logger = logging.getLogger(__name__)
 
 
 @mcp.tool()
+@requires_permission("context-read")
 async def repo_references(
     symbol: str,
     repo: Optional[str] = None,
@@ -33,14 +35,15 @@ async def repo_references(
         content, and score
     """
     from ..search import search_repo_chunks
-    from .context import resolve_org_id
+    from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
+    project_id = await require_project_id()
     repos_list = [repo] if repo else None
 
     # Search with the symbol as both the semantic query and text query
     try:
-        results = await search_repo_chunks(org_id, symbol, repos=repos_list, limit=limit)
+        results = await search_repo_chunks(org_id, symbol, repos=repos_list, limit=limit, project_id=project_id)
     except Exception as e:
         return {"status": "error", "error": f"Search failed: {e}"}
 
@@ -70,6 +73,7 @@ async def repo_references(
 
 
 @mcp.tool()
+@requires_permission("context-read")
 async def code_explain(
     repo: str,
     file_path: str,
@@ -93,15 +97,25 @@ async def code_explain(
     """
     from ..indexer.git_manager import get_repo_local_path
     from ..org_config import get_org_config
-    from .context import resolve_org_id
+    from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
+    project_id = await require_project_id()
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        in_project = await conn.fetchval(
+            "SELECT 1 FROM repos WHERE org_id=$1 AND project_id=$2 AND name=$3",
+            org_id, project_id, repo,
+        )
+    if not in_project:
+        return {"status": "error", "error": f"Repository '{repo}' not found"}
 
     # Read the file
     cfg = await get_org_config(org_id)
     repo_cfg = next((r for r in cfg.repos if r.name == repo), None)
     if not repo_cfg:
-        return {"status": "error", "error": f"Repository '{repo}' not found"}
+        return {"status": "error", "error": f"Repository '{repo}' not found in runtime settings"}
 
     repo_path = get_repo_local_path(repo_cfg, org_id)
     full_path = Path(repo_path) / file_path.lstrip("/")
@@ -141,6 +155,7 @@ async def code_explain(
 
 
 @mcp.tool()
+@requires_permission("context-write")
 async def repo_annotate(
     repo: str,
     file_path: str,
@@ -150,7 +165,7 @@ async def repo_annotate(
 ) -> dict:
     """Add a persistent annotation/note on a file or code chunk.
 
-    Annotations are visible to all members of the organization and persist
+    Annotations are visible to everyone using this project and persist
     across re-indexing. Use this to document design decisions, flag technical
     debt, or leave review notes that agents and teammates can discover.
 
@@ -164,24 +179,25 @@ async def repo_annotate(
     Returns:
         dict with the created annotation
     """
-    from .context import resolve_org_id
+    from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
+    project_id = await require_project_id()
     pool = await get_pool()
 
     async with pool.acquire() as conn:
-        # Verify repo exists in this org
+        # Verify repo exists in this project
         exists = await conn.fetchval(
-            "SELECT 1 FROM repos WHERE org_id=$1 AND name=$2", org_id, repo
+            "SELECT 1 FROM repos WHERE org_id=$1 AND project_id=$2 AND name=$3", org_id, project_id, repo
         )
         if not exists:
             return {"status": "error", "error": f"Repository '{repo}' not found"}
 
         row = await conn.fetchrow(
-            """INSERT INTO chunk_annotations (org_id, repo_name, file_path, start_line, end_line, note)
-               VALUES ($1, $2, $3, $4, $5, $6)
+            """INSERT INTO chunk_annotations (org_id, project_id, repo_name, file_path, start_line, end_line, note)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)
                RETURNING id, created_at""",
-            org_id, repo, file_path, start_line, end_line, note,
+            org_id, project_id, repo, file_path, start_line, end_line, note,
         )
 
     return {
@@ -199,6 +215,7 @@ async def repo_annotate(
 
 
 @mcp.tool()
+@requires_permission("context-read")
 async def repo_annotations(
     repo: str,
     file_path: Optional[str] = None,
@@ -214,23 +231,24 @@ async def repo_annotations(
     Returns:
         dict with list of annotations
     """
-    from .context import resolve_org_id
+    from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
+    project_id = await require_project_id()
     pool = await get_pool()
 
     query = """SELECT id, repo_name, file_path, start_line, end_line, note, created_at
                FROM chunk_annotations
-               WHERE org_id=$1 AND repo_name=$2"""
-    params: list = [org_id, repo]
+               WHERE org_id=$1 AND project_id=$2 AND repo_name=$3"""
+    params: list = [org_id, project_id, repo]
 
     if file_path:
-        query += " AND file_path=$3"
+        query += " AND file_path=$4"
         params.append(file_path)
-        query += " ORDER BY start_line NULLS LAST, created_at DESC LIMIT $4"
+        query += " ORDER BY start_line NULLS LAST, created_at DESC LIMIT $5"
         params.append(limit)
     else:
-        query += " ORDER BY created_at DESC LIMIT $3"
+        query += " ORDER BY created_at DESC LIMIT $4"
         params.append(limit)
 
     async with pool.acquire() as conn:
@@ -253,10 +271,11 @@ async def repo_annotations(
 
 async def _explain_with_llm(code: str, language: str) -> str:
     """Send code to the configured LLM for explanation."""
-    from ..config import get_settings
+    from ..org_settings import get_org_settings
+    from .context import resolve_org_id
 
-    settings = get_settings()
-    provider = settings.llm_provider or "openai"
+    s = await get_org_settings(await resolve_org_id())
+    provider = s.llm_provider or "openai"
 
     prompt = (
         f"Explain the following {language} code concisely. "
@@ -271,11 +290,11 @@ async def _explain_with_llm(code: str, language: str) -> str:
                 resp = await client.post(
                     "https://api.openai.com/v1/chat/completions",
                     headers={
-                        "Authorization": f"Bearer {settings.openai_api_key}",
+                        "Authorization": f"Bearer {s.openai_api_key}",
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": settings.llm_model or "gpt-4o-mini",
+                        "model": s.llm_model or "gpt-4o-mini",
                         "messages": [{"role": "user", "content": prompt}],
                         "max_tokens": 400,
                         "temperature": 0.3,
@@ -293,12 +312,12 @@ async def _explain_with_llm(code: str, language: str) -> str:
                 resp = await client.post(
                     "https://api.anthropic.com/v1/messages",
                     headers={
-                        "x-api-key": settings.anthropic_api_key,
+                        "x-api-key": s.anthropic_api_key,
                         "anthropic-version": "2023-06-01",
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": settings.llm_model or "claude-3-haiku-20240307",
+                        "model": s.llm_model or "claude-3-haiku-20240307",
                         "max_tokens": 400,
                         "messages": [{"role": "user", "content": prompt}],
                     },
@@ -315,11 +334,11 @@ async def _explain_with_llm(code: str, language: str) -> str:
                 resp = await client.post(
                     "https://api.deepseek.com/v1/chat/completions",
                     headers={
-                        "Authorization": f"Bearer {settings.deepseek_api_key}",
+                        "Authorization": f"Bearer {s.deepseek_api_key}",
                         "Content-Type": "application/json",
                     },
                     json={
-                        "model": settings.llm_model or "deepseek-chat",
+                        "model": s.llm_model or "deepseek-chat",
                         "messages": [{"role": "user", "content": prompt}],
                         "max_tokens": 400,
                         "temperature": 0.3,

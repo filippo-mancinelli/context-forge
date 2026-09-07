@@ -79,3 +79,81 @@ def require_role(minimum: str):
         return org
 
     return _checker
+
+
+@dataclass
+class ActiveProject:
+    """The project the request operates on, within its owning organization.
+
+    Exposes the same org-level attributes as ``ActiveOrg`` (``org_id``,
+    ``role``) so content routes can migrate by swapping the dependency;
+    ``namespace`` is the memory namespace of the PROJECT. ``role`` is the
+    caller's effective role on the project (org role for org admin/owner,
+    project membership role otherwise).
+    """
+
+    org_id: int
+    project_id: int
+    role: str
+    namespace: str
+    name: str
+    org_name: str
+
+
+async def get_active_project(
+    org: ActiveOrg = Depends(get_active_org),
+    user_id: int = Depends(get_current_user_id),
+    x_project_id: Optional[int] = Header(default=None, alias="X-Project-Id"),
+) -> ActiveProject:
+    """Resolve the project the request operates on.
+
+    Uses the ``X-Project-Id`` header when provided (verifying that the project
+    belongs to the active organization, 404 otherwise), falling back to the
+    organization's default (oldest) project. In both cases the caller must have
+    access to the project: org admin/owner always do, other members need an
+    explicit ``project_members`` row. ``role`` is the effective project role.
+    """
+    from .. import projects as projects_mod
+
+    if x_project_id is not None:
+        project = await projects_mod.get_project(x_project_id)
+        if project is None or project["org_id"] != org.org_id:
+            raise HTTPException(status_code=404, detail="Project not found")
+    else:
+        default_id = await projects_mod.get_default_project_id(org.org_id)
+        project = (
+            await projects_mod.get_project(default_id) if default_id is not None else None
+        )
+        if project is None:
+            raise HTTPException(status_code=500, detail="Organization has no projects")
+
+    effective_role = await projects_mod.resolve_project_access(
+        org.org_id, user_id, int(project["id"])
+    )
+    if effective_role is None:
+        raise HTTPException(status_code=403, detail="Not a member of this project")
+
+    return ActiveProject(
+        org_id=org.org_id,
+        project_id=int(project["id"]),
+        role=effective_role,
+        namespace=project["memory_namespace"],
+        name=project["name"],
+        org_name=org.name,
+    )
+
+
+def require_project_role(minimum: str):
+    """Dependency factory: active project plus a minimum role in its organization."""
+
+    async def _checker(
+        project: ActiveProject = Depends(get_active_project),
+    ) -> ActiveProject:
+        if not tenancy.role_at_least(project.role, minimum):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Requires '{minimum}' role or higher in this organization",
+            )
+        return project
+
+    return _checker

@@ -9,17 +9,18 @@ from pydantic import BaseModel
 from ...db import get_pool
 from ...indexer.indexer import sync_repos_config
 from ...org_config import get_org_config, persist_org_config
-from ..deps import ActiveOrg, get_active_org, require_role
+from ..deps import ActiveProject, get_active_project, require_project_role
 
 router = APIRouter(prefix="/repos", tags=["repos"])
 
 
-async def _assert_repo_in_org(repo_name: str, org_id: int) -> None:
-    """Raise 404 if the repo does not belong to the active organization."""
+async def _assert_repo_in_project(repo_name: str, org_id: int, project_id: int) -> None:
+    """Raise 404 if the repo does not belong to the active project."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         exists = await conn.fetchval(
-            "SELECT 1 FROM repos WHERE org_id = $1 AND name = $2", org_id, repo_name
+            "SELECT 1 FROM repos WHERE org_id = $1 AND project_id = $2 AND name = $3",
+            org_id, project_id, repo_name,
         )
     if not exists:
         raise HTTPException(status_code=404, detail=f"Repo '{repo_name}' not found")
@@ -45,15 +46,16 @@ class RepoSearchRequest(BaseModel):
 
 
 @router.get("", response_model=list[RepoOut])
-async def list_repos(org: ActiveOrg = Depends(get_active_org)):
-    """List repos visible to the active organization and their indexing status."""
+async def list_repos(org: ActiveProject = Depends(get_active_project)):
+    """List repos visible to the active project and their indexing status."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT name, type, url, path, branch, language, status, "
             "last_indexed_at, total_chunks, error_message FROM repos "
-            "WHERE org_id = $1 ORDER BY name",
+            "WHERE org_id = $1 AND project_id = $2 ORDER BY name",
             org.org_id,
+            org.project_id,
         )
     result = []
     for r in rows:
@@ -65,13 +67,13 @@ async def list_repos(org: ActiveOrg = Depends(get_active_org)):
 
 
 @router.post("/search")
-async def search_repos(req: RepoSearchRequest, org: ActiveOrg = Depends(get_active_org)):
-    """Search indexed repository chunks (hybrid vector + full-text, org-scoped)."""
+async def search_repos(req: RepoSearchRequest, org: ActiveProject = Depends(get_active_project)):
+    """Search indexed repository chunks (hybrid vector + full-text, project-scoped)."""
     from ...search import search_repo_chunks
 
     try:
         results = await search_repo_chunks(
-            org.org_id, req.query, repos=req.repos, limit=req.limit
+            org.org_id, req.query, repos=req.repos, limit=req.limit, project_id=org.project_id
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {e}")
@@ -86,7 +88,7 @@ class RepoSymbolSearchRequest(BaseModel):
 
 
 @router.post("/symbols")
-async def search_symbols(req: RepoSymbolSearchRequest, org: ActiveOrg = Depends(get_active_org)):
+async def search_symbols(req: RepoSymbolSearchRequest, org: ActiveProject = Depends(get_active_project)):
     """Look up function/class/method/type definitions by name (lexical, not semantic)."""
     from ...search import search_repo_symbols
 
@@ -94,7 +96,7 @@ async def search_symbols(req: RepoSymbolSearchRequest, org: ActiveOrg = Depends(
         raise HTTPException(status_code=400, detail="Query must not be empty")
     try:
         results = await search_repo_symbols(
-            org.org_id, req.query.strip(), repos=req.repos, limit=req.limit
+            org.org_id, req.query.strip(), repos=req.repos, limit=req.limit, project_id=org.project_id
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Symbol search failed: {e}")
@@ -103,8 +105,8 @@ async def search_symbols(req: RepoSymbolSearchRequest, org: ActiveOrg = Depends(
 
 
 @router.get("/relationships")
-async def list_relationships(repo: Optional[str] = None, org: ActiveOrg = Depends(get_active_org)):
-    """Get semantic relationships between repositories (org-scoped)."""
+async def list_relationships(repo: Optional[str] = None, org: ActiveProject = Depends(get_active_project)):
+    """Get semantic relationships between repositories (project-scoped)."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -112,7 +114,7 @@ async def list_relationships(repo: Optional[str] = None, org: ActiveOrg = Depend
             WITH centroids AS (
                 SELECT repo_name, avg(embedding) AS centroid, count(*) AS chunk_count
                 FROM repo_chunks
-                WHERE org_id = $2
+                WHERE org_id = $2 AND project_id = $3
                 GROUP BY repo_name
             )
             SELECT
@@ -130,6 +132,7 @@ async def list_relationships(repo: Optional[str] = None, org: ActiveOrg = Depend
             """,
             repo,
             org.org_id,
+            org.project_id,
         )
     return {"relationships": [dict(r) for r in rows], "count": len(rows)}
 
@@ -138,22 +141,23 @@ async def list_relationships(repo: Optional[str] = None, org: ActiveOrg = Depend
 async def trigger_index(
     repo_name: str,
     background_tasks: BackgroundTasks,
-    org: ActiveOrg = Depends(require_role("member")),
+    org: ActiveProject = Depends(require_project_role("member")),
 ):
     """Queue a repo for re-indexing."""
-    await _assert_repo_in_org(repo_name, org.org_id)
+    await _assert_repo_in_project(repo_name, org.org_id, org.project_id)
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            "INSERT INTO index_requests (org_id, repo_name) VALUES ($1, $2)",
+            "INSERT INTO index_requests (org_id, project_id, repo_name) VALUES ($1, $2, $3)",
             org.org_id,
+            org.project_id,
             repo_name,
         )
     return {"status": "queued", "repo": repo_name}
 
 
 @router.post("/{repo_name}/cancel-index")
-async def cancel_index(repo_name: str, org: ActiveOrg = Depends(require_role("member"))):
+async def cancel_index(repo_name: str, org: ActiveProject = Depends(require_project_role("member"))):
     """Stop a running index run (or clear a stale 'indexing' status).
 
     Cancels the in-flight task if one exists, drops queued requests for the
@@ -161,16 +165,17 @@ async def cancel_index(repo_name: str, org: ActiveOrg = Depends(require_role("me
     """
     from ...indexer.indexer import cancel_index_task
 
-    await _assert_repo_in_org(repo_name, org.org_id)
+    await _assert_repo_in_project(repo_name, org.org_id, org.project_id)
     cancelled = cancel_index_task(org.org_id, repo_name)
 
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE index_requests SET processed_at=NOW() "
-            "WHERE org_id=$1 AND repo_name=$2 AND processed_at IS NULL",
+            "WHERE org_id=$1 AND repo_name=$2 AND processed_at IS NULL AND project_id=$3",
             org.org_id,
             repo_name,
+            org.project_id,
         )
         await conn.execute(
             "UPDATE repos SET status = CASE WHEN total_chunks > 0 THEN 'indexed' ELSE 'pending' END, "
@@ -182,24 +187,26 @@ async def cancel_index(repo_name: str, org: ActiveOrg = Depends(require_role("me
 
 
 @router.post("/index-all")
-async def trigger_index_all(org: ActiveOrg = Depends(require_role("member"))):
-    """Queue all of the active organization's repos for re-indexing."""
+async def trigger_index_all(org: ActiveProject = Depends(require_project_role("member"))):
+    """Queue all of the active project's repos for re-indexing."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            "INSERT INTO index_requests (org_id, repo_name) VALUES ($1, NULL)", org.org_id
+            "INSERT INTO index_requests (org_id, project_id, repo_name) VALUES ($1, $2, NULL)",
+            org.org_id,
+            org.project_id,
         )
     return {"status": "queued", "message": "All repos queued for indexing"}
 
 
 @router.get("/{repo_name}/files")
-async def list_files(repo_name: str, path: str = "", org: ActiveOrg = Depends(get_active_org)):
+async def list_files(repo_name: str, path: str = "", org: ActiveProject = Depends(get_active_project)):
     """List files in a repo directory."""
     import os
     from pathlib import Path
     from ...indexer.git_manager import get_repo_local_path
 
-    await _assert_repo_in_org(repo_name, org.org_id)
+    await _assert_repo_in_project(repo_name, org.org_id, org.project_id)
     cfg = await get_org_config(org.org_id)
     repo_cfg = next((r for r in cfg.repos if r.name == repo_name), None)
     if not repo_cfg:
@@ -230,9 +237,9 @@ async def list_files(repo_name: str, path: str = "", org: ActiveOrg = Depends(ge
 
 
 @router.get("/{repo_name}/stats")
-async def repo_stats(repo_name: str, org: ActiveOrg = Depends(get_active_org)):
+async def repo_stats(repo_name: str, org: ActiveProject = Depends(get_active_project)):
     """Get repository-level analytics for drill-down view."""
-    await _assert_repo_in_org(repo_name, org.org_id)
+    await _assert_repo_in_project(repo_name, org.org_id, org.project_id)
     pool = await get_pool()
     async with pool.acquire() as conn:
         repo_row = await conn.fetchrow(
@@ -301,38 +308,32 @@ class CreateRepoRequest(BaseModel):
 
 
 @router.post("")
-async def create_repo(req: CreateRepoRequest, org: ActiveOrg = Depends(require_role("member"))):
-    """Add a new repository to the active organization."""
-    from ...config import RepoConfig
+async def create_repo(req: CreateRepoRequest, org: ActiveProject = Depends(require_project_role("member"))):
+    """Add a new repository to the active organization, bound to the active project."""
+    from ...repo_registry import RepoAlreadyExistsError, add_repo
 
-    cfg = await get_org_config(org.org_id)
-
-    # Repo names are unique within an organization (but reusable across orgs).
-    if any(r.name == req.name for r in cfg.repos):
-        raise HTTPException(status_code=400, detail=f"Repository '{req.name}' already exists")
-
-    cfg.repos.append(
-        RepoConfig(
+    try:
+        repo = await add_repo(
+            org_id=org.org_id,
+            project_id=org.project_id,
             name=req.name,
             type=req.type,
             url=req.url,
             path=req.path,
             branch=req.branch,
-            language=req.language or "auto",
+            language=req.language,
         )
-    )
-    await persist_org_config(org.org_id, cfg)
-    await sync_repos_config(org.org_id)
-
-    return {"status": "ok", "repo": {"name": req.name, "type": req.type}}
+    except RepoAlreadyExistsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "ok", "repo": {"name": repo["name"], "type": repo["type"]}}
 
 
 @router.put("/{repo_name}")
-async def update_repo(repo_name: str, req: CreateRepoRequest, org: ActiveOrg = Depends(require_role("member"))):
+async def update_repo(repo_name: str, req: CreateRepoRequest, org: ActiveProject = Depends(require_project_role("member"))):
     """Update an existing repository configuration."""
     from ...config import RepoConfig
 
-    await _assert_repo_in_org(repo_name, org.org_id)
+    await _assert_repo_in_project(repo_name, org.org_id, org.project_id)
     cfg = await get_org_config(org.org_id)
 
     repo_idx = next((i for i, r in enumerate(cfg.repos) if r.name == repo_name), None)
@@ -365,17 +366,28 @@ async def update_repo(repo_name: str, req: CreateRepoRequest, org: ActiveOrg = D
             )
     await sync_repos_config(org.org_id)
 
+    if req.name != repo_name:
+        # sync_repos_config creates a fresh row for the new name (no conflict
+        # to preserve the old project_id), so re-bind it to the active project
+        # the same way create_repo does.
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE repos SET project_id=$1 WHERE org_id=$2 AND name=$3",
+                org.project_id, org.org_id, req.name,
+            )
+
     return {"status": "ok", "repo": {"name": req.name, "type": req.type}}
 
 
 @router.delete("/{repo_name}")
-async def delete_repo(repo_name: str, org: ActiveOrg = Depends(require_role("member"))):
+async def delete_repo(repo_name: str, org: ActiveProject = Depends(require_project_role("member"))):
     """Remove a repository from the active organization's configuration."""
     from ...indexer.git_manager import get_repo_local_path
     import shutil
     from pathlib import Path
 
-    await _assert_repo_in_org(repo_name, org.org_id)
+    await _assert_repo_in_project(repo_name, org.org_id, org.project_id)
     cfg = await get_org_config(org.org_id)
 
     repo_idx = next((i for i, r in enumerate(cfg.repos) if r.name == repo_name), None)

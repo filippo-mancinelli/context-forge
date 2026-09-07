@@ -12,6 +12,7 @@ import {
 import {
   Badge,
   Button,
+  Card,
   Input,
   Select,
   Table,
@@ -150,16 +151,13 @@ function TableDetailPanel({
         />
       ) : (
         detail.description && (
-          <p
-            style={{ borderLeft: '2px solid var(--accent)' }}
-            className="text-sm text-text pl-3 py-1 bg-surface"
-          >
+          <p className="border-l-2 border-accent text-sm text-text pl-3 py-1 bg-surface">
             {detail.description}
           </p>
         )
       )}
 
-      <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto">
+      <Card className="overflow-x-auto">
         <Table>
           <Thead>
             <Tr>
@@ -210,7 +208,7 @@ function TableDetailPanel({
             ))}
           </Tbody>
         </Table>
-      </div>
+      </Card>
 
       {detail.indexes.length > 0 && (
         <div className="text-xs text-muted">
@@ -268,10 +266,7 @@ function SchemaTab({ connectionId }: { connectionId: number }) {
         </div>
       )}
       <div className="flex flex-col lg:flex-row gap-4">
-        <div
-          style={{ border: '1px solid var(--border)' }}
-          className="lg:w-72 flex-shrink-0 max-h-[32rem] overflow-y-auto"
-        >
+        <div className="border border-border lg:w-72 flex-shrink-0 max-h-[32rem] overflow-y-auto">
           {overview.tables.map((t) => (
             <button
               key={t.name}
@@ -367,7 +362,7 @@ function ConsoleTab({ connectionId }: { connectionId: number }) {
       </div>
       {error && <p className="text-sm text-danger break-words">{error}</p>}
       {result && result.columns.length > 0 && (
-        <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto max-h-[28rem] overflow-y-auto">
+        <Card className="overflow-x-auto max-h-[28rem] overflow-y-auto">
           <Table>
             <Thead>
               <Tr>
@@ -392,7 +387,7 @@ function ConsoleTab({ connectionId }: { connectionId: number }) {
               ))}
             </Tbody>
           </Table>
-        </div>
+        </Card>
       )}
     </div>
   )
@@ -417,7 +412,7 @@ function LogTab({ connectionId }: { connectionId: number }) {
   if (log.length === 0) return <p className="text-sm text-muted">No queries executed yet.</p>
 
   return (
-    <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto">
+    <Card className="overflow-x-auto">
       <Table>
         <Thead>
           <Tr>
@@ -461,7 +456,7 @@ function LogTab({ connectionId }: { connectionId: number }) {
           ))}
         </Tbody>
       </Table>
-    </div>
+    </Card>
   )
 }
 

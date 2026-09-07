@@ -24,7 +24,7 @@ import {
   type ChatToolCall,
   type StoredChatTurn,
 } from '../lib/api'
-import { Button, Dialog, DialogFooter, Spinner, useConfirm, useToast } from '../components/ui'
+import { Banner, Button, Dialog, DialogFooter, Spinner, useConfirm, useToast } from '../components/ui'
 import {
   AssistantBody,
   PendingToolCard,
@@ -234,7 +234,7 @@ function SessionList({
             key={s.id}
             style={active ? { borderLeft: '2px solid var(--accent)' } : { borderLeft: '2px solid transparent' }}
             className={`group flex items-center gap-1 pr-1.5 ${
-              active ? 'bg-[#eaf4fb]' : 'hover:bg-[color:var(--code-bg)]'
+              active ? 'bg-primary-light' : 'hover:bg-[color:var(--code-bg)]'
             }`}
           >
             <button
@@ -588,8 +588,7 @@ export default function Chat() {
       {/* Main chat column */}
       <div className="flex flex-col flex-1 min-w-0">
         <div
-          style={{ borderBottom: '1px solid var(--border)' }}
-          className="px-4 sm:px-8 py-2.5 flex items-center justify-between gap-2 flex-shrink-0"
+          className="border-b border-border px-4 sm:px-8 py-2.5 flex items-center justify-between gap-2 flex-shrink-0"
         >
           <h1 className="truncate" style={{ fontSize: '1rem', margin: 0 }}>
             Agent Chat
@@ -652,8 +651,7 @@ export default function Chat() {
                         key={s}
                         onClick={() => void send(s)}
                         disabled={streaming || noKeys}
-                        style={{ border: '1px solid var(--border)' }}
-                        className="text-xs text-muted hover:text-accent hover:border-[var(--accent)] rounded-full px-3 py-1.5 transition-colors disabled:opacity-50"
+                        className="border border-border text-xs text-muted hover:text-accent hover:border-[var(--accent)] rounded-full px-3 py-1.5 transition-colors disabled:opacity-50"
                       >
                         {s}
                       </button>
@@ -708,17 +706,14 @@ export default function Chat() {
                         <SourceReferences sources={sources} onOpen={setActiveSource} />
                       )}
                       {turn.error && (
-                        <div
-                          style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
-                          className="text-sm p-3 bg-[#fef2f2] rounded flex items-start justify-between gap-3"
-                        >
+                        <Banner variant="danger" className="flex items-start justify-between gap-3">
                           <span className="break-words min-w-0">{turn.error}</span>
                           {canRetry && idx === turns.length - 1 && (
                             <button onClick={retry} className="underline flex-shrink-0 text-sm">
                               Retry
                             </button>
                           )}
-                        </div>
+                        </Banner>
                       )}
                       {!turn.streaming && (turn.content || turn.model) && (
                         <div className="flex items-center gap-2 text-[11px] text-muted px-0.5">
@@ -739,8 +734,7 @@ export default function Chat() {
           {showJump && turns.length > 0 && (
             <button
               onClick={jumpToBottom}
-              style={{ border: '1px solid var(--border)' }}
-              className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-bg shadow-md rounded-full p-2 text-muted hover:text-text transition-colors"
+              className="border border-border absolute bottom-4 left-1/2 -translate-x-1/2 bg-bg shadow-md rounded-full p-2 text-muted hover:text-text transition-colors"
               aria-label="Scroll to bottom"
             >
               <ArrowDown className="w-4 h-4" />
@@ -751,10 +745,7 @@ export default function Chat() {
         <div className="px-4 sm:px-8 pb-4 pt-2 flex-shrink-0">
           <form onSubmit={onSubmit} className="page-content mx-auto">
             {noKeys ? (
-              <div
-                style={{ border: '1px solid var(--border)' }}
-                className="rounded bg-surface px-3 py-3 text-sm text-muted"
-              >
+              <div className="border border-border rounded bg-surface px-3 py-3 text-sm text-muted">
                 No LLM API key configured. Add an OpenAI, Anthropic or DeepSeek key in{' '}
                 <Link to="/settings" className="text-accent underline">
                   Settings → LLM
@@ -762,10 +753,7 @@ export default function Chat() {
                 to use the agent chat.
               </div>
             ) : (
-              <div
-                style={{ border: '1px solid var(--border)' }}
-                className="rounded bg-bg focus-within:border-[var(--accent)] transition-colors"
-              >
+              <div className="border border-border rounded bg-bg focus-within:border-[var(--accent)] transition-colors">
                 <textarea
                   ref={textareaRef}
                   rows={1}
@@ -798,8 +786,7 @@ export default function Chat() {
                       <button
                         type="button"
                         onClick={stop}
-                        style={{ border: '1px solid var(--border)' }}
-                        className="rounded-full p-2 text-text hover:bg-surface transition-colors"
+                        className="border border-border rounded-full p-2 text-text hover:bg-surface transition-colors"
                         title="Stop generating"
                         aria-label="Stop generating"
                       >
@@ -826,14 +813,8 @@ export default function Chat() {
 
       {/* History panel — slim, collapsible, desktop only */}
       {historyOpen && (
-        <aside
-          style={{ borderLeft: '1px solid var(--border)', width: '208px' }}
-          className="hidden md:flex flex-col flex-shrink-0 bg-surface"
-        >
-          <div
-            style={{ borderBottom: '1px solid var(--border)' }}
-            className="px-3 py-2.5 flex items-center justify-between"
-          >
+        <aside className="border-l border-border w-[208px] hidden md:flex flex-col flex-shrink-0 bg-surface">
+          <div className="border-b border-border px-3 py-2.5 flex items-center justify-between">
             <span className="text-xs font-medium text-muted uppercase tracking-wider">
               History
             </span>
@@ -863,14 +844,8 @@ export default function Chat() {
             onClick={() => setHistoryDrawer(false)}
             aria-hidden="true"
           />
-          <div
-            style={{ borderLeft: '1px solid var(--border)', width: '260px' }}
-            className="fixed top-0 right-0 h-full bg-surface z-50 flex flex-col md:hidden"
-          >
-            <div
-              style={{ borderBottom: '1px solid var(--border)' }}
-              className="px-3 py-3 flex items-center justify-between"
-            >
+          <div className="border-l border-border w-[260px] fixed top-0 right-0 h-full bg-surface z-50 flex flex-col md:hidden">
+            <div className="border-b border-border px-3 py-3 flex items-center justify-between">
               <span className="text-xs font-medium text-muted uppercase tracking-wider">
                 History
               </span>
@@ -912,7 +887,7 @@ export default function Chat() {
             Creating link…
           </div>
         ) : shareError ? (
-          <p className="text-sm" style={{ color: 'var(--danger)' }}>
+          <p className="text-sm text-danger">
             {shareError}
           </p>
         ) : shareUrl ? (

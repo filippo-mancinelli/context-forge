@@ -121,58 +121,74 @@ async def webhook_index(
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT org_id, name, url FROM repos WHERE type IN ('github', 'gitlab')"
+            "SELECT org_id, project_id, name, url FROM repos WHERE type IN ('github', 'gitlab')"
         )
         matches = [
-            (r["org_id"], r["name"])
+            (r["org_id"], r["project_id"], r["name"])
             for r in rows
             if (r["url"] and _normalize_git_url(r["url"]) in normalized_urls)
             or r["name"] in raw_names
         ]
-        for org_id, name in matches:
+        for org_id, project_id, name in matches:
             await conn.execute(
-                "INSERT INTO index_requests (org_id, repo_name) VALUES ($1, $2)", org_id, name
+                "INSERT INTO index_requests (org_id, project_id, repo_name) VALUES ($1, $2, $3)",
+                org_id, project_id, name,
             )
 
     if matches:
         logger.info("Webhook queued incremental index for %d repo(s): %s",
-                    len(matches), ", ".join(m[1] for m in matches))
+                    len(matches), ", ".join(m[2] for m in matches))
 
     # ── Auto-memory from commit messages ──────────────────────────────
     # Extract commits from the push payload and create memories for any
     # Conventional Commits messages so agents discover recent changes.
+    # Memories are scoped to the memory_namespace of each matched repo's own
+    # project — never to the global default namespace. If a match's project
+    # namespace can't be resolved, that match is skipped rather than falling
+    # back to a shared namespace.
     auto_memories = 0
     try:
         commits = payload.get("commits") or []
-        if isinstance(commits, list) and commits:
-            from ....mcp.memory import _get_memory
-            from ....config import get_forge_config
-            mem = _get_memory()
-            cfg = get_forge_config()
-            uid = cfg.memory.user_id
+        if isinstance(commits, list) and commits and matches:
+            from ...mcp.memory import _get_memory
+
+            project_ids = {project_id for _, project_id, _ in matches}
+            async with pool.acquire() as conn:
+                ns_rows = await conn.fetch(
+                    "SELECT id, memory_namespace FROM projects WHERE id = ANY($1)",
+                    list(project_ids),
+                )
+            namespaces = {r["id"]: r["memory_namespace"] for r in ns_rows}
+
+            # Only auto-memorize Conventional Commits
+            conv_prefixes = ("feat", "fix", "docs", "style", "refactor",
+                             "perf", "test", "build", "ci", "chore", "revert")
+            parsed_commits = []
             for commit in commits:
                 if not isinstance(commit, dict):
                     continue
                 msg = (commit.get("message") or "").strip()
                 if not msg:
                     continue
-                # Only auto-memorize Conventional Commits
-                conv_prefixes = ("feat", "fix", "docs", "style", "refactor",
-                                 "perf", "test", "build", "ci", "chore", "revert")
                 first_word = msg.split(":")[0].split("(")[0].strip().lower()
                 if first_word not in conv_prefixes:
                     continue
                 # Truncate long messages
                 short = msg[:300]
-                repo_name = commit.get("repo", "")
                 author = (commit.get("author") or {}).get("name", "")
-                meta = {"source": "webhook", "type": "commit"}
-                if repo_name:
-                    meta["repo"] = repo_name
-                if author:
-                    meta["author"] = author
-                mem.add(f"COMMIT [{repo_name}]: {short}", user_id=uid, metadata=meta)
-                auto_memories += 1
+                parsed_commits.append((short, author))
+
+            for _org_id, project_id, repo_name in matches:
+                ns = namespaces.get(project_id)
+                if not ns:
+                    continue
+                mem = await _get_memory(_org_id)
+                for short, author in parsed_commits:
+                    meta = {"source": "webhook", "type": "commit", "repo": repo_name}
+                    if author:
+                        meta["author"] = author
+                    mem.add(f"COMMIT [{repo_name}]: {short}", user_id=ns, metadata=meta)
+                    auto_memories += 1
         if auto_memories:
             logger.info("Webhook auto-memorized %d commit(s)", auto_memories)
     except Exception:
@@ -181,6 +197,6 @@ async def webhook_index(
 
     return {
         "status": "queued" if matches else "no_match",
-        "repos": [m[1] for m in matches],
+        "repos": [m[2] for m in matches],
         "count": len(matches),
     }

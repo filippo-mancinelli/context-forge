@@ -12,6 +12,8 @@ import json
 
 import openai
 
+from src.mcp.context import get_current_namespace
+from src.org_settings import OrgSettings
 from src.telegram import capture_agent
 
 
@@ -71,10 +73,15 @@ def _tool_call_message(name, arguments: dict, call_id: str = "call_1") -> _FakeM
 
 
 def _patch_common(monkeypatch, *, namespace="org_acme", org_id=1, memory_add=None, memory_search=None):
+    async def _fake_get_org_settings(resolved_org_id):
+        assert resolved_org_id == org_id
+        return OrgSettings()
+
+    monkeypatch.setattr(capture_agent, "get_org_settings", _fake_get_org_settings)
     monkeypatch.setattr(
         capture_agent,
-        "_resolve_llm",
-        lambda: {"family": "openai", "model": "gpt-4o-mini", "api_key": "TOKEN"},
+        "_llm_family",
+        lambda s: {"family": "openai", "model": "gpt-4o-mini", "api_key": "TOKEN"},
     )
 
     async def _fake_get_namespace(resolved_org_id):
@@ -103,11 +110,13 @@ def test_run_capture_calls_memory_add_with_expected_metadata(monkeypatch):
 
     add_calls = []
 
-    async def _fake_memory_add(content, metadata=None, user_id=None):
-        add_calls.append({"content": content, "metadata": metadata, "user_id": user_id})
+    async def _fake_memory_add(content, metadata=None):
+        add_calls.append(
+            {"content": content, "metadata": metadata, "namespace": get_current_namespace()}
+        )
         return {"status": "ok", "memory": {"results": [{"id": "mem-123"}]}}
 
-    async def _fake_memory_search(query, limit=10, user_id=None):
+    async def _fake_memory_search(query, limit=10):
         raise AssertionError("memory_search should not be called in this scenario")
 
     _patch_common(monkeypatch, memory_add=_fake_memory_add, memory_search=_fake_memory_search)
@@ -122,7 +131,9 @@ def test_run_capture_calls_memory_add_with_expected_metadata(monkeypatch):
     assert len(add_calls) == 1
     call = add_calls[0]
     assert call["content"] == "Acme asked to move the deadline to Friday."
-    assert call["user_id"] == "org_acme"
+    # memory_add reads its namespace from the request-scoped context, not from
+    # a parameter — assert run_capture set it before invoking the tool.
+    assert call["namespace"] == "org_acme"
     assert call["metadata"] == {
         "source": "telegram",
         "client": "Acme",
@@ -155,12 +166,14 @@ def test_run_capture_searches_memory_before_adding(monkeypatch):
     search_calls = []
     add_calls = []
 
-    async def _fake_memory_search(query, limit=10, user_id=None):
-        search_calls.append({"query": query, "user_id": user_id})
+    async def _fake_memory_search(query, limit=10):
+        search_calls.append({"query": query, "namespace": get_current_namespace()})
         return {"status": "ok", "memories": [], "count": 0}
 
-    async def _fake_memory_add(content, metadata=None, user_id=None):
-        add_calls.append({"content": content, "metadata": metadata, "user_id": user_id})
+    async def _fake_memory_add(content, metadata=None):
+        add_calls.append(
+            {"content": content, "metadata": metadata, "namespace": get_current_namespace()}
+        )
         return {"status": "ok", "memory": {"results": [{"id": "mem-456"}]}}
 
     _patch_common(monkeypatch, memory_add=_fake_memory_add, memory_search=_fake_memory_search)
@@ -170,7 +183,7 @@ def test_run_capture_searches_memory_before_adding(monkeypatch):
     )
 
     assert len(search_calls) == 1
-    assert search_calls[0]["user_id"] == "org_acme"
+    assert search_calls[0]["namespace"] == "org_acme"
     assert len(add_calls) == 1
     assert add_calls[0]["metadata"]["client"] == "Acme"
     assert result["memory_id"] == "mem-456"
@@ -189,8 +202,8 @@ def test_run_capture_omits_client_metadata_when_not_mentioned(monkeypatch):
 
     add_calls = []
 
-    async def _fake_memory_add(content, metadata=None, user_id=None):
-        add_calls.append({"content": content, "metadata": metadata, "user_id": user_id})
+    async def _fake_memory_add(content, metadata=None):
+        add_calls.append({"content": content, "metadata": metadata})
         return {"status": "ok", "memory": {"results": [{"id": "mem-789"}]}}
 
     _patch_common(monkeypatch, memory_add=_fake_memory_add)

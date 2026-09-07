@@ -28,9 +28,9 @@ async def main() -> None:
     from .scheduler import start_scheduler, stop_scheduler, initial_index
 
     # Import tool modules so they register on the mcp instance
-    from .mcp import memory, repos, jobs, knowledge, web, datasources, contracts, ci, code_tools  # noqa: F401
+    from .mcp import memory, repos, jobs, knowledge, web, datasources, contracts, ci, code_tools, code_graph, project_tools, project_admin, ssh_files, git_write_tools  # noqa: F401
     from .mcp.server import mcp
-    from .mcp import oauth  # noqa: F401 - register OAuth handlers
+    from .mcp import oauth_bridge  # noqa: F401 - registra le route del bridge OAuth su mcp
     from .api.app import api
     from .mcp.auth import add_auth_middleware
 

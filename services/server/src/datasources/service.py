@@ -24,7 +24,7 @@ import sqlalchemy as sa
 from ..db import get_pool
 from . import engines, introspect
 from .secrets import decrypt_secret, encrypt_secret
-from .validator import QueryValidationError, validate_query
+from .validator import QueryValidationError, validate_query, validate_write_query
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +33,9 @@ MAX_ROWS_HARD_CAP = 500
 MAX_CELL_CHARS = 2000
 
 _CONN_FIELDS = (
-    "id, org_id, name, engine, host, port, database_name, username, password_enc, "
-    "options, description, status, error_message, last_checked_at, created_at, updated_at"
+    "id, org_id, project_id, name, engine, host, port, database_name, username, password_enc, "
+    "options, description, status, error_message, last_checked_at, created_at, updated_at, "
+    "ssh_enabled, ssh_host, ssh_port, ssh_username, ssh_auth_method, ssh_password_enc, ssh_private_key_enc"
 )
 
 
@@ -91,13 +92,14 @@ def _connection_not_found_message(ref: str | int, connections: list[dict[str, An
 
 async def resolve_connection(
     org_id: int,
+    project_id: int,
     hint: str | None = None,
     *,
     context_hints: list[str] | None = None,
     min_score: float = 35.0,
 ) -> dict[str, Any]:
     """Pick the best-matching connection for a hint and optional conversation context."""
-    connections = await list_connections(org_id)
+    connections = await list_connections(org_id, project_id)
     if not connections:
         raise ConnectionNotFoundError("No database connections configured")
 
@@ -111,7 +113,7 @@ async def resolve_connection(
         if is_list_sentinel(h):
             continue
         try:
-            return await get_connection(org_id, h)
+            return await get_connection(org_id, project_id, h)
         except ConnectionNotFoundError:
             pass
 
@@ -143,30 +145,35 @@ def _record_to_dict(row: Any, include_secret: bool = False) -> dict[str, Any]:
     if isinstance(d.get("options"), str):
         d["options"] = json.loads(d["options"] or "{}")
     d["has_password"] = bool(d.get("password_enc"))
+    d["has_ssh_secret"] = bool(d.get("ssh_password_enc") or d.get("ssh_private_key_enc"))
     if not include_secret:
         d.pop("password_enc", None)
+        d.pop("ssh_password_enc", None)
+        d.pop("ssh_private_key_enc", None)
     for key in ("last_checked_at", "created_at", "updated_at"):
         if d.get(key) is not None:
             d[key] = d[key].isoformat()
     return d
 
 
-async def list_connections(org_id: int) -> list[dict[str, Any]]:
+async def list_connections(org_id: int, project_id: int) -> list[dict[str, Any]]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            f"SELECT {_CONN_FIELDS} FROM db_connections WHERE org_id=$1 ORDER BY name",
+            f"SELECT {_CONN_FIELDS} FROM db_connections WHERE org_id=$1 AND project_id=$2 ORDER BY name",
             org_id,
+            project_id,
         )
         counts = await conn.fetch(
             """
             SELECT c.id, count(a.id) AS annotation_count
             FROM db_connections c
             LEFT JOIN db_annotations a ON a.connection_id = c.id
-            WHERE c.org_id = $1
+            WHERE c.org_id = $1 AND c.project_id = $2
             GROUP BY c.id
             """,
             org_id,
+            project_id,
         )
     count_map = {r["id"]: r["annotation_count"] for r in counts}
     out = []
@@ -177,29 +184,33 @@ async def list_connections(org_id: int) -> list[dict[str, Any]]:
     return out
 
 
-async def get_connection(org_id: int, ref: int | str, include_secret: bool = False) -> dict[str, Any]:
-    """Fetch a connection by id (int) or name (str) within the organization."""
+async def get_connection(
+    org_id: int, project_id: int, ref: int | str, include_secret: bool = False
+) -> dict[str, Any]:
+    """Fetch a connection by id (int) or name (str) within the organization's project."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         if isinstance(ref, int) or (isinstance(ref, str) and ref.isdigit()):
             row = await conn.fetchrow(
-                f"SELECT {_CONN_FIELDS} FROM db_connections WHERE org_id=$1 AND id=$2",
+                f"SELECT {_CONN_FIELDS} FROM db_connections WHERE org_id=$1 AND project_id=$2 AND id=$3",
                 org_id,
+                project_id,
                 int(ref),
             )
         else:
             row = await conn.fetchrow(
-                f"SELECT {_CONN_FIELDS} FROM db_connections WHERE org_id=$1 AND name=$2",
+                f"SELECT {_CONN_FIELDS} FROM db_connections WHERE org_id=$1 AND project_id=$2 AND name=$3",
                 org_id,
+                project_id,
                 ref,
             )
     if row is None:
-        connections = await list_connections(org_id)
+        connections = await list_connections(org_id, project_id)
         raise ConnectionNotFoundError(_connection_not_found_message(ref, connections))
     return _record_to_dict(row, include_secret=include_secret)
 
 
-async def create_connection(org_id: int, data: dict[str, Any]) -> dict[str, Any]:
+async def create_connection(org_id: int, project_id: int, data: dict[str, Any]) -> dict[str, Any]:
     if data.get("engine") not in engines.SUPPORTED_ENGINES:
         raise ValueError(
             f"Unsupported engine '{data.get('engine')}'. "
@@ -210,12 +221,16 @@ async def create_connection(org_id: int, data: dict[str, Any]) -> dict[str, Any]
         row = await conn.fetchrow(
             f"""
             INSERT INTO db_connections
-                (org_id, name, engine, host, port, database_name, username,
-                 password_enc, options, description)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10)
+                (org_id, project_id, name, engine, host, port, database_name, username,
+                 password_enc, options, description,
+                 ssh_enabled, ssh_host, ssh_port, ssh_username, ssh_auth_method,
+                 ssh_password_enc, ssh_private_key_enc)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11,
+                    $12, $13, $14, $15, $16, $17, $18)
             RETURNING {_CONN_FIELDS}
             """,
             org_id,
+            project_id,
             data["name"],
             data["engine"],
             data.get("host"),
@@ -225,33 +240,53 @@ async def create_connection(org_id: int, data: dict[str, Any]) -> dict[str, Any]
             encrypt_secret(data.get("password") or ""),
             json.dumps(data.get("options") or {}),
             data.get("description"),
+            bool(data.get("ssh_enabled")),
+            data.get("ssh_host"),
+            data.get("ssh_port") or 22,
+            data.get("ssh_username"),
+            data.get("ssh_auth_method"),
+            encrypt_secret(data.get("ssh_password") or ""),
+            encrypt_secret(data.get("ssh_private_key") or ""),
         )
     return _record_to_dict(row)
 
 
-async def update_connection(org_id: int, connection_id: int, data: dict[str, Any]) -> dict[str, Any]:
-    existing = await get_connection(org_id, connection_id, include_secret=True)
+async def update_connection(
+    org_id: int, project_id: int, connection_id: int, data: dict[str, Any]
+) -> dict[str, Any]:
+    existing = await get_connection(org_id, project_id, connection_id, include_secret=True)
     if data.get("engine") not in engines.SUPPORTED_ENGINES:
         raise ValueError(f"Unsupported engine '{data.get('engine')}'")
 
-    # Empty password in the payload means "keep the stored one".
+    # Empty secret in the payload means "keep the stored one".
     if data.get("password"):
         password_enc = encrypt_secret(data["password"])
     else:
         password_enc = existing.get("password_enc") or ""
+    if data.get("ssh_password"):
+        ssh_password_enc = encrypt_secret(data["ssh_password"])
+    else:
+        ssh_password_enc = existing.get("ssh_password_enc") or ""
+    if data.get("ssh_private_key"):
+        ssh_private_key_enc = encrypt_secret(data["ssh_private_key"])
+    else:
+        ssh_private_key_enc = existing.get("ssh_private_key_enc") or ""
 
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             f"""
             UPDATE db_connections
-            SET name=$3, engine=$4, host=$5, port=$6, database_name=$7, username=$8,
-                password_enc=$9, options=$10::jsonb, description=$11,
+            SET name=$4, engine=$5, host=$6, port=$7, database_name=$8, username=$9,
+                password_enc=$10, options=$11::jsonb, description=$12,
+                ssh_enabled=$13, ssh_host=$14, ssh_port=$15, ssh_username=$16,
+                ssh_auth_method=$17, ssh_password_enc=$18, ssh_private_key_enc=$19,
                 status='unknown', error_message=NULL, updated_at=NOW()
-            WHERE org_id=$1 AND id=$2
+            WHERE org_id=$1 AND project_id=$2 AND id=$3
             RETURNING {_CONN_FIELDS}
             """,
             org_id,
+            project_id,
             connection_id,
             data["name"],
             data["engine"],
@@ -262,6 +297,13 @@ async def update_connection(org_id: int, connection_id: int, data: dict[str, Any
             password_enc,
             json.dumps(data.get("options") or {}),
             data.get("description"),
+            bool(data.get("ssh_enabled")),
+            data.get("ssh_host"),
+            data.get("ssh_port") or 22,
+            data.get("ssh_username"),
+            data.get("ssh_auth_method"),
+            ssh_password_enc,
+            ssh_private_key_enc,
         )
     if row is None:
         raise ConnectionNotFoundError(f"Database connection '{connection_id}' not found")
@@ -269,12 +311,13 @@ async def update_connection(org_id: int, connection_id: int, data: dict[str, Any
     return _record_to_dict(row)
 
 
-async def delete_connection(org_id: int, connection_id: int) -> None:
+async def delete_connection(org_id: int, project_id: int, connection_id: int) -> None:
     pool = await get_pool()
     async with pool.acquire() as conn:
         deleted = await conn.fetchval(
-            "DELETE FROM db_connections WHERE org_id=$1 AND id=$2 RETURNING id",
+            "DELETE FROM db_connections WHERE org_id=$1 AND project_id=$2 AND id=$3 RETURNING id",
             org_id,
+            project_id,
             connection_id,
         )
     if deleted is None:
@@ -287,10 +330,23 @@ async def delete_connection(org_id: int, connection_id: int) -> None:
 # --------------------------------------------------------------------------- #
 async def _resolve_engine(record: dict[str, Any]) -> sa.engine.Engine:
     password = decrypt_secret(record.get("password_enc") or "")
+    host = record.get("host")
+    port = record.get("port")
+    if record.get("ssh_enabled"):
+        # Dietro bastion: il DB si raggiunge attraverso un forward SSH locale.
+        ssh_cfg = {
+            "host": record.get("ssh_host"),
+            "port": record.get("ssh_port") or 22,
+            "username": record.get("ssh_username"),
+            "auth_method": record.get("ssh_auth_method"),
+            "password": decrypt_secret(record.get("ssh_password_enc") or ""),
+            "private_key": decrypt_secret(record.get("ssh_private_key_enc") or ""),
+        }
+        host, port = engines.ensure_tunnel(record["id"], ssh_cfg, host, port)
     url = engines.build_url(
         engine=record["engine"],
-        host=record.get("host"),
-        port=record.get("port"),
+        host=host,
+        port=port,
         database=record.get("database_name"),
         username=record.get("username"),
         password=password,
@@ -327,14 +383,14 @@ async def _probe_alternate_host(record: dict[str, Any], host: str) -> bool:
         return False
 
 
-async def test_connection(org_id: int, connection_id: int) -> dict[str, Any]:
+async def test_connection(org_id: int, project_id: int, connection_id: int) -> dict[str, Any]:
     """Try to connect; persist the resulting status on the connection row.
 
     When the server runs inside a container and a loopback host fails, it also
     probes ``host.docker.internal`` (the host machine, where sibling containers
     publish their ports) and returns it as ``suggested_host`` if reachable.
     """
-    record = await get_connection(org_id, connection_id, include_secret=True)
+    record = await get_connection(org_id, project_id, connection_id, include_secret=True)
     status, error, suggested_host = "ok", None, None
     try:
         engine = await _resolve_engine(record)
@@ -355,9 +411,10 @@ async def test_connection(org_id: int, connection_id: int) -> dict[str, Any]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE db_connections SET status=$3, error_message=$4, last_checked_at=NOW() "
-            "WHERE org_id=$1 AND id=$2",
+            "UPDATE db_connections SET status=$4, error_message=$5, last_checked_at=NOW() "
+            "WHERE org_id=$1 AND project_id=$2 AND id=$3",
             org_id,
+            project_id,
             connection_id,
             status,
             error,
@@ -443,8 +500,10 @@ async def _annotation_maps(
 # --------------------------------------------------------------------------- #
 # Schema context
 # --------------------------------------------------------------------------- #
-async def schema_overview(org_id: int, ref: int | str, schema: Optional[str] = None) -> dict[str, Any]:
-    record = await get_connection(org_id, ref, include_secret=True)
+async def schema_overview(
+    org_id: int, project_id: int, ref: int | str, schema: Optional[str] = None
+) -> dict[str, Any]:
+    record = await get_connection(org_id, project_id, ref, include_secret=True)
     engine = await _resolve_engine(record)
     overview = await asyncio.wait_for(
         asyncio.to_thread(introspect.get_overview, engine, schema),
@@ -460,12 +519,13 @@ async def schema_overview(org_id: int, ref: int | str, schema: Optional[str] = N
 
 async def describe_table(
     org_id: int,
+    project_id: int,
     ref: int | str,
     table: str,
     schema: Optional[str] = None,
     sample_rows: int = 0,
 ) -> dict[str, Any]:
-    record = await get_connection(org_id, ref, include_secret=True)
+    record = await get_connection(org_id, project_id, ref, include_secret=True)
     engine = await _resolve_engine(record)
     detail = await asyncio.wait_for(
         asyncio.to_thread(introspect.describe_table, engine, table, schema),
@@ -485,7 +545,7 @@ async def describe_table(
         n = max(1, min(int(sample_rows), 10))
         try:
             sample = await run_query(
-                org_id, ref, f"SELECT * FROM {qualified} LIMIT {n}",
+                org_id, project_id, ref, f"SELECT * FROM {qualified} LIMIT {n}",
                 max_rows=n, source="sample",
             )
             detail["sample_rows"] = sample.get("rows", [])
@@ -546,12 +606,13 @@ def _execute_readonly(
 
 async def run_query(
     org_id: int,
+    project_id: int,
     ref: int | str,
     sql: str,
     max_rows: int = 100,
     source: str = "mcp",
 ) -> dict[str, Any]:
-    record = await get_connection(org_id, ref, include_secret=True)
+    record = await get_connection(org_id, project_id, ref, include_secret=True)
     max_rows = max(1, min(int(max_rows), MAX_ROWS_HARD_CAP))
 
     validated = validate_query(sql, max_rows=max_rows)
@@ -574,18 +635,8 @@ async def run_query(
     duration_ms = int((time.monotonic() - started) * 1000)
 
     if source != "sample":
-        try:
-            pool = await get_pool()
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    "INSERT INTO db_query_log (connection_id, org_id, source, sql_text, "
-                    "success, error_message, rows_returned, duration_ms) "
-                    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-                    record["id"], org_id, source, validated,
-                    success, error, len(rows), duration_ms,
-                )
-        except Exception as e:  # noqa: BLE001
-            logger.warning("db_query_log insert failed: %s", e)
+        await _log_query(record, org_id, project_id, source, validated,
+                         success, error, len(rows), duration_ms)
 
     if not success:
         raise RuntimeError(error)
@@ -601,14 +652,82 @@ async def run_query(
     }
 
 
-async def query_log(org_id: int, connection_id: int, limit: int = 50) -> list[dict[str, Any]]:
+async def _log_query(record, org_id, project_id, source, sql, success, error,
+                     rows_returned, duration_ms) -> None:
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO db_query_log (connection_id, org_id, project_id, source, sql_text, "
+                "success, error_message, rows_returned, duration_ms) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                record["id"], org_id, project_id, source, sql,
+                success, error, rows_returned, duration_ms,
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("db_query_log insert failed: %s", e)
+
+
+def _execute_write(engine, sql: str) -> int:
+    """Execute a validated DML statement in its own transaction; returns rowcount."""
+    with engine.begin() as conn:
+        # The DB-side timeout is authoritative here: it runs inside the same
+        # transaction as the DML, so a timeout aborts and rolls back the write
+        # instead of leaving Python guessing about an outcome it can't observe.
+        try:
+            if engine.dialect.name == "postgresql":
+                conn.exec_driver_sql(f"SET statement_timeout = {QUERY_TIMEOUT_SECONDS * 1000}")
+            elif engine.dialect.name == "mysql":
+                conn.exec_driver_sql(f"SET SESSION MAX_EXECUTION_TIME = {QUERY_TIMEOUT_SECONDS * 1000}")
+        except Exception:  # noqa: BLE001 - unsupported on some versions (e.g. MariaDB)
+            pass
+
+        result = conn.execute(sa.text(sql))
+        return int(result.rowcount if result.rowcount is not None else 0)
+
+
+async def run_write(
+    org_id: int,
+    project_id: int,
+    ref: int | str,
+    sql: str,
+    source: str = "mcp",
+) -> dict[str, Any]:
+    record = await get_connection(org_id, project_id, ref, include_secret=True)
+    validated = validate_write_query(sql)
+    engine = await _resolve_engine(record)
+
+    started = time.monotonic()
+    success, error = True, None
+    rowcount = 0
+    try:
+        rowcount = await asyncio.to_thread(_execute_write, engine, validated)
+    except Exception as e:  # noqa: BLE001
+        success, error = False, str(e)
+    duration_ms = int((time.monotonic() - started) * 1000)
+
+    await _log_query(record, org_id, project_id, source, validated,
+                     success, error, rowcount, duration_ms)
+    if not success:
+        raise RuntimeError(error)
+    return {
+        "connection": record["name"],
+        "sql": validated,
+        "row_count": rowcount,
+        "duration_ms": duration_ms,
+    }
+
+
+async def query_log(
+    org_id: int, project_id: int, connection_id: int, limit: int = 50
+) -> list[dict[str, Any]]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT id, source, sql_text, success, error_message, rows_returned, "
             "duration_ms, created_at FROM db_query_log "
-            "WHERE org_id=$1 AND connection_id=$2 ORDER BY created_at DESC LIMIT $3",
-            org_id, connection_id, limit,
+            "WHERE org_id=$1 AND project_id=$2 AND connection_id=$3 ORDER BY created_at DESC LIMIT $4",
+            org_id, project_id, connection_id, limit,
         )
     out = []
     for r in rows:
@@ -617,3 +736,21 @@ async def query_log(org_id: int, connection_id: int, limit: int = 50) -> list[di
             d["created_at"] = d["created_at"].isoformat()
         out.append(d)
     return out
+
+
+async def mark_pending_secret(org_id: int, project_id: int, connection_id: int) -> None:
+    """Segna la connessione come creata ma priva di credenziale."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE db_connections
+               SET status='pending_secret',
+                   error_message='Credential not set: add the password from the UI',
+                   updated_at=NOW()
+             WHERE org_id=$1 AND project_id=$2 AND id=$3
+            """,
+            org_id,
+            project_id,
+            connection_id,
+        )

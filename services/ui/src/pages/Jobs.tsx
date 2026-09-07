@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { api, type Job } from '../lib/api'
-import { Badge } from '../components/ui'
+import { Badge, Banner, Card } from '../components/ui'
 import { Table, Thead, Tbody, Tr, Th, Td } from '../components/ui'
 
 function jobBadgeVariant(status: Job['status']) {
@@ -55,14 +55,7 @@ export default function Jobs() {
           </p>
         </div>
 
-        {error && (
-          <div
-            style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
-            className="text-sm p-3 mb-4 bg-[#fef2f2]"
-          >
-            {error}
-          </div>
-        )}
+        {error && <Banner variant="danger" className="mb-4">{error}</Banner>}
 
         {loading ? (
           <p className="text-muted text-sm">Loading...</p>
@@ -73,9 +66,8 @@ export default function Jobs() {
           {/* Mobile: stacked cards */}
           <div className="space-y-3 md:hidden">
             {jobs.map(job => (
-              <div
+              <Card
                 key={job.id}
-                style={{ border: '1px solid var(--border)' }}
                 className="p-3"
               >
                 <div className="flex items-start justify-between gap-2">
@@ -94,12 +86,12 @@ export default function Jobs() {
                     })}
                   </span>
                 </div>
-              </div>
+              </Card>
             ))}
           </div>
 
           {/* Desktop: table */}
-          <div style={{ border: '1px solid var(--border)' }} className="hidden md:block">
+          <Card className="hidden md:block">
             <Table>
               <Thead>
                 <Tr>
@@ -142,7 +134,7 @@ export default function Jobs() {
                 ))}
               </Tbody>
             </Table>
-          </div>
+          </Card>
           </>
         )}
       </div>

@@ -22,9 +22,9 @@ export function useToast(): ToastApi {
   return ctx
 }
 
-const KIND_STYLE: Record<ToastKind, { color: string; bg: string }> = {
-  success: { color: 'var(--success)', bg: '#eafaf1' },
-  error: { color: 'var(--danger)', bg: '#fef2f2' },
+const KIND_STYLE: Record<ToastKind, string> = {
+  success: 'var(--success)',
+  error: 'var(--danger)',
 }
 
 export function ToastProvider({ children }: { children: ReactNode }) {
@@ -60,16 +60,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           <div
             key={t.id}
             style={{
-              border: `1px solid ${KIND_STYLE[t.kind].color}`,
-              color: KIND_STYLE[t.kind].color,
-              background: KIND_STYLE[t.kind].bg,
+              borderLeft: `4px solid ${KIND_STYLE[t.kind]}`,
+              boxShadow: '0 6px 10px rgba(0,0,0,0.2)',
             }}
-            className="text-sm px-3 py-2 flex items-start gap-2 shadow-md min-w-[240px] max-w-[380px] pointer-events-auto animate-in fade-in-0 slide-in-from-bottom-2"
+            className="text-sm px-3 py-2 flex items-start gap-2 bg-bg text-text border border-border rounded min-w-[240px] max-w-[380px] pointer-events-auto animate-in fade-in-0 slide-in-from-bottom-2"
           >
             {t.kind === 'success' ? (
-              <Check className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+              <Check className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" style={{ color: KIND_STYLE[t.kind] }} />
             ) : (
-              <AlertCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+              <AlertCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" style={{ color: KIND_STYLE[t.kind] }} />
             )}
             <span className="flex-1 break-words">{t.message}</span>
             <button

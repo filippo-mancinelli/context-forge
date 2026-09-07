@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { api, type GitHubRepo, type GitLabRepo, type RemoteRepo, type Repo, type RepoCreateRequest } from '../lib/api'
-import { Button, Input, Badge, Dialog, DialogFooter, Select, useConfirm, useToast } from '../components/ui'
+import { Banner, Button, Card, Input, Badge, Dialog, DialogFooter, Select, useConfirm, useToast } from '../components/ui'
 
 type Provider = 'github' | 'gitlab'
 
@@ -162,31 +162,23 @@ function ImportDialog({
           </Button>
         </div>
 
-        {error && (
-          <div style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }} className="text-sm p-3 bg-[#fef2f2]">
-            {error}
-          </div>
-        )}
+        {error && <Banner variant="danger">{error}</Banner>}
 
         {loading ? (
           <p className="text-sm text-muted py-4">Loading repositories...</p>
         ) : filteredRepos.length === 0 ? (
           <p className="text-sm text-muted py-4">No repositories found.</p>
         ) : (
-          <div
-            style={{ border: '1px solid var(--border)', maxHeight: '360px' }}
-            className="overflow-y-auto scrollbar-thin"
-          >
+          <Card className="overflow-y-auto scrollbar-thin max-h-[360px]">
             {filteredRepos.map(repo => {
               const alreadyAdded = configuredNames.has(repo.full_name.replace('/', '-'))
               return (
                 <label
                   key={repo.id}
-                  style={{ borderBottom: '1px solid var(--border)' }}
                   className={[
-                    'flex items-start gap-3 px-3 py-2.5 cursor-pointer last:border-b-0',
+                    'border-b border-border flex items-start gap-3 px-3 py-2.5 cursor-pointer last:border-b-0',
                     alreadyAdded ? 'opacity-50 cursor-not-allowed bg-surface' : 'hover:bg-surface',
-                    selected[repo.full_name] && !alreadyAdded ? 'bg-[#eaf4fb]' : '',
+                    selected[repo.full_name] && !alreadyAdded ? 'bg-primary-light' : '',
                   ].join(' ')}
                 >
                   <input
@@ -224,7 +216,7 @@ function ImportDialog({
                 </label>
               )
             })}
-          </div>
+          </Card>
         )}
       </div>
 
@@ -428,10 +420,18 @@ function AddBranchDialog({
             data = await api.github.listBranches(match[1], match[2])
           }
         } else if (repo.type === 'gitlab') {
-          // Extract full path from URL: gitlab.com/owner/repo or self-hosted
-          const match = repo.url?.match(/(?:gitlab\.[^/]+\/|:\d+\/)?(.+?)(?:\.git)?$/)
-          if (match) {
-            data = await api.gitlab.listBranches(match[1])
+          // Derive the GitLab project path (group[/subgroup]/repo) from the repo URL,
+          // for any host: gitlab.com, self-hosted, custom port, nested groups, ssh.
+          let projectPath = ''
+          try {
+            projectPath = new URL(repo.url!).pathname.replace(/^\/+/, '').replace(/\.git$/, '')
+          } catch {
+            // scp-like ssh remote: git@host:group/repo.git
+            const m = repo.url?.match(/:(?:\d+\/)?(.+?)(?:\.git)?$/)
+            projectPath = m ? m[1].replace(/^\/+/, '') : ''
+          }
+          if (projectPath) {
+            data = await api.gitlab.listBranches(projectPath)
           }
         }
         // Mark the repo's current/default branch
@@ -452,6 +452,12 @@ function AddBranchDialog({
     if (!q) return branches
     return branches.filter(b => b.name.toLowerCase().includes(q))
   }, [branches, branchSearch])
+
+  // Repos can have thousands of branches; cap how many options we render so
+  // the dropdown stays responsive and prompt the user to narrow the filter.
+  const MAX_BRANCH_OPTIONS = 200
+  const shownBranches = filteredBranches.slice(0, MAX_BRANCH_OPTIONS)
+  const hiddenBranchCount = filteredBranches.length - shownBranches.length
 
   // Exclude branches already indexed (named baseName@branch)
   const alreadyIndexed = useMemo(
@@ -519,7 +525,7 @@ function AddBranchDialog({
               label="Branch"
               value={branch}
               onValueChange={setBranch}
-              options={filteredBranches.map(b => ({
+              options={shownBranches.map(b => ({
                 value: b.name,
                 label: b.is_default
                   ? `${b.name} (default)`
@@ -528,6 +534,11 @@ function AddBranchDialog({
                     : b.name,
               }))}
             />
+            {hiddenBranchCount > 0 && (
+              <p className="text-xs text-muted">
+                Showing first {MAX_BRANCH_OPTIONS} of {filteredBranches.length} branches — refine the filter to narrow the list.
+              </p>
+            )}
           </>
         )}
 
@@ -683,19 +694,12 @@ export default function Repos() {
           </div>
         </div>
 
-        {error && (
-          <div
-            style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
-            className="text-sm p-3 mb-4 bg-[#fef2f2]"
-          >
-            {error}
-          </div>
-        )}
+        {error && <Banner variant="danger" className="mb-4">{error}</Banner>}
 
         {loading ? (
           <p className="text-muted text-sm">Loading...</p>
         ) : repos.length === 0 ? (
-          <div style={{ border: '1px dashed var(--border)' }} className="py-12 text-center">
+          <div className="border border-dashed border-border py-12 text-center">
             <p className="text-muted text-sm">No repositories configured.</p>
             <p className="text-muted text-xs mt-1">
               Import from a provider or add a local/remote repo with the buttons above.
@@ -706,9 +710,8 @@ export default function Repos() {
           {/* Mobile: stacked cards use the full width instead of a squished table */}
           <div className="space-y-3 md:hidden">
             {repos.map(repo => (
-              <div
+              <Card
                 key={repo.name}
-                style={{ border: '1px solid var(--border)' }}
                 className="p-3"
               >
                 <div className="flex items-start justify-between gap-2">
@@ -738,10 +741,7 @@ export default function Repos() {
                   <span>{repo.total_chunks > 0 ? `${repo.total_chunks.toLocaleString()} chunks` : 'no chunks'}</span>
                   <span>{formatDate(repo.last_indexed_at)}</span>
                 </div>
-                <div
-                  style={{ borderTop: '1px solid var(--border)' }}
-                  className="flex items-center gap-2 mt-3 pt-3 flex-wrap"
-                >
+                <div className="border-t border-border flex items-center gap-2 mt-3 pt-3 flex-wrap">
                   {repo.status === 'indexing' ? (
                     <Button
                       size="sm"
@@ -783,12 +783,12 @@ export default function Repos() {
                     Open
                   </Link>
                 </div>
-              </div>
+              </Card>
             ))}
           </div>
 
           {/* Desktop: full table */}
-          <div style={{ border: '1px solid var(--border)' }} className="hidden md:block overflow-x-auto max-w-5xl">
+          <Card className="hidden md:block overflow-x-auto max-w-5xl">
             <table className="w-full table-fixed min-w-[520px]">
               <colgroup>
                 <col className="w-[36%]" />
@@ -799,7 +799,7 @@ export default function Repos() {
                 <col className="w-[16%]" />
               </colgroup>
               <thead>
-                <tr style={{ borderBottom: '2px solid var(--border)' }}>
+                <tr className="border-b-2 border-border">
                   <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-4 py-2">Repository</th>
                   <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2 whitespace-nowrap">Branch</th>
                   <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2 whitespace-nowrap">Status</th>
@@ -812,8 +812,7 @@ export default function Repos() {
                 {repos.map(repo => (
                   <tr
                     key={repo.name}
-                    style={{ borderBottom: '1px solid var(--border)' }}
-                    className="last:border-b-0 hover:bg-surface transition-colors"
+                    className="border-b border-border last:border-b-0 hover:bg-surface transition-colors"
                   >
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
@@ -901,7 +900,7 @@ export default function Repos() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </Card>
           </>
         )}
       </div>

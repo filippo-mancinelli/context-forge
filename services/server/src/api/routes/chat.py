@@ -17,8 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ...config import get_settings
-from ..deps import ActiveOrg, get_active_org
+from ...org_settings import OrgSettings, get_org_settings
+from ..deps import ActiveProject, get_active_project
 
 logger = logging.getLogger(__name__)
 
@@ -114,12 +114,12 @@ def _extract_context_hints(messages: list[ChatMessage]) -> list[str]:
     return deduped
 
 
-async def _build_system_prompt(org: ActiveOrg, messages: list[ChatMessage]) -> str:
+async def _build_system_prompt(org: ActiveProject, messages: list[ChatMessage]) -> str:
     from ...datasources import service
 
     parts = [SYSTEM_PROMPT]
     try:
-        connections = await service.list_connections(org.org_id)
+        connections = await service.list_connections(org.org_id, org.project_id)
     except Exception:  # noqa: BLE001
         connections = []
     if connections:
@@ -154,10 +154,12 @@ def _arg_limit(args: dict[str, Any], default: int = 8, cap: int = 20) -> int:
     return max(1, min(int(args.get("limit") or default), cap))
 
 
-async def _search_repositories(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
+async def _search_repositories(org: ActiveProject, args: dict[str, Any]) -> list[dict[str, Any]]:
     from ...search import search_repo_chunks
 
-    results = await search_repo_chunks(org.org_id, _arg_query(args), limit=_arg_limit(args))
+    results = await search_repo_chunks(
+        org.org_id, _arg_query(args), limit=_arg_limit(args), project_id=org.project_id
+    )
     return [
         {
             "repo_name": r["repo_name"],
@@ -170,10 +172,10 @@ async def _search_repositories(org: ActiveOrg, args: dict[str, Any]) -> list[dic
     ]
 
 
-async def _search_memory(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
+async def _search_memory(org: ActiveProject, args: dict[str, Any]) -> list[dict[str, Any]]:
     from ...mcp.memory import _get_memory
 
-    mem = _get_memory()
+    mem = await _get_memory(org.org_id)
     results = mem.search(_arg_query(args), user_id=org.namespace, limit=_arg_limit(args))
     memories = results.get("results", results) if isinstance(results, dict) else results
     out: list[dict[str, Any]] = []
@@ -191,10 +193,12 @@ async def _search_memory(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str,
     return out
 
 
-async def _search_knowledge_base(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
+async def _search_knowledge_base(org: ActiveProject, args: dict[str, Any]) -> list[dict[str, Any]]:
     from ...kb import store
 
-    results = await store.search_documents(org.org_id, _arg_query(args), limit=_arg_limit(args))
+    results = await store.search_documents(
+        org.org_id, org.project_id, _arg_query(args), limit=_arg_limit(args)
+    )
     return [
         {
             "document_id": r.get("document_id"),
@@ -207,10 +211,12 @@ async def _search_knowledge_base(org: ActiveOrg, args: dict[str, Any]) -> list[d
     ]
 
 
-async def _search_web(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
+async def _search_web(org: ActiveProject, args: dict[str, Any]) -> list[dict[str, Any]]:
     from ...web import store
 
-    results = await store.search_pages(org.org_id, _arg_query(args), limit=_arg_limit(args))
+    results = await store.search_pages(
+        org.org_id, org.project_id, _arg_query(args), limit=_arg_limit(args)
+    )
     return [
         {
             "page_id": r.get("page_id"),
@@ -224,7 +230,7 @@ async def _search_web(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, An
 
 
 async def _get_database_schema(
-    org: ActiveOrg, args: dict[str, Any], *, context_hints: list[str] | None = None
+    org: ActiveProject, args: dict[str, Any], *, context_hints: list[str] | None = None
 ) -> list[dict[str, Any]]:
     """Three granularities: no args -> connections; connection -> tables; +table -> columns."""
     from ...datasources import service
@@ -247,35 +253,37 @@ async def _get_database_schema(
                 "description": c.get("description"),
                 "status": c.get("status"),
             }
-            for c in await service.list_connections(org.org_id)
+            for c in await service.list_connections(org.org_id, org.project_id)
         ]
 
     try:
         if connection:
             try:
-                record = await service.get_connection(org.org_id, connection)
+                record = await service.get_connection(org.org_id, org.project_id, connection)
             except ConnectionNotFoundError:
                 record = await service.resolve_connection(
                     org.org_id,
+                    org.project_id,
                     connection,
                     context_hints=context_hints,
                 )
         else:
             record = await service.resolve_connection(
                 org.org_id,
+                org.project_id,
                 hint or None,
                 context_hints=context_hints,
             )
         connection_name = record["name"]
     except ConnectionAmbiguousError as e:
-        connections = await service.list_connections(org.org_id)
+        connections = await service.list_connections(org.org_id, org.project_id)
         return [{"error": str(e), "connections": [c["name"] for c in connections]}]
     except ConnectionNotFoundError as e:
-        connections = await service.list_connections(org.org_id)
+        connections = await service.list_connections(org.org_id, org.project_id)
         return [{"error": str(e), "connections": [c["name"] for c in connections]}]
 
     if not table:
-        overview = await service.schema_overview(org.org_id, connection_name, schema=schema)
+        overview = await service.schema_overview(org.org_id, org.project_id, connection_name, schema=schema)
         return [
             {
                 "connection": connection_name,
@@ -286,12 +294,12 @@ async def _get_database_schema(
             }
             for t in overview["tables"]
         ]
-    detail = await service.describe_table(org.org_id, connection_name, table, schema=schema)
+    detail = await service.describe_table(org.org_id, org.project_id, connection_name, table, schema=schema)
     return [detail]
 
 
 async def _query_database(
-    org: ActiveOrg, args: dict[str, Any], *, context_hints: list[str] | None = None
+    org: ActiveProject, args: dict[str, Any], *, context_hints: list[str] | None = None
 ) -> list[dict[str, Any]]:
     from ...datasources import service
     from ...datasources.service import ConnectionAmbiguousError, ConnectionNotFoundError
@@ -304,7 +312,7 @@ async def _query_database(
     if not sql:
         raise ValueError("'sql' is required")
     if not connection and not hint:
-        connections = await service.list_connections(org.org_id)
+        connections = await service.list_connections(org.org_id, org.project_id)
         names = [c["name"] for c in connections]
         raise ValueError(
             "Specify connection or hint. "
@@ -313,39 +321,40 @@ async def _query_database(
     try:
         if connection:
             try:
-                record = await service.get_connection(org.org_id, connection)
+                record = await service.get_connection(org.org_id, org.project_id, connection)
             except ConnectionNotFoundError:
                 record = await service.resolve_connection(
-                    org.org_id, connection, context_hints=context_hints
+                    org.org_id, org.project_id, connection, context_hints=context_hints
                 )
         else:
             record = await service.resolve_connection(
-                org.org_id, hint, context_hints=context_hints
+                org.org_id, org.project_id, hint, context_hints=context_hints
             )
         connection_name = record["name"]
     except (ConnectionAmbiguousError, ConnectionNotFoundError) as e:
         raise ValueError(str(e)) from e
     result = await service.run_query(
-        org.org_id, connection_name, sql, max_rows=_arg_limit(args, default=50, cap=200), source="chat"
+        org.org_id, org.project_id, connection_name, sql,
+        max_rows=_arg_limit(args, default=50, cap=200), source="chat"
     )
     return [result]
 
 
-async def _add_memory(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
+async def _add_memory(org: ActiveProject, args: dict[str, Any]) -> list[dict[str, Any]]:
     from ...mcp.memory import _get_memory
 
     content = str(args.get("content", "")).strip()
     if not content:
         raise ValueError("'content' is required")
-    mem = _get_memory()
+    mem = await _get_memory(org.org_id)
     result = mem.add(content, user_id=org.namespace)
     return [{"id": result.get("id") if isinstance(result, dict) else str(result), "status": "ok"}]
 
 
-async def _list_memories(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
+async def _list_memories(org: ActiveProject, args: dict[str, Any]) -> list[dict[str, Any]]:
     from ...mcp.memory import _get_memory
 
-    mem = _get_memory()
+    mem = await _get_memory(org.org_id)
     results = mem.get_all(user_id=org.namespace)
     memories = results.get("results", results) if isinstance(results, dict) else results
     out: list[dict[str, Any]] = []
@@ -357,13 +366,13 @@ async def _list_memories(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str,
     return out
 
 
-async def _delete_memory(org: ActiveOrg, args: dict[str, Any]) -> list[dict[str, Any]]:
+async def _delete_memory(org: ActiveProject, args: dict[str, Any]) -> list[dict[str, Any]]:
     from ...mcp.memory import _get_memory
 
     memory_id = str(args.get("memory_id", "")).strip()
     if not memory_id:
         raise ValueError("'memory_id' is required")
-    mem = _get_memory()
+    mem = await _get_memory(org.org_id)
     mem.delete(memory_id)
     return [{"status": "ok", "deleted": memory_id}]
 
@@ -587,12 +596,12 @@ _MODEL_CATALOG: dict[str, list[dict[str, str]]] = {
 }
 
 
-def _provider_api_key(settings: Any, provider: str) -> str:
+def _provider_api_key(s: OrgSettings, provider: str) -> str:
     return {
-        "openai": settings.openai_api_key,
-        "anthropic": settings.anthropic_api_key,
-        "deepseek": settings.deepseek_api_key,
-    }.get(provider, settings.openai_api_key)  # unknown providers are OpenAI-compatible
+        "openai": s.openai_api_key,
+        "anthropic": s.anthropic_api_key,
+        "deepseek": s.deepseek_api_key,
+    }.get(provider, s.openai_api_key)  # unknown providers are OpenAI-compatible
 
 
 def _supports_temperature(model: str) -> bool:
@@ -600,47 +609,46 @@ def _supports_temperature(model: str) -> bool:
     return not model.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
-def _resolve_llm(provider: Optional[str] = None, model: Optional[str] = None) -> dict[str, Any]:
-    """Resolve the effective LLM provider config.
+def _resolve_llm(s: OrgSettings, provider: Optional[str] = None, model: Optional[str] = None) -> dict[str, Any]:
+    """Resolve the effective LLM provider config for the active organization.
 
-    ``provider``/``model`` (e.g. from the request) override the configured
-    defaults. Returns a dict with keys: family ("openai"|"anthropic"), model,
-    api_key, base_url (optional). Raises HTTPException if no usable key is
-    configured.
+    ``provider``/``model`` (e.g. from the request) override the org's
+    configured defaults. Returns a dict with keys: family ("openai"|"anthropic"),
+    model, api_key, base_url (optional). Raises HTTPException if no usable key
+    is configured.
     """
-    settings = get_settings()
-    default_provider = (settings.llm_provider or "openai").lower()
+    default_provider = (s.llm_provider or "openai").lower()
     provider = (provider or default_provider).lower()
     if model:
         model = model.strip()
-    elif provider == default_provider and settings.llm_model:
-        model = settings.llm_model
+    elif provider == default_provider and s.llm_model:
+        model = s.llm_model
     else:
         catalog = _MODEL_CATALOG.get(provider) or _MODEL_CATALOG["openai"]
         model = catalog[0]["id"]
 
     if provider == "anthropic":
-        if not settings.anthropic_api_key:
+        if not s.anthropic_api_key:
             raise HTTPException(status_code=400, detail="No Anthropic API key configured (Settings → LLM).")
-        return {"family": "anthropic", "model": model, "api_key": settings.anthropic_api_key}
+        return {"family": "anthropic", "model": model, "api_key": s.anthropic_api_key}
 
     if provider == "deepseek":
-        if not settings.deepseek_api_key:
+        if not s.deepseek_api_key:
             raise HTTPException(status_code=400, detail="No DeepSeek API key configured (Settings → LLM).")
         return {
             "family": "openai",
             "model": model,
-            "api_key": settings.deepseek_api_key,
+            "api_key": s.deepseek_api_key,
             "base_url": "https://api.deepseek.com",
         }
 
     # openai and any OpenAI-compatible provider
-    if not settings.openai_api_key:
+    if not s.openai_api_key:
         raise HTTPException(status_code=400, detail="No OpenAI API key configured (Settings → LLM).")
-    cfg: dict[str, Any] = {"family": "openai", "model": model, "api_key": settings.openai_api_key}
-    if settings.embeddings_base_url and provider not in ("openai",):
+    cfg: dict[str, Any] = {"family": "openai", "model": model, "api_key": s.openai_api_key}
+    if s.embeddings_base_url and provider not in ("openai",):
         # OpenAI-compatible endpoints may share the base URL with embeddings.
-        cfg["base_url"] = settings.embeddings_base_url
+        cfg["base_url"] = s.embeddings_base_url
     return cfg
 
 
@@ -698,7 +706,7 @@ def _trace_query(name: str, args: dict[str, Any]) -> str:
 
 
 async def _run_tool(
-    org: ActiveOrg,
+    org: ActiveProject,
     name: str,
     args: dict[str, Any],
     *,
@@ -741,7 +749,7 @@ def _trace_to_tool_content(trace: ToolCallTrace) -> str:
     return json.dumps(payload, ensure_ascii=False, default=str)
 
 
-async def _chat_openai(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest) -> ChatResponse:
+async def _chat_openai(llm: dict[str, Any], org: ActiveProject, req: ChatRequest) -> ChatResponse:
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(api_key=llm["api_key"], base_url=llm.get("base_url"))
@@ -826,7 +834,7 @@ def _anthropic_messages(req: ChatRequest) -> list[dict[str, Any]]:
     return out
 
 
-async def _chat_anthropic(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest) -> ChatResponse:
+async def _chat_anthropic(llm: dict[str, Any], org: ActiveProject, req: ChatRequest) -> ChatResponse:
     try:
         from anthropic import AsyncAnthropic
     except ImportError:
@@ -948,7 +956,7 @@ def _done_event(traces: list[ToolCallTrace], model: str) -> dict[str, Any]:
     return {"type": "done", "model": model, "sources_used": resp.sources_used}
 
 
-async def _stream_openai(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest):
+async def _stream_openai(llm: dict[str, Any], org: ActiveProject, req: ChatRequest):
     """Yield chat events ({type: text|reasoning|tool_start|tool_result|done})."""
     from openai import AsyncOpenAI
 
@@ -1094,7 +1102,7 @@ async def _stream_openai(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest):
     yield _done_event(traces, llm["model"])
 
 
-async def _stream_anthropic(llm: dict[str, Any], org: ActiveOrg, req: ChatRequest):
+async def _stream_anthropic(llm: dict[str, Any], org: ActiveProject, req: ChatRequest):
     """Yield chat events ({type: text|reasoning|tool_start|tool_result|done})."""
     from anthropic import AsyncAnthropic
 
@@ -1178,21 +1186,21 @@ async def _stream_anthropic(llm: dict[str, Any], org: ActiveOrg, req: ChatReques
 
 
 @router.get("/models")
-async def list_models(org: ActiveOrg = Depends(get_active_org)):
+async def list_models(org: ActiveProject = Depends(get_active_project)):
     """List the LLM models the chat can use, based on which API keys are set."""
-    settings = get_settings()
+    s = await get_org_settings(org.org_id)
     models: list[dict[str, str]] = []
     for provider, entries in _MODEL_CATALOG.items():
-        if not _provider_api_key(settings, provider):
+        if not _provider_api_key(s, provider):
             continue
         models.extend({"id": e["id"], "provider": provider, "label": e["label"]} for e in entries)
 
     # Make sure the configured default is always selectable (custom models or
     # OpenAI-compatible providers not in the catalog).
-    default_provider = (settings.llm_provider or "openai").lower()
-    default_model = settings.llm_model or ""
+    default_provider = (s.llm_provider or "openai").lower()
+    default_model = s.llm_model or ""
     default = None
-    if default_model and _provider_api_key(settings, default_provider):
+    if default_model and _provider_api_key(s, default_provider):
         if not any(m["provider"] == default_provider and m["id"] == default_model for m in models):
             models.insert(0, {"id": default_model, "provider": default_provider, "label": default_model})
         default = {"provider": default_provider, "model": default_model}
@@ -1202,10 +1210,10 @@ async def list_models(org: ActiveOrg = Depends(get_active_org)):
     return {"models": models, "default": default}
 
 
-def _validated_llm(req: ChatRequest) -> dict[str, Any]:
+def _validated_llm(s: OrgSettings, req: ChatRequest) -> dict[str, Any]:
     if not req.messages or req.messages[-1].role != "user":
         raise HTTPException(status_code=400, detail="The last message must be from the user.")
-    llm = _resolve_llm(req.provider, req.model)
+    llm = _resolve_llm(s, req.provider, req.model)
     if llm["family"] == "anthropic":
         try:
             import anthropic  # noqa: F401
@@ -1218,14 +1226,15 @@ def _validated_llm(req: ChatRequest) -> dict[str, Any]:
 
 
 @router.post("/stream")
-async def chat_stream(req: ChatRequest, org: ActiveOrg = Depends(get_active_org)):
+async def chat_stream(req: ChatRequest, org: ActiveProject = Depends(get_active_project)):
     """Streaming variant of the chat endpoint (Server-Sent Events).
 
     Emits ``data: {json}`` frames with events: ``reasoning`` / ``text``
     (incremental deltas), ``tool_start`` / ``tool_result`` (live retrieval
     trace), ``done`` (model + sources summary) and ``error``.
     """
-    llm = _validated_llm(req)
+    s = await get_org_settings(org.org_id)
+    llm = _validated_llm(s, req)
 
     async def gen():
         try:
@@ -1252,14 +1261,15 @@ async def chat_stream(req: ChatRequest, org: ActiveOrg = Depends(get_active_org)
 
 
 @router.post("", response_model=ChatResponse)
-async def chat(req: ChatRequest, org: ActiveOrg = Depends(get_active_org)):
+async def chat(req: ChatRequest, org: ActiveProject = Depends(get_active_project)):
     """Chat with a retrieval agent scoped to the active organization.
 
     The agent can search indexed repositories, memory, and the knowledge base.
     Every search it performs is returned in ``tool_calls`` so retrieval can be
     inspected directly.
     """
-    llm = _validated_llm(req)
+    s = await get_org_settings(org.org_id)
+    llm = _validated_llm(s, req)
     try:
         if llm["family"] == "anthropic":
             return await _chat_anthropic(llm, org, req)

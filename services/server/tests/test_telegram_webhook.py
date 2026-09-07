@@ -3,9 +3,10 @@
 Exercises the route together with the real capture-agent tool loop
 (src/telegram/capture_agent.py), mocking only the true external boundaries:
 the Telegram Bot API (client.send_message/get_file_path/download_file), the
-LLM (openai.AsyncOpenAI), and mem0 (memory_add/memory_search) — plus the KB
-store for the attachment scenario, since there's no test database in this
-repo. FastAPI's TestClient runs BackgroundTasks synchronously as part of
+LLM (openai.AsyncOpenAI), mem0 (memory_add/memory_search), and the per-org
+settings resolution (resolve_org_by_webhook_secret/get_org_settings) — plus
+the KB store for the attachment scenario, since there's no test database in
+this repo. FastAPI's TestClient runs BackgroundTasks synchronously as part of
 sending the response, so side effects can be asserted right after the POST.
 """
 from __future__ import annotations
@@ -15,9 +16,9 @@ import json
 import openai
 from fastapi.testclient import TestClient
 
-from src import config
 from src.api.app import api
 from src.api.routes import telegram as telegram_route
+from src.org_settings import OrgSettings
 from src.telegram import capture_agent
 
 WEBHOOK_URL = "/api/telegram/webhook"
@@ -84,17 +85,33 @@ _MEMORY_ADD_MESSAGE = _FakeMessage(
 )
 
 
-def _configure_settings(monkeypatch, **overrides):
-    settings = config.get_settings()
-    defaults = {
+def _configure_org_settings(monkeypatch, org_id: int = 1, **overrides) -> OrgSettings:
+    """Wire the webhook-secret -> org resolution and that org's Telegram settings.
+
+    Patches ``resolve_org_by_webhook_secret``/``get_org_settings`` as used by
+    ``api/routes/telegram.py``, standing in for the org_runtime_config lookup
+    (no test database in this repo).
+    """
+    values = {
         "telegram_bot_token": "BOTTOKEN",
         "telegram_webhook_secret": SECRET,
         "telegram_allowed_chat_ids": str(ALLOWED_CHAT_ID),
-        "telegram_org_id": 1,
     }
-    defaults.update(overrides)
-    for key, value in defaults.items():
-        monkeypatch.setattr(settings, key, value)
+    values.update(overrides)
+    settings = OrgSettings(**values)
+
+    async def _fake_resolve(secret):
+        if secret and secret == settings.telegram_webhook_secret:
+            return org_id
+        return None
+
+    async def _fake_get_org_settings(oid):
+        assert oid == org_id
+        return settings
+
+    monkeypatch.setattr(telegram_route, "resolve_org_by_webhook_secret", _fake_resolve)
+    monkeypatch.setattr(telegram_route, "get_org_settings", _fake_get_org_settings)
+    return settings
 
 
 def _text_update(chat_id: int, text: str, message_id: int = 501) -> dict:
@@ -142,12 +159,18 @@ def _patch_send_message(monkeypatch):
 
 def test_text_message_creates_memory(monkeypatch):
     """1. Realistic text update with a valid secret + allowlisted chat -> memory_add called."""
-    _configure_settings(monkeypatch)
+    _configure_org_settings(monkeypatch)
     sent = _patch_send_message(monkeypatch)
 
     monkeypatch.setattr(openai, "AsyncOpenAI", _FakeAsyncOpenAI)
+
+    async def _fake_get_org_settings(org_id):
+        assert org_id == 1
+        return OrgSettings()
+
+    monkeypatch.setattr(capture_agent, "get_org_settings", _fake_get_org_settings)
     monkeypatch.setattr(
-        capture_agent, "_resolve_llm", lambda: {"family": "openai", "model": "gpt-4o-mini", "api_key": "TOKEN"}
+        capture_agent, "_llm_family", lambda s: {"family": "openai", "model": "gpt-4o-mini", "api_key": "TOKEN"}
     )
 
     async def _fake_get_namespace(org_id):
@@ -184,26 +207,26 @@ def test_text_message_creates_memory(monkeypatch):
     assert "Acme" in sent[0]["text"]
 
 
-def test_missing_or_wrong_secret_returns_401(monkeypatch):
-    """2. Missing or incorrect X-Telegram-Bot-Api-Secret-Token -> 401."""
-    _configure_settings(monkeypatch)
+def test_missing_or_wrong_secret_returns_403(monkeypatch):
+    """2. Missing or incorrect X-Telegram-Bot-Api-Secret-Token -> 403 (no org resolved)."""
+    _configure_org_settings(monkeypatch)
     _patch_send_message(monkeypatch)
 
     client = TestClient(api)
     update = _text_update(ALLOWED_CHAT_ID, "hello")
 
     resp_missing = client.post(WEBHOOK_URL, json=update)
-    assert resp_missing.status_code == 401
+    assert resp_missing.status_code == 403
 
     resp_wrong = client.post(
         WEBHOOK_URL, json=update, headers={"X-Telegram-Bot-Api-Secret-Token": "wrong-secret"}
     )
-    assert resp_wrong.status_code == 401
+    assert resp_wrong.status_code == 403
 
 
 def test_non_allowlisted_chat_id_is_ignored(monkeypatch):
     """3. chat_id not in the allowlist -> 200 but no memory_add / kb.store call."""
-    _configure_settings(monkeypatch)
+    _configure_org_settings(monkeypatch)
     sent = _patch_send_message(monkeypatch)
 
     async def _unexpected_memory_add(*args, **kwargs):
@@ -228,7 +251,7 @@ def test_non_allowlisted_chat_id_is_ignored(monkeypatch):
 
 def test_document_attachment_saves_to_kb_store(monkeypatch):
     """4. Document attachment -> kb.store.save_upload called with the downloaded bytes."""
-    _configure_settings(monkeypatch)
+    _configure_org_settings(monkeypatch)
     _patch_send_message(monkeypatch)
 
     async def _fake_get_file_path(file_id, bot_token):
@@ -243,10 +266,20 @@ def test_document_attachment_saves_to_kb_store(monkeypatch):
     monkeypatch.setattr(telegram_route.client, "get_file_path", _fake_get_file_path)
     monkeypatch.setattr(telegram_route.client, "download_file", _fake_download_file)
 
+    async def _fake_default_project_id(org_id):
+        assert org_id == 1
+        return 7
+
+    import src.projects as projects_mod
+
+    monkeypatch.setattr(projects_mod, "get_default_project_id", _fake_default_project_id)
+
     save_calls = []
 
-    async def _fake_save_upload(org_id, filename, data):
-        save_calls.append({"org_id": org_id, "filename": filename, "data": data})
+    async def _fake_save_upload(org_id, project_id, filename, data):
+        save_calls.append(
+            {"org_id": org_id, "project_id": project_id, "filename": filename, "data": data}
+        )
         return {"id": 42, "title": "whatsapp_screenshot", "filename": filename, "status": "pending"}
 
     async def _fake_process_document(doc_id):
@@ -273,6 +306,7 @@ def test_document_attachment_saves_to_kb_store(monkeypatch):
 
     assert len(save_calls) == 1
     assert save_calls[0]["org_id"] == 1
+    assert save_calls[0]["project_id"] == 7
     assert save_calls[0]["filename"] == "whatsapp_screenshot.jpg"
     assert save_calls[0]["data"] == b"fake-image-bytes"
 

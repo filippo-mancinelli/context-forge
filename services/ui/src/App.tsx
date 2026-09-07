@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
-import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router-dom'
-import { GitBranch, Brain, Wrench, SlidersHorizontal, Menu, X, Building2, Library, MessagesSquare, Database, Braces, Globe, Server } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { BrowserRouter, Link, NavLink, Navigate, Route, Routes } from 'react-router-dom'
+import { GitBranch, Brain, Wrench, SlidersHorizontal, Menu, X, Building2, Library, MessagesSquare, Database, Braces, Globe, Server, Boxes, ChevronDown, LogOut, TerminalSquare, UserRound } from 'lucide-react'
 import Repos from './pages/Repos'
 import Chat from './pages/Chat'
 import DataSources from './pages/DataSources'
+import SshSources from './pages/SshSources'
 import DataSourceDetail from './pages/DataSourceDetail'
 import ApiContracts from './pages/ApiContracts'
 import Memory from './pages/Memory'
@@ -18,25 +19,24 @@ import Settings from './pages/Settings'
 import Organization from './pages/Organization'
 import Setup from './pages/Setup'
 import Login from './pages/Login'
-import AcceptInvite from './pages/AcceptInvite'
 import SharedChat from './pages/SharedChat'
-import OAuth from './pages/OAuth'
-import { api } from './lib/api'
+import { api, setAuthToken } from './lib/api'
 import { useAppStore } from './store'
 import { Logo } from './components/Logo'
 import { Button, Dialog, DialogFooter, Input, useToast } from './components/ui'
+import NewProjectDialog from './components/NewProjectDialog'
 
 const navLinks = [
   { to: '/chat', icon: MessagesSquare, label: 'Agent Chat' },
   { to: '/repos', icon: GitBranch, label: 'Repositories' },
   { to: '/datasources', icon: Database, label: 'Data Sources' },
+  { to: '/ssh-sources', icon: TerminalSquare, label: 'SSH Files' },
   { to: '/contracts', icon: Braces, label: 'API Contracts' },
   { to: '/knowledge', icon: Library, label: 'Knowledge Base' },
   { to: '/web', icon: Globe, label: 'Web Pages' },
   { to: '/memory', icon: Brain, label: 'Memory' },
   { to: '/environments', icon: Server, label: 'Environments' },
   { to: '/settings', icon: SlidersHorizontal, label: 'Settings' },
-  { to: '/organization', icon: Building2, label: 'Organization' },
   { to: '/tools', icon: Wrench, label: 'MCP Tools' },
   //{ to: '/jobs', icon: Activity, label: 'Async Jobs' },
 ]
@@ -105,11 +105,11 @@ function OrgSwitcher() {
 
   return (
     <div className="flex items-center gap-1">
-      <Building2 className="w-3.5 h-3.5 text-muted flex-shrink-0" />
+      <Building2 className="w-3.5 h-3.5 text-sidebar-text flex-shrink-0" />
       <select
         value={activeOrgId ?? ''}
         onChange={(e) => onSwitch(e.target.value)}
-        className="flex-1 min-w-0 text-xs bg-bg text-text border border-border rounded px-1.5 py-1 focus:outline-none focus:border-accent"
+        className="flex-1 min-w-0 text-xs bg-transparent text-[var(--sidebar-text-muted)] border border-[var(--sidebar-control-border)] rounded px-1.5 py-1 focus:outline-none focus:border-primary [&>option]:bg-bg [&>option]:text-text"
         aria-label="Active organization"
       >
         {organizations.map((o) => (
@@ -124,11 +124,127 @@ function OrgSwitcher() {
   )
 }
 
-function NavItems({ onNavigate }: { onNavigate?: () => void }) {
+function ProjectSwitcher() {
+  const projects = useAppStore((s) => s.projects)
+  const activeProjectId = useAppStore((s) => s.activeProjectId)
+  const setActiveProject = useAppStore((s) => s.setActiveProject)
+  const [showNew, setShowNew] = useState(false)
+
+  if (projects.length === 0) return null
+
+  const onSwitch = (value: string) => {
+    if (value === '__new__') {
+      setShowNew(true)
+      return
+    }
+    const id = Number(value)
+    // In-app: setActiveProject changes the store; the routed subtree remounts
+    // via its key (see App), so every page refetches with the new project.
+    if (id !== activeProjectId) setActiveProject(id)
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <Boxes className="w-3.5 h-3.5 text-sidebar-text flex-shrink-0" />
+      <select
+        value={activeProjectId ?? ''}
+        onChange={(e) => onSwitch(e.target.value)}
+        className="flex-1 min-w-0 text-xs bg-transparent text-[var(--sidebar-text-muted)] border border-[var(--sidebar-control-border)] rounded px-1.5 py-1 focus:outline-none focus:border-primary [&>option]:bg-bg [&>option]:text-text"
+        aria-label="Active project"
+      >
+        {projects.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+        <option value="__new__">+ New project…</option>
+      </select>
+      <NewProjectDialog open={showNew} onClose={() => setShowNew(false)} />
+    </div>
+  )
+}
+
+function UserMenu() {
+  const currentUser = useAppStore((s) => s.currentUser)
+  const organizations = useAppStore((s) => s.organizations)
+  const activeOrgId = useAppStore((s) => s.activeOrgId)
+  const logout = useAppStore((s) => s.logout)
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const onClickOutside = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClickOutside)
+    return () => document.removeEventListener('mousedown', onClickOutside)
+  }, [])
+
+  const role = organizations.find((o) => o.id === activeOrgId)?.role
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1.5 text-xs text-sidebar-text hover:text-white transition-colors px-2 py-1.5 rounded border border-transparent hover:border-[var(--sidebar-control-border)]"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <UserRound className="w-3.5 h-3.5" />
+        <span className="max-w-[10rem] truncate">{currentUser?.username ?? 'Account'}</span>
+        <ChevronDown className="w-3 h-3" />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 mt-1 w-56 rounded border border-border bg-surface text-text shadow-lg z-50"
+        >
+          <div className="px-3 py-2 border-b border-border">
+            <div className="text-sm font-medium truncate">{currentUser?.username}</div>
+            {currentUser?.email && (
+              <div className="text-xs text-muted truncate">{currentUser.email}</div>
+            )}
+            {role && <div className="text-xs text-muted capitalize">{role}</div>}
+          </div>
+          <Link
+            to="/organization"
+            role="menuitem"
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-bg transition-colors"
+          >
+            <Building2 className="w-3.5 h-3.5" /> Organization
+          </Link>
+          <button
+            role="menuitem"
+            onClick={logout}
+            className="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-bg transition-colors text-left"
+          >
+            <LogOut className="w-3.5 h-3.5" /> Logout
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TopBar() {
+  return (
+    <header className="hidden md:flex items-center justify-between px-4 h-12 bg-sidebar-bg text-white flex-shrink-0">
+      <Logo />
+      <div className="flex items-center gap-3">
+        <OrgSwitcher />
+        <ProjectSwitcher />
+        <UserMenu />
+      </div>
+    </header>
+  )
+}
+
+function NavItems({ onNavigate, showLogout = false }: { onNavigate?: () => void; showLogout?: boolean }) {
   const logout = useAppStore((s) => s.logout)
   return (
     <>
-      <nav className="flex-1 py-2">
+      <nav className="flex-1 py-2 px-2 overflow-y-auto scrollbar-thin">
         {navLinks.map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
@@ -136,10 +252,10 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
             onClick={onNavigate}
             className={({ isActive }) =>
               [
-                'flex items-center gap-2.5 px-4 py-2.5 text-sm transition-colors',
+                'flex items-center gap-2.5 px-3 h-10 my-0.5 text-sm rounded border transition-colors',
                 isActive
-                  ? 'text-accent font-medium border-l-2 border-accent bg-[#eaf4fb] pl-[14px]'
-                  : 'text-muted hover:text-text border-l-2 border-transparent pl-[14px]',
+                  ? 'text-white border-primary bg-[rgba(124,201,242,0.12)]'
+                  : 'text-sidebar-text border-transparent hover:text-white',
               ].join(' ')
             }
           >
@@ -148,31 +264,23 @@ function NavItems({ onNavigate }: { onNavigate?: () => void }) {
           </NavLink>
         ))}
       </nav>
-      <div style={{ borderTop: '1px solid var(--border)' }} className="px-4 py-3">
-        <button
-          onClick={logout}
-          className="text-xs text-muted hover:text-text transition-colors w-full text-left"
-        >
-          Logout
-        </button>
-      </div>
+      {showLogout && (
+        <div className="px-4 py-3 border-t border-[var(--sidebar-border)]">
+          <button
+            onClick={logout}
+            className="text-xs text-sidebar-text hover:text-white transition-colors w-full text-left"
+          >
+            Logout
+          </button>
+        </div>
+      )}
     </>
   )
 }
 
 function Sidebar() {
   return (
-    <aside
-      style={{ borderRight: '1px solid var(--border)', minWidth: '180px', width: '180px' }}
-      className="hidden md:flex flex-col h-full bg-surface flex-shrink-0"
-    >
-      <div
-        style={{ borderBottom: '1px solid var(--border)' }}
-        className="px-4 py-3 space-y-2"
-      >
-        <Logo />
-        <OrgSwitcher />
-      </div>
+    <aside className="hidden md:flex w-[250px] flex-shrink-0 flex-col h-full bg-sidebar-bg">
       <NavItems />
     </aside>
   )
@@ -180,14 +288,11 @@ function Sidebar() {
 
 function MobileHeader({ onMenuOpen }: { onMenuOpen: () => void }) {
   return (
-    <header
-      style={{ borderBottom: '1px solid var(--border)' }}
-      className="md:hidden flex items-center justify-between px-4 py-3 bg-surface sticky top-0 z-30"
-    >
+    <header className="md:hidden flex items-center justify-between px-4 py-3 bg-sidebar-bg text-white sticky top-0 z-30">
       <Logo />
       <button
         onClick={onMenuOpen}
-        className="text-muted hover:text-text transition-colors p-1"
+        className="text-[var(--sidebar-text-strong)] hover:text-white transition-colors p-1"
         aria-label="Open menu"
       >
         <Menu className="w-5 h-5" />
@@ -216,37 +321,44 @@ function Drawer({ open, onClose }: { open: boolean; onClose: () => void }) {
         aria-hidden="true"
       />
       <div
-        style={{ borderRight: '1px solid var(--border)', width: '240px' }}
-        className="fixed top-0 left-0 h-full bg-surface z-50 flex flex-col md:hidden"
+        style={{ width: '250px' }}
+        className="fixed top-0 left-0 h-full bg-sidebar-bg z-50 flex flex-col md:hidden"
       >
-        <div
-          style={{ borderBottom: '1px solid var(--border)' }}
-          className="px-4 py-3 space-y-2"
-        >
+        <div className="px-4 py-3 space-y-2 text-white border-b border-[var(--sidebar-border)]">
           <div className="flex items-center justify-between">
             <Logo />
             <button
               onClick={onClose}
-              className="text-muted hover:text-text transition-colors p-1"
+              className="text-sidebar-text hover:text-white transition-colors p-1"
               aria-label="Close menu"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
           <OrgSwitcher />
+          <ProjectSwitcher />
         </div>
-        <NavItems onNavigate={onClose} />
+        <NavItems onNavigate={onClose} showLogout />
       </div>
     </>
   )
 }
 
 export default function App() {
+  // Keycloak callback redirects here with the session token in the query string.
+  const oidcToken = new URLSearchParams(window.location.search).get('oidc_token')
+  if (oidcToken) {
+    setAuthToken(oidcToken)
+    window.history.replaceState({}, '', window.location.pathname)
+  }
+
   const authState = useAppStore((s) => s.authState)
   const setupMode = useAppStore((s) => s.setupMode)
   const setAuthState = useAppStore((s) => s.setAuthState)
   const completeLogin = useAppStore((s) => s.completeLogin)
   const bootstrap = useAppStore((s) => s.bootstrap)
+  const activeOrgId = useAppStore((s) => s.activeOrgId)
+  const activeProjectId = useAppStore((s) => s.activeProjectId)
   const [drawerOpen, setDrawerOpen] = useState(false)
 
   useEffect(() => {
@@ -257,19 +369,6 @@ export default function App() {
   const shareMatch = window.location.pathname.match(/^\/share\/chat\/(.+)$/)
   if (shareMatch) {
     return <SharedChat token={decodeURIComponent(shareMatch[1])} />
-  }
-
-  // Public invite-acceptance link, reachable without an existing session.
-  const inviteMatch = window.location.pathname.match(/^\/invite\/(.+)$/)
-  if (inviteMatch) {
-    return (
-      <AcceptInvite
-        token={decodeURIComponent(inviteMatch[1])}
-        onAccepted={() => {
-          window.location.href = '/'
-        }}
-      />
-    )
   }
 
   if (authState === 'loading') {
@@ -294,32 +393,35 @@ export default function App() {
   return (
     <BrowserRouter>
       {/* 100dvh tracks the real visible viewport on mobile (h-screen is the fallback). */}
-      <div className="flex h-screen overflow-hidden" style={{ height: '100dvh' }}>
-        <Sidebar />
-        <div className="flex-1 flex flex-col min-w-0">
-          <MobileHeader onMenuOpen={() => setDrawerOpen(true)} />
-          <Drawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
-          <main className="flex-1 min-h-0 overflow-auto bg-bg">
-            <Routes>
-              <Route path="/" element={<Navigate to="/repos" replace />} />
-              <Route path="/search" element={<Search />} />
-              <Route path="/chat" element={<Chat />} />
-              <Route path="/repos" element={<Repos />} />
-              <Route path="/repos/:repoName" element={<RepoDetail />} />
-              <Route path="/datasources" element={<DataSources />} />
-              <Route path="/datasources/:connectionId" element={<DataSourceDetail />} />
-              <Route path="/contracts" element={<ApiContracts />} />
-              <Route path="/knowledge" element={<Knowledge />} />
-              <Route path="/web" element={<WebPages />} />
-              <Route path="/memory" element={<Memory />} />
-              <Route path="/environments" element={<Environments />} />
-              <Route path="/settings" element={<Settings />} />
-              <Route path="/organization" element={<Organization />} />
-              <Route path="/tools" element={<Tools />} />
-              <Route path="/jobs" element={<Jobs />} />
-              <Route path="/oauth" element={<OAuth />} />
-            </Routes>
-          </main>
+      <div className="flex flex-col h-screen overflow-hidden" style={{ height: '100dvh' }}>
+        <TopBar />
+        <div className="flex flex-1 min-h-0">
+          <Sidebar />
+          <div className="flex-1 flex flex-col min-w-0">
+            <MobileHeader onMenuOpen={() => setDrawerOpen(true)} />
+            <Drawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />
+            <main className="flex-1 min-h-0 overflow-auto bg-bg">
+              <Routes key={`${activeOrgId}:${activeProjectId}`}>
+                <Route path="/" element={<Navigate to="/repos" replace />} />
+                <Route path="/search" element={<Search />} />
+                <Route path="/chat" element={<Chat />} />
+                <Route path="/repos" element={<Repos />} />
+                <Route path="/repos/:repoName" element={<RepoDetail />} />
+                <Route path="/datasources" element={<DataSources />} />
+                <Route path="/datasources/:connectionId" element={<DataSourceDetail />} />
+                <Route path="/ssh-sources" element={<SshSources />} />
+                <Route path="/contracts" element={<ApiContracts />} />
+                <Route path="/knowledge" element={<Knowledge />} />
+                <Route path="/web" element={<WebPages />} />
+                <Route path="/memory" element={<Memory />} />
+                <Route path="/environments" element={<Environments />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="/organization" element={<Organization />} />
+                <Route path="/tools" element={<Tools />} />
+                <Route path="/jobs" element={<Jobs />} />
+              </Routes>
+            </main>
+          </div>
         </div>
       </div>
     </BrowserRouter>
