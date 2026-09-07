@@ -103,6 +103,36 @@ def cmd_test(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def cmd_migrate(args: argparse.Namespace) -> None:
+    """Apply pending schema migrations, or report the current version."""
+    import asyncio
+
+    from .db import close_db, get_pool
+    from .migrations.runner import current_version, discover_versions, run_migrations
+
+    async def _run() -> None:
+        pool = await get_pool()
+        try:
+            if args.status:
+                version = await current_version(pool)
+                print(f"Current schema version: {version}")
+                pending = [m for m in discover_versions() if m.VERSION > version]
+                for module in pending:
+                    print(f"  pending: {module.VERSION:04d}_{module.NAME}")
+                if not pending:
+                    print("  no pending migrations")
+            else:
+                applied = await run_migrations(pool)
+                if applied:
+                    print("Applied: " + ", ".join(str(v) for v in applied))
+                else:
+                    print("Already up to date")
+        finally:
+            await close_db()
+
+    asyncio.run(_run())
+
+
 def main() -> None:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -140,6 +170,17 @@ def main() -> None:
         help="Override configured server URL",
     )
     test_parser.set_defaults(func=cmd_test)
+
+    # Migrate command
+    migrate_parser = subparsers.add_parser(
+        "migrate", help="Apply pending database schema migrations"
+    )
+    migrate_parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Print the current schema version and the pending migrations",
+    )
+    migrate_parser.set_defaults(func=cmd_migrate)
 
     args = parser.parse_args()
 
