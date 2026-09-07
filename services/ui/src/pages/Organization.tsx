@@ -709,6 +709,7 @@ function ToolActivitySection({ orgId }: { orgId: number }) {
               key={w}
               size="sm"
               variant={statsWindow === w ? 'primary' : 'ghost'}
+              aria-pressed={statsWindow === w}
               onClick={() => setStatsWindow(w)}
             >
               {w}
