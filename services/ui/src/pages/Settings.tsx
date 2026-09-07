@@ -472,6 +472,7 @@ function McpKeysTab() {
   const [keyName, setKeyName] = useState('')
   const [keyPermissions, setKeyPermissions] = useState<string[]>(['context-read', 'context-write'])
   const [expiresDays, setExpiresDays] = useState('')
+  const [rateLimit, setRateLimit] = useState('')
   const projects = useAppStore((s) => s.projects)
   const activeProjectId = useAppStore((s) => s.activeProjectId)
   const organizations = useAppStore((s) => s.organizations)
@@ -494,6 +495,10 @@ function McpKeysTab() {
   useEffect(() => { loadKeys() }, [loadKeys])
 
   const handleCreate = async () => {
+    if (rateLimit && (!/^\d+$/.test(rateLimit) || Number(rateLimit) < 1 || Number(rateLimit) > 100000)) {
+      toast.error('Rate limit must be a positive integer between 1 and 100000, or left empty for unlimited.')
+      return
+    }
     setCreating(true)
     setError(null)
     try {
@@ -503,6 +508,7 @@ function McpKeysTab() {
         permissions: keyPermissions,
         expires_days: expiresDays ? parseInt(expiresDays, 10) : undefined,
         project_id: keyProjectId ?? undefined,
+        rate_limit_per_minute: rateLimit ? parseInt(rateLimit, 10) : undefined,
       })
       const endpoint = chosen && orgSlug ? `/mcp/${orgSlug}/${chosen.slug}` : ''
       setNewKey({ key: response.key, name: response.name, endpoint })
@@ -511,6 +517,7 @@ function McpKeysTab() {
       setShowCreate(false)
       setKeyName('')
       setExpiresDays('')
+      setRateLimit('')
       setKeyPermissions(['context-read', 'context-write'])
     } catch (e) {
       toast.error(String(e))
@@ -567,6 +574,7 @@ function McpKeysTab() {
                 <Th>Name</Th>
                 <Th>Project</Th>
                 <Th>Permissions</Th>
+                <Th>Rate limit</Th>
                 <Th>Created</Th>
                 <Th>Last used</Th>
                 <Th>Expires</Th>
@@ -597,6 +605,9 @@ function McpKeysTab() {
                   </Td>
                   <Td>
                     <code className="text-xs font-mono text-muted">{key.permissions ?? key.scope}</code>
+                  </Td>
+                  <Td className="text-xs text-muted">
+                    {key.rate_limit_per_minute ? `${key.rate_limit_per_minute}/min` : 'Unlimited'}
                   </Td>
                   <Td className="text-xs text-muted">{fmtDate(key.created_at)}</Td>
                   <Td className="text-xs text-muted">{fmtDate(key.last_used_at)}</Td>
@@ -654,6 +665,15 @@ function McpKeysTab() {
             value={expiresDays}
             onChange={e => setExpiresDays(e.target.value)}
             placeholder="Leave empty for no expiration"
+          />
+          <Input
+            label="Rate limit (calls/min)"
+            type="number"
+            min={1}
+            value={rateLimit}
+            onChange={e => setRateLimit(e.target.value)}
+            placeholder="Leave empty for unlimited"
+            hint="Applies to this key only, per server process."
           />
         </div>
         <DialogFooter>
