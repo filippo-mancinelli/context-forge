@@ -6,7 +6,6 @@ The agent then polls job_status() / job_result() until done.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import uuid
@@ -131,6 +130,7 @@ async def job_submit(
     method: str = "POST",
     payload: Optional[dict] = None,
     headers: Optional[dict] = None,
+    max_attempts: int = 3,
 ) -> dict:
     """Submit a long-running HTTP request as an async background job.
 
@@ -140,11 +140,16 @@ async def job_submit(
     Ideal for slow AI agents, data pipelines, or any HTTP endpoint that takes
     more than a few seconds to respond (which would otherwise cause MCP timeouts).
 
+    The job is executed by the server's scheduler, so it survives a restart.
+    Transient failures (5xx, 408, 429, timeouts, connection errors) are retried
+    with exponential backoff; after max_attempts the job becomes "dead".
+
     Args:
         url: The HTTP URL to call
         method: HTTP method: "GET" or "POST" (default "POST")
         payload: Request body as a dict (for POST requests)
         headers: Optional HTTP headers (e.g. {"Authorization": "Bearer token"})
+        max_attempts: How many times to try before dead-lettering (1-10, default 3)
 
     Returns:
         dict with job_id to use with job_status() and job_result()
@@ -158,6 +163,9 @@ async def job_submit(
     """
     from .context import resolve_org_id, require_project_id
 
+    if not 1 <= max_attempts <= 10:
+        return {"status": "error", "error": "max_attempts must be between 1 and 10"}
+
     job_id = str(uuid.uuid4())
     org_id = await resolve_org_id()
     project_id = await require_project_id()
@@ -165,18 +173,16 @@ async def job_submit(
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO jobs (id, tool, params, status, org_id, project_id)
-            VALUES ($1, 'http', $2, 'pending', $3, $4)
+            INSERT INTO jobs (id, tool, params, status, org_id, project_id,
+                              max_attempts, next_attempt_at)
+            VALUES ($1, 'http', $2, 'pending', $3, $4, $5, NOW())
             """,
             job_id,
             json.dumps({"url": url, "method": method, "payload": payload or {}, "headers": headers or {}}),
             org_id,
             project_id,
+            max_attempts,
         )
-
-    asyncio.create_task(
-        _execute_http_job(job_id, url, method, payload or {}, headers or {})
-    )
 
     return {
         "status": "ok",
@@ -194,8 +200,8 @@ async def job_status(job_id: str) -> dict:
         job_id: The job ID returned by job_submit()
 
     Returns:
-        dict with status: "pending" | "running" | "done" | "error"
-        When done or error, also includes the result or error_message.
+        dict with status: "pending" | "running" | "done" | "error" | "dead",
+        the attempt counters, and when the next attempt is due.
     """
     from .context import require_project_id
 
@@ -203,7 +209,8 @@ async def job_status(job_id: str) -> dict:
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, status, error_message, created_at, updated_at "
+            "SELECT id, status, error_message, attempts, max_attempts, "
+            "next_attempt_at, last_error, created_at, updated_at "
             "FROM jobs WHERE id = $1 AND project_id = $2",
             job_id, project_id,
         )
@@ -211,11 +218,16 @@ async def job_status(job_id: str) -> dict:
     if not row:
         return {"status": "error", "error": f"Job not found: {job_id}"}
 
+    next_attempt_at = row["next_attempt_at"]
     return {
         "status": "ok",
         "job_id": job_id,
         "job_status": row["status"],
         "error_message": row["error_message"],
+        "last_error": row["last_error"],
+        "attempts": row["attempts"],
+        "max_attempts": row["max_attempts"],
+        "next_attempt_at": next_attempt_at.isoformat() if next_attempt_at else None,
         "created_at": row["created_at"].isoformat(),
         "updated_at": row["updated_at"].isoformat(),
         "hint": "Call job_result() to get the full result when job_status is 'done'",
@@ -231,7 +243,8 @@ async def job_result(job_id: str) -> dict:
         job_id: The job ID returned by job_submit()
 
     Returns:
-        dict with the job result, or an error if the job is not yet done or failed.
+        dict with the job result, or an error if the job is not yet done, failed,
+        or exhausted its retries ("dead").
     """
     from .context import require_project_id
 
@@ -239,25 +252,31 @@ async def job_result(job_id: str) -> dict:
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, status, result, error_message FROM jobs WHERE id = $1 AND project_id = $2",
+            "SELECT id, status, result, error_message, last_error, attempts, max_attempts "
+            "FROM jobs WHERE id = $1 AND project_id = $2",
             job_id, project_id,
         )
 
     if not row:
         return {"status": "error", "error": f"Job not found: {job_id}"}
 
-    if row["status"] == "pending" or row["status"] == "running":
+    if row["status"] in ("pending", "running"):
         return {
             "status": "not_ready",
             "job_status": row["status"],
+            "attempts": row["attempts"],
+            "max_attempts": row["max_attempts"],
             "message": f"Job is still {row['status']}. Try again in a few seconds.",
         }
 
-    if row["status"] == "error":
+    if row["status"] in ("error", "dead"):
         return {
             "status": "error",
             "job_id": job_id,
-            "error": row["error_message"],
+            "job_status": row["status"],
+            "error": row["error_message"] or row["last_error"],
+            "attempts": row["attempts"],
+            "max_attempts": row["max_attempts"],
         }
 
     raw_result = row["result"]
