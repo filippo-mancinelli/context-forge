@@ -184,32 +184,76 @@ async def ssh_grep(
 
 
 @mcp.tool()
-@requires_permission("ssh-write")
-async def ssh_write_file(source: str, path: str, content: str) -> dict:
+@requires_permission("ssh-write", alternatives=("context-write",))
+async def ssh_write_file(source: str, path: str, content: str, reason: str = "") -> dict:
     """Create or overwrite a text file on an SSH source (confined to its root).
 
     The write is atomic (temp file + rename) and creates any missing
     intermediate directories. Deleting files is not supported.
 
+    Without the ssh-write permission nothing is written: the content is stored
+    as a write request with a size/hash preview for an organization admin to
+    approve. Poll the outcome with write_request_status.
+
     Args:
         source: source name or id (from ssh_sources).
         path: file path relative to the source root.
         content: full text content to write.
+        reason: why the change is needed; shown to the approver.
 
     Returns:
         dict with the written `path` and `bytes_written`.
     """
     from ..ssh_sources import client
     from ..ssh_sources.service import decrypted_conn
+    from .permissions import has_permission
 
     try:
         record = await _resolve(source, include_secret=True)
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "error": str(e)}
+
+    if not has_permission("ssh-write"):
+        return await _propose_ssh_write(record, path, content, reason)
+
+    try:
         result = await asyncio.to_thread(
             client.write_file, decrypted_conn(record), path, content
         )
     except Exception as e:  # noqa: BLE001
         return {"status": "error", "error": str(e)}
     return {"source": record["name"], **result}
+
+
+async def _propose_ssh_write(record: dict, path: str, content: str, reason: str) -> dict:
+    """Store the content as a pending write request instead of writing it."""
+    from .. import write_previews, write_requests
+    from .approvals import current_requester, pending_response
+    from .audit import scrub_text
+
+    try:
+        preview = await asyncio.to_thread(
+            write_previews.file_preview, ssh_service.decrypted_conn(record), path, content
+        )
+    except Exception as e:  # noqa: BLE001
+        return {"status": "error", "error": str(e)}
+    if preview.get("read_error"):
+        preview["read_error"] = scrub_text(preview["read_error"])
+
+    kind, requester_id, label = current_requester()
+    created = await write_requests.create(
+        org_id=record["org_id"],
+        project_id=record["project_id"],
+        kind="ssh_write_file",
+        target=f"{record['name']}:{path}",
+        payload={"source": record["name"], "path": path, "content": content},
+        preview=preview,
+        reason=reason,
+        requested_by_kind=kind,
+        requested_by_id=requester_id,
+        requested_by=label,
+    )
+    return pending_response(created["id"], preview)
 
 
 @mcp.tool()
