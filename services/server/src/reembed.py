@@ -72,8 +72,15 @@ async def reembed_org(org_id: int, job_id: str) -> dict:
                 )
                 done += len(batch)
             counts[table] = done
-        dims = int((await get_org_settings(org_id)).embeddings_dims)
-        await ensure_org_indexes(org_id, dims)
+        try:
+            dims = int((await get_org_settings(org_id)).embeddings_dims)
+            await ensure_org_indexes(org_id, dims)
+        except Exception:
+            # Best-effort: the re-embed itself succeeded, so it still completes
+            # even if the index maintenance that follows it could not run.
+            logger.exception(
+                "HNSW index maintenance skipped after re-embed (org=%s)", org_id
+            )
         await _set_job_status(job_id, "completed", result=counts)
     except Exception as exc:
         logger.exception("org_reembed failed (org=%s)", org_id)

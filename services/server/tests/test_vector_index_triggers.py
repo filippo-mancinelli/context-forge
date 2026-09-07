@@ -16,6 +16,9 @@ def test_boot_schedules_index_maintenance_after_tenant_storage():
     assert src.index("ensure_tenant_storage()") < src.index("ensure_all_indexes()")
     # It must not block boot: the ensure runs as a background task.
     assert "asyncio.create_task(ensure_all_indexes())" in src
+    # A bare create_task() is only weakly referenced by the loop and can be
+    # garbage-collected before it runs: it must be kept alive.
+    assert "_keep(asyncio.create_task(ensure_all_indexes()))" in src
 
 
 def test_reembed_ensures_the_indexes_once_with_the_org_dimension(monkeypatch):
@@ -50,6 +53,35 @@ def test_reembed_ensures_the_indexes_once_with_the_org_dimension(monkeypatch):
     asyncio.run(reembed.reembed_org(5, "job-1"))
 
     assert calls == [(5, 3072)]
+
+
+def test_reembed_still_completes_when_index_maintenance_lookup_fails(monkeypatch):
+    statuses = []
+
+    async def fake_iter_chunks(table, org_id, batch_size):
+        yield [(10, "hello")]
+
+    async def fake_embed_batch(texts, org_id):
+        return [[0.1] * 4 for _ in texts]
+
+    async def fake_update(table, pairs, org_id):
+        pass
+
+    async def fake_job_update(job_id, status, result=None, error=None):
+        statuses.append(status)
+
+    async def fake_org_settings(org_id):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(reembed, "_iter_chunks", fake_iter_chunks)
+    monkeypatch.setattr(reembed, "embed_batch", fake_embed_batch)
+    monkeypatch.setattr(reembed, "_update_embeddings", fake_update)
+    monkeypatch.setattr(reembed, "_set_job_status", fake_job_update)
+    monkeypatch.setattr(reembed, "get_org_settings", fake_org_settings)
+
+    asyncio.run(reembed.reembed_org(5, "job-1"))
+
+    assert statuses == ["running", "completed"]
 
 
 def _patch_settings(monkeypatch, current, calls):
