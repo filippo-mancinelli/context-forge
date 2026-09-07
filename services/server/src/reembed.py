@@ -65,7 +65,11 @@ async def reembed_org(org_id: int, job_id: str) -> dict:
     try:
         try:
             # A new dimension does not fit the old typed index: it must go first.
-            await drop_org_indexes(org_id)
+            try:
+                dims = int((await get_org_settings(org_id)).embeddings_dims)
+            except Exception:
+                dims = None
+            await drop_org_indexes(org_id, keep_dims=dims)
         except Exception:
             logger.exception("HNSW index drop skipped before re-embed (org=%s)", org_id)
         for table in _TABLES:

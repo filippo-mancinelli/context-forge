@@ -10,7 +10,7 @@ from src.config import ForgeConfig
 from src.org_settings import OrgSettings
 
 
-async def _no_drop(org_id):
+async def _no_drop(org_id, keep_dims=None):
     return []
 
 
@@ -35,8 +35,8 @@ def test_reembed_drops_the_org_indexes_before_the_first_update(monkeypatch):
     async def fake_embed_batch(texts, org_id):
         return [[0.1] * 4 for _ in texts]
 
-    async def fake_drop(org_id):
-        order.append(("drop", org_id))
+    async def fake_drop(org_id, keep_dims=None):
+        order.append(("drop", org_id, keep_dims))
         return []
 
     async def fake_update(table, pairs, org_id):
@@ -62,7 +62,7 @@ def test_reembed_drops_the_org_indexes_before_the_first_update(monkeypatch):
 
     asyncio.run(reembed.reembed_org(5, "job-1"))
 
-    assert order[0] == ("drop", 5)
+    assert order[0] == ("drop", 5, 3072)
     assert order[1] == ("update", "repo_chunks")
     assert order[-1] == ("ensure", 5, 3072)
 
@@ -76,7 +76,7 @@ def test_reembed_still_runs_when_the_index_drop_fails(monkeypatch):
     async def fake_embed_batch(texts, org_id):
         return [[0.1] * 4 for _ in texts]
 
-    async def fake_drop(org_id):
+    async def fake_drop(org_id, keep_dims=None):
         raise RuntimeError("db unavailable")
 
     async def fake_update(table, pairs, org_id):

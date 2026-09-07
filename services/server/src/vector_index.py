@@ -22,20 +22,57 @@ HNSW_TABLES: tuple[str, ...] = ("repo_chunks", "kb_chunks", "web_chunks")
 HNSW_M = 16
 HNSW_EF_CONSTRUCTION = 64
 HNSW_EF_SEARCH = 100
-# Needs pgvector >= 0.8; older builds only log a warning for the unknown GUC.
+# pgvector reserves the whole hnsw.* GUC prefix, so this errors (not warns) on
+# pgvector < 0.8: gate it on the detected version before ever setting it.
 HNSW_ITERATIVE_SCAN = "relaxed_order"
 # Filtered HNSW scans need the org_id/project_id literals, not a generic plan.
 PLAN_CACHE_MODE = "force_custom_plan"
 MAINTENANCE_WORK_MEM = "256MB"
 
+_pgvector_version: str | None = None
 
-def search_session_sql() -> str:
+
+async def pgvector_version(conn) -> str:
+    """The installed pgvector extension version, probed once and cached."""
+    global _pgvector_version
+    if _pgvector_version is not None:
+        return _pgvector_version
+    try:
+        value = await conn.fetchval(
+            "SELECT extversion FROM pg_extension WHERE extname = 'vector'"
+        )
+        _pgvector_version = value or ""
+    except Exception:
+        logger.warning("pgvector version probe failed", exc_info=True)
+        _pgvector_version = ""
+    return _pgvector_version
+
+
+def supports_iterative_scan(version: str) -> bool:
+    """True from pgvector 0.8 onward, where hnsw.iterative_scan was introduced."""
+    parts = (version or "").split(".")
+    if len(parts) < 2:
+        return False
+    try:
+        major, minor = int(parts[0]), int(parts[1])
+    except ValueError:
+        return False
+    return (major, minor) >= (0, 8)
+
+
+def reset_pgvector_version_cache() -> None:
+    """Test hook: drop the cached pgvector version so the next probe re-runs."""
+    global _pgvector_version
+    _pgvector_version = None
+
+
+def search_session_sql(iterative_scan: bool) -> str:
     """The session knobs of one vector search, as a single simple-protocol statement."""
-    return (
-        f"SET LOCAL hnsw.ef_search = {HNSW_EF_SEARCH}; "
-        f"SET LOCAL hnsw.iterative_scan = '{HNSW_ITERATIVE_SCAN}'; "
-        f"SET LOCAL plan_cache_mode = '{PLAN_CACHE_MODE}'"
-    )
+    parts = [f"SET LOCAL hnsw.ef_search = {HNSW_EF_SEARCH}"]
+    if iterative_scan:
+        parts.append(f"SET LOCAL hnsw.iterative_scan = '{HNSW_ITERATIVE_SCAN}'")
+    parts.append(f"SET LOCAL plan_cache_mode = '{PLAN_CACHE_MODE}'")
+    return "; ".join(parts)
 
 
 async def _maintenance_connection():
@@ -84,17 +121,23 @@ _STALE_INDEX_SQL = (
 # An interrupted CONCURRENTLY build leaves an INVALID index that CREATE INDEX
 # IF NOT EXISTS would then skip forever: indisvalid is the only success signal.
 _INDEX_VALID_SQL = (
-    "SELECT i.indisvalid FROM pg_index i "
+    "SELECT i.indisvalid, n.nspname FROM pg_index i "
     "JOIN pg_class c ON c.oid = i.indexrelid "
     "JOIN pg_namespace n ON n.oid = c.relnamespace "
     "WHERE c.relname = $1 AND n.nspname = ANY(current_schemas(false))"
 )
 
 
+async def _index_row(conn, name: str):
+    """Row of ``indisvalid``/``nspname`` for the index, or None when it does not exist."""
+    rows = await conn.fetch(_INDEX_VALID_SQL, name)
+    return rows[0] if rows else None
+
+
 async def _index_validity(conn, name: str) -> bool | None:
     """``indisvalid`` of the index, or None when it does not exist."""
-    rows = await conn.fetch(_INDEX_VALID_SQL, name)
-    return bool(rows[0]["indisvalid"]) if rows else None
+    row = await _index_row(conn, name)
+    return bool(row["indisvalid"]) if row else None
 
 
 def _like_pattern(table: str, org_id: int) -> str:
@@ -144,9 +187,11 @@ async def _build_index(conn, table: str, org_id: int, dims: int) -> bool:
     """Rebuild an invalid leftover, create the index, report whether it is valid."""
     name = index_name(table, org_id, dims)
     try:
-        if await _index_validity(conn, name) is False:
-            logger.warning("Dropping INVALID HNSW index before rebuild: %s", name)
-            await conn.execute(drop_index_sql(name))
+        row = await _index_row(conn, name)
+        if row is not None and not row["indisvalid"]:
+            target = _qualified(row["nspname"], name)
+            logger.warning("Dropping INVALID HNSW index before rebuild: %s", target)
+            await conn.execute(drop_index_sql(target))
         await conn.execute(create_index_sql(table, org_id, dims))
         if await _index_validity(conn, name):
             return True
@@ -184,13 +229,14 @@ async def ensure_org_indexes(org_id: int, dims: int) -> list[str]:
     return created
 
 
-async def drop_org_indexes(org_id: int) -> list[str]:
-    """Drop the org's HNSW indexes of every dimension; returns what was dropped.
+async def drop_org_indexes(org_id: int, keep_dims: int | None = None) -> list[str]:
+    """Drop the org's HNSW indexes, keeping the one already at ``keep_dims``.
 
     A re-embed to a new dimension has to run first: the typed cast of the old
     index rejects a vector of the new width on the very first UPDATE.
     """
     dropped: list[str] = []
+    keep_suffix = f"_d{int(keep_dims)}" if keep_dims is not None else None
     try:
         conn = await _maintenance_connection()
     except Exception:
@@ -204,6 +250,8 @@ async def drop_org_indexes(org_id: int) -> list[str]:
                 logger.exception("HNSW index lookup failed: %s", table)
                 continue
             for schemaname, indexname in rows:
+                if keep_suffix and indexname.endswith(keep_suffix):
+                    continue
                 target = _qualified(schemaname, indexname)
                 try:
                     await conn.execute(drop_index_sql(target))

@@ -21,7 +21,7 @@ from .config import get_settings
 from .db import get_pool
 from .indexer.embedder import embed_text
 from .org_settings import get_org_settings
-from .vector_index import search_session_sql, vector_expr
+from .vector_index import pgvector_version, search_session_sql, supports_iterative_scan, vector_expr
 
 logger = logging.getLogger(__name__)
 
@@ -156,8 +156,9 @@ async def search_repo_chunks(
     hybrid = hybrid_enabled()
 
     async with pool.acquire() as conn:
+        version = await pgvector_version(conn)
         async with conn.transaction():
-            await conn.execute(search_session_sql())
+            await conn.execute(search_session_sql(supports_iterative_scan(version)))
             if hybrid:
                 rows = await conn.fetch(
                     _repo_hybrid_sql(dims), embedding_str, org_id, CANDIDATE_POOL,
@@ -347,8 +348,9 @@ async def search_web_chunks(
     hybrid = hybrid_enabled()
 
     async with pool.acquire() as conn:
+        version = await pgvector_version(conn)
         async with conn.transaction():
-            await conn.execute(search_session_sql())
+            await conn.execute(search_session_sql(supports_iterative_scan(version)))
             if hybrid:
                 rows = await conn.fetch(
                     _web_hybrid_sql(dims), embedding_str, org_id, CANDIDATE_POOL,
@@ -459,8 +461,9 @@ async def search_kb_chunks(
     hybrid = hybrid_enabled()
 
     async with pool.acquire() as conn:
+        version = await pgvector_version(conn)
         async with conn.transaction():
-            await conn.execute(search_session_sql())
+            await conn.execute(search_session_sql(supports_iterative_scan(version)))
             if hybrid:
                 rows = await conn.fetch(
                     _kb_hybrid_sql(dims), embedding_str, org_id, CANDIDATE_POOL,

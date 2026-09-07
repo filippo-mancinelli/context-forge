@@ -34,7 +34,7 @@ class FakeConn:
     async def fetch(self, sql, *args):
         if "indisvalid" in sql:
             answer = self._next_validity(args[0])
-            return [] if answer is None else [{"indisvalid": answer}]
+            return [] if answer is None else [{"indisvalid": answer, "nspname": "public"}]
         table = args[0]
         return [
             {"schemaname": "public", "indexname": name}
@@ -148,6 +148,21 @@ def test_drop_org_indexes_removes_every_dimension_of_the_organization(monkeypatc
     assert conn.closed is True
 
 
+def test_drop_org_indexes_keeps_the_index_already_at_the_target_dimension(monkeypatch):
+    conn = FakeConn(stale={
+        "repo_chunks": [
+            "repo_chunks_emb_hnsw_org42_d1536",
+            "repo_chunks_emb_hnsw_org42_d768",
+        ],
+    })
+    _patch_conn(monkeypatch, conn)
+
+    dropped = asyncio.run(vector_index.drop_org_indexes(42, keep_dims=1536))
+
+    assert dropped == ['"public"."repo_chunks_emb_hnsw_org42_d768"']
+    assert conn.executed == [f"DROP INDEX CONCURRENTLY IF EXISTS {n}" for n in dropped]
+
+
 def test_drop_org_indexes_survives_a_broken_connection(monkeypatch):
     async def boom():
         raise RuntimeError("no database")
@@ -164,7 +179,7 @@ def test_an_invalid_leftover_is_dropped_before_the_index_is_rebuilt(monkeypatch)
 
     created = asyncio.run(vector_index.ensure_org_indexes(42, 1536))
 
-    drop = f"DROP INDEX CONCURRENTLY IF EXISTS {name}"
+    drop = f'DROP INDEX CONCURRENTLY IF EXISTS "public"."{name}"'
     create = [s for s in conn.executed if s.startswith(f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name}")]
     assert drop in conn.executed
     assert conn.executed.index(drop) < conn.executed.index(create[0])
