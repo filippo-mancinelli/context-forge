@@ -260,7 +260,8 @@ async def validate_mcp_api_key(api_key: str) -> Optional[dict]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            """SELECT id, name, scope, permissions, expires_at, org_id, project_id
+            """SELECT id, name, scope, permissions, expires_at, org_id, project_id,
+                      rate_limit_per_minute
                FROM mcp_api_keys
                WHERE key_hash = $1 AND (expires_at IS NULL OR expires_at > $2)""",
             key_hash,
