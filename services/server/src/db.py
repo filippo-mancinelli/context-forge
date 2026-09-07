@@ -246,24 +246,10 @@ CREATE TABLE IF NOT EXISTS org_runtime_config (
 );
 
 -- Override di modello/provider/chiavi per organizzazione. La riga globale
--- app_runtime_config.settings_overrides viene copiata una volta in ogni org
--- esistente e poi svuotata: da quel momento fa fede solo il per-org.
+-- app_runtime_config.settings_overrides viene copiata in ogni org e poi
+-- svuotata da apply_settings_overrides_migration() (src/db.py), non da
+-- questo DDL: a bootstrap fresco non esiste ancora nessuna org.
 ALTER TABLE org_runtime_config ADD COLUMN IF NOT EXISTS settings_overrides JSONB NOT NULL DEFAULT '{{}}'::jsonb;
-
-INSERT INTO org_runtime_config (org_id, settings_overrides)
-SELECT o.id, a.settings_overrides FROM organizations o
-CROSS JOIN app_runtime_config a
-WHERE a.settings_overrides <> '{{}}'::jsonb
-ON CONFLICT (org_id) DO UPDATE
-SET settings_overrides = EXCLUDED.settings_overrides
-WHERE org_runtime_config.settings_overrides = '{{}}'::jsonb;
-
--- Wipe global overrides only when at least one org exists to receive the copy:
--- on legacy installs without orgs (default born during bootstrap), the global
--- row survives and migration completes on the next boot.
-UPDATE app_runtime_config SET settings_overrides = '{{}}'::jsonb
-WHERE settings_overrides <> '{{}}'::jsonb
-  AND EXISTS (SELECT 1 FROM organizations);
 
 -- Tenant scoping for indexed chunks and index requests.
 ALTER TABLE repo_chunks    ADD COLUMN IF NOT EXISTS org_id BIGINT;
@@ -911,6 +897,44 @@ async def apply_project_migration() -> None:
                 SELECT id, project_id FROM mcp_api_keys
                 WHERE project_id IS NOT NULL
                 ON CONFLICT DO NOTHING
+                """
+            )
+
+
+async def apply_settings_overrides_migration() -> None:
+    """Copy global settings_overrides into every org once, then wipe the global row.
+
+    Replaces a one-shot DDL step that could never converge on a fresh install
+    (zero orgs exist when the DDL first runs). Idempotent: safe on every boot,
+    call after the default org exists (see tenancy.ensure_tenant_storage).
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            pending = await conn.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM app_runtime_config WHERE settings_overrides <> '{}'::jsonb)"
+            )
+            if not pending:
+                return
+            has_orgs = await conn.fetchval("SELECT EXISTS (SELECT 1 FROM organizations)")
+            if not has_orgs:
+                return
+            await conn.execute(
+                """
+                INSERT INTO org_runtime_config (org_id, settings_overrides)
+                SELECT o.id, a.settings_overrides FROM organizations o
+                CROSS JOIN app_runtime_config a
+                WHERE a.settings_overrides <> '{}'::jsonb
+                ON CONFLICT (org_id) DO UPDATE
+                SET settings_overrides = EXCLUDED.settings_overrides
+                WHERE org_runtime_config.settings_overrides = '{}'::jsonb
+                """
+            )
+            await conn.execute(
+                """
+                UPDATE app_runtime_config SET settings_overrides = '{}'::jsonb
+                WHERE settings_overrides <> '{}'::jsonb
+                  AND EXISTS (SELECT 1 FROM organizations)
                 """
             )
 
