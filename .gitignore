@@ -17,3 +17,5 @@ venv/
 .omx
 .cursor
 services/ui/.vite/
+# SDD session scratch
+.superpowers/
