@@ -5,10 +5,11 @@ from __future__ import annotations
 class FakeConn:
     """Records every statement; answers fetchval from a scripted queue."""
 
-    def __init__(self, fetchval_results=None, fetch_rows=None):
+    def __init__(self, fetchval_results=None, fetch_rows=None, fetchrow_results=None):
         self.executed: list[tuple[str, tuple]] = []
         self.fetchval_results = list(fetchval_results or [])
         self.fetch_rows = list(fetch_rows or [])
+        self.fetchrow_results = list(fetchrow_results or [])
         self.transactions = 0
         self.open_transactions = 0
 
@@ -29,6 +30,12 @@ class FakeConn:
     async def fetch(self, query, *args, **kwargs):
         self.executed.append((query, args))
         return self.fetch_rows
+
+    async def fetchrow(self, query, *args, **kwargs):
+        self.executed.append((query, args))
+        if self.fetchrow_results:
+            return self.fetchrow_results.pop(0)
+        return None
 
     def transaction(self):
         conn = self
