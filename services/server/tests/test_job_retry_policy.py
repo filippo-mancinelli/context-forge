@@ -83,6 +83,19 @@ def test_migration_adds_the_four_retry_columns_and_the_due_index():
     assert sql.count("add column if not exists") == 4
 
 
+def test_migration_dead_letters_jobs_left_running_by_the_old_executor():
+    """The pre-0002 executor was fire-and-forget: a 'running' row may already
+    have been delivered, so it is dead-lettered instead of being re-fired."""
+    conn = _FakeConn()
+    asyncio.run(migration.upgrade(conn))
+    assert len(conn.executed) == 6
+    sweep = conn.executed[-1]
+    assert "status = 'dead'" in sweep
+    assert "status = 'running'" in sweep
+    assert "tool = 'http'" in sweep
+    assert sweep.count("interrupted before durable retries (0002_jobs_retry)") == 2
+
+
 def test_migration_does_not_open_its_own_transaction():
     """The runner wraps TRANSACTIONAL modules; the module must not nest one."""
     assert "transaction()" not in inspect.getsource(migration.upgrade)

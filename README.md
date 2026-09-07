@@ -64,6 +64,7 @@ The schema migrates itself at startup. Coming from a version without projects an
 - API keys keep working; their legacy scope is mapped to the new permissions (`read` → `context-read`, `write` → `context-read` + `context-write`, `admin` → `*`);
 - global LLM/provider overrides move into the per-organization settings;
 - embedding columns lose their fixed dimension so each organization can pick its own model. The old ivfflat indexes are dropped in the process and replaced by per-organization HNSW indexes, which the server builds in the background on the first startup after the upgrade; until each build completes vector search runs unindexed on that table (a sequential scan), so it is correct but slow, and the build itself runs on a dedicated connection with no timeout;
+- async jobs the previous fire-and-forget executor left `running` are marked `dead` on the first start after this upgrade: it may already have delivered them, so they are not re-fired; jobs still `pending` never ran and are executed normally under the new retry policy;
 - on the first start after this upgrade the server records the existing schema as migration version 1 (the frozen baseline is replayed once; it is idempotent), and later changes apply as numbered migrations; `python -m src.cli migrate --status` shows the current version.
 
 ## Development
