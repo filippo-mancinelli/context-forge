@@ -16,17 +16,17 @@ class FakeConn:
     def sql(self) -> list[str]:
         return [query for query, _ in self.executed]
 
-    async def execute(self, query, *args):
+    async def execute(self, query, *args, **kwargs):
         self.executed.append((query, args))
         return "OK"
 
-    async def fetchval(self, query, *args):
+    async def fetchval(self, query, *args, **kwargs):
         self.executed.append((query, args))
         if self.fetchval_results:
             return self.fetchval_results.pop(0)
         return None
 
-    async def fetch(self, query, *args):
+    async def fetch(self, query, *args, **kwargs):
         self.executed.append((query, args))
         return self.fetch_rows
 

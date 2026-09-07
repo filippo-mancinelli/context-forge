@@ -55,7 +55,7 @@ def test_current_version_is_zero_when_the_table_is_absent():
 
 
 def test_current_version_reads_the_max_applied():
-    conn = FakeConn(fetchval_results=[True, 4])
+    conn = FakeConn(fetchval_results=[True], fetch_rows=[{"version": 1}, {"version": 4}])
     assert asyncio.run(runner.current_version(FakePool(conn))) == 4
 
 
@@ -72,3 +72,66 @@ def test_discovery_rejects_duplicate_versions(tmp_path):
     )
     with pytest.raises(ValueError, match="duplicate migration version 1"):
         runner.discover_versions(tmp_path)
+
+
+def test_discovery_rejects_a_filename_number_disagreeing_with_version(tmp_path):
+    (tmp_path / "0002_a.py").write_text(
+        MODULE.format(version=1, name="a", transactional=True), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="0002_a.py"):
+        runner.discover_versions(tmp_path)
+
+
+def test_discovery_rejects_a_filename_suffix_disagreeing_with_name(tmp_path):
+    (tmp_path / "0001_a.py").write_text(
+        MODULE.format(version=1, name="b", transactional=True), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="0001_a.py"):
+        runner.discover_versions(tmp_path)
+
+
+def test_discovery_rejects_a_non_int_version(tmp_path):
+    (tmp_path / "0001_a.py").write_text(
+        'VERSION = "1"\nNAME = "a"\n\n\nasync def upgrade(conn) -> None:\n    pass\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="VERSION must be an int"):
+        runner.discover_versions(tmp_path)
+
+
+def test_discovery_rejects_a_bool_version(tmp_path):
+    (tmp_path / "0001_a.py").write_text(
+        'VERSION = True\nNAME = "a"\n\n\nasync def upgrade(conn) -> None:\n    pass\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="VERSION must be an int"):
+        runner.discover_versions(tmp_path)
+
+
+def test_discovery_rejects_a_non_str_name(tmp_path):
+    (tmp_path / "0001_a.py").write_text(
+        "VERSION = 1\nNAME = 5\n\n\nasync def upgrade(conn) -> None:\n    pass\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="NAME must be a str"):
+        runner.discover_versions(tmp_path)
+
+
+def test_discovery_rejects_a_non_coroutine_upgrade(tmp_path):
+    (tmp_path / "0001_a.py").write_text(
+        'VERSION = 1\nNAME = "a"\n\n\ndef upgrade(conn) -> None:\n    pass\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="upgrade must be an async function"):
+        runner.discover_versions(tmp_path)
+
+
+def test_discovery_rejects_an_empty_versions_directory(tmp_path):
+    with pytest.raises(ValueError, match="no migration modules found"):
+        runner.discover_versions(tmp_path)
+
+
+def test_discovery_rejects_a_missing_versions_directory(tmp_path):
+    missing = tmp_path / "does-not-exist"
+    with pytest.raises(ValueError, match="no migration modules found"):
+        runner.discover_versions(missing)
