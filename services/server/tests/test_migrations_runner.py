@@ -57,10 +57,10 @@ def test_applies_every_pending_module_in_order(tmp_path, monkeypatch):
     assert recorded == [(1, "a"), (2, "b"), (3, "c")]
 
 
-def test_skips_modules_at_or_below_the_recorded_version(tmp_path, monkeypatch):
+def test_skips_modules_already_recorded(tmp_path, monkeypatch):
     build_versions(tmp_path, [(1, "a", True), (2, "b", True), (3, "c", True)])
     monkeypatch.setattr(runner, "VERSIONS_DIR", tmp_path)
-    conn = FakeConn(fetchval_results=[2])
+    conn = FakeConn(fetch_rows=[{"version": 1}, {"version": 2}])
 
     assert run(FakePool(conn)) == [3]
     assert "-- migration 1" not in conn.sql
@@ -68,10 +68,19 @@ def test_skips_modules_at_or_below_the_recorded_version(tmp_path, monkeypatch):
     assert "-- migration 3" in conn.sql
 
 
+def test_a_lower_numbered_module_applied_after_a_higher_one_still_runs(tmp_path, monkeypatch):
+    build_versions(tmp_path, [(1, "a", True), (2, "b", True), (3, "c", True)])
+    monkeypatch.setattr(runner, "VERSIONS_DIR", tmp_path)
+    conn = FakeConn(fetch_rows=[{"version": 1}, {"version": 3}])
+
+    assert run(FakePool(conn)) == [2]
+    assert "-- migration 2" in conn.sql
+
+
 def test_nothing_to_do_returns_an_empty_list(tmp_path, monkeypatch):
     build_versions(tmp_path, [(1, "a", True)])
     monkeypatch.setattr(runner, "VERSIONS_DIR", tmp_path)
-    conn = FakeConn(fetchval_results=[1])
+    conn = FakeConn(fetch_rows=[{"version": 1}])
 
     assert run(FakePool(conn)) == []
 
@@ -99,12 +108,14 @@ def test_advisory_lock_is_taken_first_and_released_last(tmp_path, monkeypatch):
     build_versions(tmp_path, [(1, "a", True)])
     monkeypatch.setattr(runner, "VERSIONS_DIR", tmp_path)
     conn = FakeConn(fetchval_results=[0])
+    pool = FakePool(conn)
 
-    run(FakePool(conn))
+    run(pool)
     assert "pg_advisory_lock" in conn.executed[0][0]
     assert conn.executed[0][1] == (runner.MIGRATIONS_LOCK_KEY,)
     assert "pg_advisory_unlock" in conn.executed[-1][0]
     assert conn.executed[-1][1] == (runner.MIGRATIONS_LOCK_KEY,)
+    assert pool.acquired == 1
 
 
 def test_first_failure_stops_the_run_and_still_releases_the_lock(tmp_path, monkeypatch):

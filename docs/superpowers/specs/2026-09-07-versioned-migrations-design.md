@@ -21,8 +21,8 @@ New package `src/migrations/`:
     `pg_advisory_lock(MIGRATIONS_LOCK_KEY)` on a dedicated connection, creates
     `schema_migrations` if missing, reads applied versions, discovers modules in
     `versions/` (files named `NNNN_<name>.py`, sorted by number), applies every
-    module whose number is greater than the highest applied, records a row per
-    module, releases the lock. Returns the versions applied in this run.
+    module whose version is not yet recorded, in version order, records a row
+    per module, releases the lock. Returns the versions applied in this run.
   - Each version module exposes `VERSION: int`, `NAME: str`,
     `TRANSACTIONAL: bool = True`, `async def upgrade(conn) -> None`.
     Transactional modules run inside `async with conn.transaction()`; a
