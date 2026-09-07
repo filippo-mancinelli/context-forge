@@ -194,6 +194,7 @@ def test_scheduler_refresh_job_delegates_to_metrics(monkeypatch):
     async def fake_refresh():
         called.append(True)
 
+    monkeypatch.setattr(scheduler, "start_audit_writer", lambda: None)
     monkeypatch.setattr(scheduler, "refresh_metrics", fake_refresh)
     asyncio.run(scheduler._refresh_metrics())
     assert called == [True]

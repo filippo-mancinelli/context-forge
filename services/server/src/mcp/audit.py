@@ -29,7 +29,7 @@ WRITER_ERROR_BACKOFF = 1.0
 _REDACT = re.compile(r"secret|password|token|key|content|sql", re.IGNORECASE)
 # Chiavi il cui valore e' una URL: credenziali e query string non vanno loggate.
 _URL_KEY = re.compile(r"url|uri|endpoint|href", re.IGNORECASE)
-_URL_IN_TEXT = re.compile(r"\b[a-z][a-z0-9+.-]*://\S+", re.IGNORECASE)
+_URL_IN_TEXT = re.compile(r"\b[a-z][a-z0-9+.-]*://[^\s\"'<>)\]},;]+", re.IGNORECASE)
 
 _FIELDS = (
     "org_id",
@@ -73,16 +73,27 @@ def scrub_url(text: str) -> str:
         port = parts.port
     except ValueError:
         return text
+    if ":" in host:
+        host = f"[{host}]"
     if port:
         host = f"{host}:{port}"
     return f"{parts.scheme}://{host}{parts.path}"
+
+
+def _scrub_url_match(match: "re.Match[str]") -> str:
+    """Sostituto per _URL_IN_TEXT.sub: stacca la punteggiatura finale prima di scrub_url."""
+    url = match.group(0)
+    trailing = ""
+    if url and url[-1] in ".,;:":
+        url, trailing = url[:-1], url[-1]
+    return scrub_url(url) + trailing
 
 
 def scrub_text(text: str) -> str:
     """Riscrive ogni URL contenuta in un testo libero passandola per scrub_url."""
     if not text:
         return text
-    return _URL_IN_TEXT.sub(lambda m: scrub_url(m.group(0)), text)
+    return _URL_IN_TEXT.sub(_scrub_url_match, text)
 
 
 def summarize_args(kwargs: dict) -> dict:
@@ -97,7 +108,7 @@ def summarize_args(kwargs: dict) -> dict:
         elif _REDACT.search(key) and not is_sql:
             out[key] = "<redacted>"
         elif isinstance(value, str) and _URL_KEY.search(key):
-            out[key] = scrub_url(value)[:MAX_STRING]
+            out[key] = scrub_text(scrub_url(value))[:MAX_STRING]
         elif isinstance(value, str):
             out[key] = scrub_text(value)[:MAX_STRING]
         elif value is None or isinstance(value, (bool, int, float)):

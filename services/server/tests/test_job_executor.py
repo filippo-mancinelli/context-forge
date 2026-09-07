@@ -427,6 +427,7 @@ def test_the_metrics_tick_logs_one_warning_when_the_refresh_fails(monkeypatch, c
     async def broken_refresh():
         raise RuntimeError("database is down")
 
+    monkeypatch.setattr(scheduler, "start_audit_writer", lambda: None)
     monkeypatch.setattr(scheduler, "refresh_metrics", broken_refresh)
     with caplog.at_level(logging.WARNING, logger="src.scheduler"):
         asyncio.run(scheduler._refresh_metrics())
