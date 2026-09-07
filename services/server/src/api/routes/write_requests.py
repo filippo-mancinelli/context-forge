@@ -19,14 +19,12 @@ class DecisionRequest(BaseModel):
 @router.get("")
 async def list_requests(
     status: Optional[str] = Query(default=None),
-    limit: int = Query(default=50, ge=1),
+    limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     org: ActiveOrg = Depends(require_role("admin")),
 ):
     if status is not None and status not in service.STATUSES:
-        raise HTTPException(status_code=400, detail=f"Unknown status '{status}'")
-    # Clamp rather than reject: an over-large limit is capped, not an error.
-    limit = min(int(limit), service.MAX_LIST_LIMIT)
+        raise HTTPException(status_code=422, detail=f"Unknown status '{status}'")
     # Admins and owners already see every project of the organization.
     return await service.list_for_org(org.org_id, status=status, limit=limit, offset=offset)
 
