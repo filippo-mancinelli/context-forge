@@ -7,9 +7,11 @@ import {
   type OrgMember,
   type OrgRole,
   type ProjectMember,
+  type ToolCall,
+  type ToolCallStats,
 } from '../lib/api'
 import { useAppStore } from '../store'
-import { Banner, Button, Input, Select, Badge, Dialog, DialogFooter, Table, Thead, Tbody, Tr, Th, Td, useConfirm, useToast } from '../components/ui'
+import { Banner, Button, Card, Input, Select, Badge, Dialog, DialogFooter, Table, Thead, Tbody, Tr, Th, Td, Tabs, TabsList, TabsTrigger, TabsContent, useConfirm, useToast } from '../components/ui'
 import NewProjectDialog from '../components/NewProjectDialog'
 
 const PROJECT_ROLE_OPTIONS = [
@@ -602,6 +604,225 @@ function AddUserSection({
   )
 }
 
+const OUTCOME_OPTIONS = [
+  { value: '', label: 'Any outcome' },
+  { value: 'ok', label: 'ok' },
+  { value: 'denied', label: 'denied' },
+  { value: 'error', label: 'error' },
+  { value: 'rate_limited', label: 'rate limited' },
+]
+
+const PAGE_SIZE = 50
+
+function outcomeVariant(outcome: string): 'success' | 'warning' | 'danger' | 'muted' {
+  if (outcome === 'ok') return 'success'
+  if (outcome === 'denied' || outcome === 'rate_limited') return 'warning'
+  if (outcome === 'error') return 'danger'
+  return 'muted'
+}
+
+function ToolActivitySection({ orgId }: { orgId: number }) {
+  const toast = useToast()
+  const projects = useAppStore((s) => s.projects)
+  const [calls, setCalls] = useState<ToolCall[]>([])
+  const [total, setTotal] = useState(0)
+  const [stats, setStats] = useState<ToolCallStats | null>(null)
+  const [statsWindow, setStatsWindow] = useState<'24h' | '7d'>('24h')
+  const [tool, setTool] = useState('')
+  const [outcome, setOutcome] = useState('')
+  const [principal, setPrincipal] = useState('')
+  const [offset, setOffset] = useState(0)
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [list, agg] = await Promise.all([
+        api.toolCalls.list(orgId, {
+          limit: PAGE_SIZE,
+          offset,
+          tool: tool || undefined,
+          outcome: outcome || undefined,
+          principal: principal || undefined,
+        }),
+        api.toolCalls.stats(orgId, statsWindow),
+      ])
+      setCalls(list.calls)
+      setTotal(list.total)
+      setStats(agg)
+    } catch (e) {
+      toast.error(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [orgId, offset, tool, outcome, principal, statsWindow, toast])
+
+  useEffect(() => { void load() }, [load])
+
+  const projectName = (id: number | null) =>
+    id === null ? '—' : projects.find((p) => p.id === id)?.name ?? `#${id}`
+
+  const fmtTime = (iso: string) =>
+    new Date(iso).toLocaleString(undefined, {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
+    })
+
+  const toolOptions = [
+    { value: '', label: 'Any tool' },
+    ...(stats?.by_tool ?? []).map((row) => ({ value: row.tool, label: row.tool })),
+  ]
+
+  const tiles = [
+    { label: 'Calls', value: stats?.totals.calls ?? 0 },
+    { label: 'Errors', value: stats?.totals.errors ?? 0 },
+    { label: 'Denied', value: stats?.totals.denied ?? 0 },
+    { label: 'Rate limited', value: stats?.totals.rate_limited ?? 0 },
+  ]
+
+  return (
+    <section className="border border-border mb-6 p-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-4">
+        <div>
+          <h2 className="text-base font-semibold">Tool activity</h2>
+          <p className="text-sm text-muted">
+            Every MCP tool call made against this organization, with who called it and how it ended.
+          </p>
+        </div>
+        <div className="flex gap-1 self-start">
+          {(['24h', '7d'] as const).map((w) => (
+            <Button
+              key={w}
+              size="sm"
+              variant={statsWindow === w ? 'primary' : 'ghost'}
+              onClick={() => setStatsWindow(w)}
+            >
+              {w}
+            </Button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+        {tiles.map((tile) => (
+          <Card key={tile.label} className="p-3">
+            <p className="text-xs uppercase tracking-wide text-muted">{tile.label}</p>
+            <p className="text-xl font-semibold">{tile.value}</p>
+          </Card>
+        ))}
+      </div>
+
+      <div className="flex flex-col sm:flex-row gap-2 sm:items-end mb-4">
+        <Select
+          label="Tool"
+          value={tool}
+          onValueChange={(v) => { setOffset(0); setTool(v) }}
+          options={toolOptions}
+          className="sm:max-w-[220px]"
+        />
+        <Select
+          label="Outcome"
+          value={outcome}
+          onValueChange={(v) => { setOffset(0); setOutcome(v) }}
+          options={OUTCOME_OPTIONS}
+          className="sm:max-w-[180px]"
+        />
+        <Input
+          label="Principal"
+          value={principal}
+          onChange={(e) => { setOffset(0); setPrincipal(e.target.value) }}
+          placeholder="ci-bot"
+          className="sm:max-w-[200px]"
+        />
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-muted">Loading…</p>
+      ) : calls.length === 0 ? (
+        <p className="text-sm text-muted">No tool calls recorded yet.</p>
+      ) : (
+        <>
+          {/* Mobile: stacked cards */}
+          <div className="space-y-3 md:hidden">
+            {calls.map((call) => (
+              <Card key={call.id} className="p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <code className="font-mono text-xs break-all">{call.tool}</code>
+                  <Badge variant={outcomeVariant(call.outcome)}>{call.outcome}</Badge>
+                </div>
+                {call.error && <p className="text-xs text-danger mt-1 break-words">{call.error}</p>}
+                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-muted">
+                  <span>{call.principal}</span>
+                  <span>{projectName(call.project_id)}</span>
+                  <span className="font-mono">{call.duration_ms} ms</span>
+                  <span>{fmtTime(call.created_at)}</span>
+                </div>
+              </Card>
+            ))}
+          </div>
+
+          {/* Desktop: table */}
+          <Card className="hidden md:block">
+            <Table>
+              <Thead>
+                <Tr>
+                  <Th>Time</Th>
+                  <Th>Principal</Th>
+                  <Th>Tool</Th>
+                  <Th>Project</Th>
+                  <Th>Outcome</Th>
+                  <Th>Duration</Th>
+                </Tr>
+              </Thead>
+              <Tbody>
+                {calls.map((call) => (
+                  <Tr key={call.id}>
+                    <Td className="text-xs text-muted whitespace-nowrap">{fmtTime(call.created_at)}</Td>
+                    <Td className="text-xs">
+                      {call.principal}
+                      <span className="text-muted ml-1">({call.principal_kind})</span>
+                    </Td>
+                    <Td><code className="font-mono text-xs">{call.tool}</code></Td>
+                    <Td className="text-xs text-muted">{projectName(call.project_id)}</Td>
+                    <Td>
+                      <Badge variant={outcomeVariant(call.outcome)}>{call.outcome}</Badge>
+                      {call.error && (
+                        <p className="text-xs text-danger mt-1 max-w-xs truncate">{call.error}</p>
+                      )}
+                    </Td>
+                    <Td className="text-xs text-muted font-mono">{call.duration_ms} ms</Td>
+                  </Tr>
+                ))}
+              </Tbody>
+            </Table>
+          </Card>
+
+          <div className="flex items-center gap-2 mt-3">
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+            >
+              Previous
+            </Button>
+            <span className="text-xs text-muted">
+              {offset + 1}–{Math.min(offset + calls.length, total)} of {total}
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={offset + PAGE_SIZE >= total}
+              onClick={() => setOffset(offset + PAGE_SIZE)}
+            >
+              Next
+            </Button>
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
 export default function Organization() {
   const confirm = useConfirm()
   const toast = useToast()
@@ -618,6 +839,7 @@ export default function Organization() {
   const [members, setMembers] = useState<OrgMember[]>([])
   const [error, setError] = useState<string | null>(null)
   const [orgName, setOrgName] = useState('')
+  const [tab, setTab] = useState('overview')
 
   const refresh = useCallback(async () => {
     if (!activeOrgId) return
@@ -698,89 +920,104 @@ export default function Organization() {
           </p>
         </div>
 
-        <ProjectsSection canAddMembers={canAddMembers} isOwner={isOwner} />
+        <Tabs value={tab} onValueChange={setTab}>
+          <TabsList>
+            <TabsTrigger value="overview">Overview</TabsTrigger>
+            {canAddMembers && <TabsTrigger value="activity">Tool activity</TabsTrigger>}
+          </TabsList>
 
-        {error && <Banner variant="danger" className="mb-4">{error}</Banner>}
+          <TabsContent value="overview">
+            <ProjectsSection canAddMembers={canAddMembers} isOwner={isOwner} />
 
-        {isOwner && (
-          <section className="border border-border mb-6 p-4">
-            <h2 className="text-base font-semibold mb-4">Settings</h2>
-            <form onSubmit={handleRename} className="flex flex-col sm:flex-row gap-2 sm:items-end">
-              <Input
-                label="Organization name"
-                value={orgName}
-                onChange={(e) => setOrgName(e.target.value)}
-                className="sm:max-w-xs"
-              />
-              <Button type="submit" variant="secondary">
-                Save
-              </Button>
-            </form>
-          </section>
-        )}
+            {error && <Banner variant="danger" className="mb-4">{error}</Banner>}
 
-        {/* Members */}
-        <section className="border border-border mb-6 p-4">
-          <h2 className="text-base font-semibold mb-4">Members ({members.length})</h2>
-          <Table>
-            <Thead>
-              <Tr>
-                <Th>User</Th>
-                {isOwner && <Th>Role</Th>}
-                <Th className="w-10" />
-              </Tr>
-            </Thead>
-            <Tbody>
-              {members.map((m) => {
-                const isSelf = m.user_id === currentUser?.id
-                return (
-                  <Tr key={m.user_id}>
-                    <Td>
-                      <span className="font-medium">{m.username}</span>
-                      {isSelf && <span className="text-muted text-xs ml-1">(you)</span>}
-                      {m.email && <div className="text-xs text-muted">{m.email}</div>}
-                    </Td>
-                    {isOwner && (
-                      <Td>
-                        {!isSelf ? (
-                          <Select
-                            value={m.role}
-                            onValueChange={(v) => handleRoleChange(m.user_id, v as OrgRole)}
-                            options={ROLE_OPTIONS}
-                            className="max-w-[140px]"
-                          />
-                        ) : (
-                          m.role && roleBadge(m.role)
-                        )}
-                      </Td>
-                    )}
-                    <Td>
-                      {(isOwner || isSelf) && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleRemove(m.user_id)}
-                          title={isSelf ? 'Leave organization' : 'Remove member'}
-                          aria-label={isSelf ? 'Leave organization' : 'Remove member'}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
-                      )}
-                    </Td>
+            {isOwner && (
+              <section className="border border-border mb-6 p-4">
+                <h2 className="text-base font-semibold mb-4">Settings</h2>
+                <form onSubmit={handleRename} className="flex flex-col sm:flex-row gap-2 sm:items-end">
+                  <Input
+                    label="Organization name"
+                    value={orgName}
+                    onChange={(e) => setOrgName(e.target.value)}
+                    className="sm:max-w-xs"
+                  />
+                  <Button type="submit" variant="secondary">
+                    Save
+                  </Button>
+                </form>
+              </section>
+            )}
+
+            {/* Members */}
+            <section className="border border-border mb-6 p-4">
+              <h2 className="text-base font-semibold mb-4">Members ({members.length})</h2>
+              <Table>
+                <Thead>
+                  <Tr>
+                    <Th>User</Th>
+                    {isOwner && <Th>Role</Th>}
+                    <Th className="w-10" />
                   </Tr>
-                )
-              })}
-            </Tbody>
-          </Table>
-        </section>
+                </Thead>
+                <Tbody>
+                  {members.map((m) => {
+                    const isSelf = m.user_id === currentUser?.id
+                    return (
+                      <Tr key={m.user_id}>
+                        <Td>
+                          <span className="font-medium">{m.username}</span>
+                          {isSelf && <span className="text-muted text-xs ml-1">(you)</span>}
+                          {m.email && <div className="text-xs text-muted">{m.email}</div>}
+                        </Td>
+                        {isOwner && (
+                          <Td>
+                            {!isSelf ? (
+                              <Select
+                                value={m.role}
+                                onValueChange={(v) => handleRoleChange(m.user_id, v as OrgRole)}
+                                options={ROLE_OPTIONS}
+                                className="max-w-[140px]"
+                              />
+                            ) : (
+                              m.role && roleBadge(m.role)
+                            )}
+                          </Td>
+                        )}
+                        <Td>
+                          {(isOwner || isSelf) && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleRemove(m.user_id)}
+                              title={isSelf ? 'Leave organization' : 'Remove member'}
+                              aria-label={isSelf ? 'Leave organization' : 'Remove member'}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
+                        </Td>
+                      </Tr>
+                    )
+                  })}
+                </Tbody>
+              </Table>
+            </section>
 
-        {canAddMembers && activeOrgId && (
-          <AddUserSection orgId={activeOrgId} isOwner={isOwner} onCreated={refresh} />
-        )}
+            {canAddMembers && activeOrgId && (
+              <AddUserSection orgId={activeOrgId} isOwner={isOwner} onCreated={refresh} />
+            )}
 
-        {isOwner && activeOrgId && (
-          <McpPermissionsSection orgId={activeOrgId} myRole={myRole} />
-        )}
+            {isOwner && activeOrgId && (
+              <McpPermissionsSection orgId={activeOrgId} myRole={myRole} />
+            )}
+          </TabsContent>
+
+          {canAddMembers && activeOrgId && (
+            <TabsContent value="activity">
+              <ToolActivitySection orgId={activeOrgId} />
+            </TabsContent>
+          )}
+        </Tabs>
       </div>
     </div>
   )
