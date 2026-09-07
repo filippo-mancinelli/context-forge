@@ -10,6 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 from .db import get_pool
 from .indexer.git_manager import pull_all_repos
 from .indexer.indexer import run_index_repo, run_pending_index_requests, sync_repos_config
+from .mcp.audit import purge_old_calls as purge_old_tool_calls
 from .mcp.jobs import run_claimed_job
 from .mcp.oauth_bridge import purge_expired_flows
 from .metrics import record_scheduler_tick, refresh_metrics
@@ -104,6 +105,18 @@ async def _purge_expired_oauth_flows() -> None:
     deleted = await purge_expired_flows()
     if deleted:
         logger.info("Purged %d expired OAuth bridge flow(s)", deleted)
+
+
+async def _purge_old_tool_calls() -> None:
+    """Delete MCP tool-call audit rows older than MCP_AUDIT_RETENTION_DAYS."""
+    try:
+        deleted = await purge_old_tool_calls()
+        if deleted:
+            logger.info("Purged %d MCP tool-call audit row(s)", deleted)
+    except Exception as exc:  # noqa: BLE001
+        # One line, no traceback: purge_old_calls already swallows its own
+        # failures, this is a second net for anything raised above it.
+        logger.warning("MCP audit retention tick failed: %s", exc)
 
 
 async def _refresh_metrics() -> None:
@@ -235,6 +248,12 @@ async def start_scheduler() -> None:
     _scheduler.add_job(
         _purge_expired_oauth_flows, "interval", minutes=5, id="oauth_flow_reaper",
         replace_existing=True,
+    )
+
+    # Daily retention of the MCP tool-call audit trail.
+    _scheduler.add_job(
+        _purge_old_tool_calls, "interval", hours=24, id="mcp_audit_retention",
+        replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=None,
     )
 
     # Self-healing: rebuilds any HNSW index left INVALID by an interrupted build.

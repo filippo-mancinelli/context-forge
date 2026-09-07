@@ -95,6 +95,8 @@ class Settings(BaseSettings):
     cors_origins: str = ""
     # MCP authentication mode: "disabled", "enabled", "transition"
     mcp_auth_mode: str = "disabled"
+    # Days of MCP tool-call audit history kept; 0 disables the retention job.
+    mcp_audit_retention_days: int = 90
     # OIDC (e.g. Keycloak) - inert unless oidc_enabled
     oidc_enabled: bool = False
     oidc_issuer: str = ""
