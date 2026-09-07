@@ -20,6 +20,31 @@ from ..db import get_pool
 
 logger = logging.getLogger(__name__)
 
+JOB_STATUSES = ("pending", "running", "done", "error", "dead")
+BASE_BACKOFF_SECONDS = 5
+MAX_BACKOFF_SECONDS = 300
+RETRYABLE_STATUS_CODES = frozenset({408, 429})
+
+
+def next_backoff_seconds(attempts: int) -> int:
+    """Wait before the next attempt: 5s * 4^(attempts-1), capped at five minutes."""
+    exponent = max(attempts - 1, 0)
+    return min(BASE_BACKOFF_SECONDS * (4 ** exponent), MAX_BACKOFF_SECONDS)
+
+
+def classify_http_status(status_code: int) -> str:
+    """Map an HTTP response status to 'done', 'retry' or 'error'."""
+    if 200 <= status_code < 300:
+        return "done"
+    if status_code in RETRYABLE_STATUS_CODES or status_code >= 500:
+        return "retry"
+    return "error"
+
+
+def classify_exception(exc: BaseException) -> str:
+    """Timeouts and connection failures are retryable; anything else is permanent."""
+    return "retry" if isinstance(exc, httpx.TransportError) else "error"
+
 
 async def _execute_http_job(job_id: str, url: str, method: str, payload: dict, headers: dict) -> None:
     """Background task: run HTTP call and update job status in DB."""
