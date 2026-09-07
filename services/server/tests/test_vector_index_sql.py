@@ -16,6 +16,7 @@ from src.vector_index import (
     drop_index_sql,
     index_name,
     search_session_sql,
+    supports_iterative_scan,
     vector_expr,
 )
 
@@ -72,8 +73,27 @@ def test_maintenance_work_mem_is_configurable_and_defaults_to_the_constant():
 
 def test_search_session_sql_renders_the_three_knobs_as_one_statement():
     assert (HNSW_ITERATIVE_SCAN, PLAN_CACHE_MODE) == ("relaxed_order", "force_custom_plan")
-    assert search_session_sql() == (
+    assert search_session_sql(True) == (
         "SET LOCAL hnsw.ef_search = 100; "
         "SET LOCAL hnsw.iterative_scan = 'relaxed_order'; "
         "SET LOCAL plan_cache_mode = 'force_custom_plan'"
     )
+
+
+def test_search_session_sql_omits_iterative_scan_when_unsupported():
+    sql = search_session_sql(False)
+    assert "hnsw.iterative_scan" not in sql
+    assert "SET LOCAL hnsw.ef_search = 100" in sql
+    assert "SET LOCAL plan_cache_mode = 'force_custom_plan'" in sql
+
+
+@pytest.mark.parametrize("version,expected", [
+    ("0.7.4", False),
+    ("0.8.0", True),
+    ("0.8.1-dev", True),
+    ("1.0.0", True),
+    ("", False),
+    ("garbage", False),
+])
+def test_supports_iterative_scan_gates_on_the_pgvector_version(version, expected):
+    assert supports_iterative_scan(version) is expected

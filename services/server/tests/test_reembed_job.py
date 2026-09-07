@@ -25,7 +25,7 @@ def test_reembed_org_processes_all_tables(monkeypatch):
 
         return OrgSettings(embeddings_dims=1536)
 
-    async def fake_drop(org_id):
+    async def fake_drop(org_id, keep_dims=None):
         return []
 
     async def fake_ensure(org_id, dims):
@@ -65,7 +65,7 @@ def test_reembed_org_failure_marks_job_failed_without_raising(monkeypatch):
 
         return OrgSettings(embeddings_dims=1536)
 
-    async def fake_drop(org_id):
+    async def fake_drop(org_id, keep_dims=None):
         return []
 
     async def fake_ensure(org_id, dims):
