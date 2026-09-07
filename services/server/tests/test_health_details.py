@@ -1,7 +1,7 @@
 """GET /api/health/details: shape, degraded rules, and that it is not public."""
+import asyncio
 import time
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -25,6 +25,9 @@ STATS = {
 
 class FakeConn:
     async def fetchval(self, sql, *args):
+        # A tiny, deterministic delay so latency_ms is measurably positive
+        # rather than rounding to 0 on a fast in-memory fake.
+        await asyncio.sleep(0.001)
         return 1
 
 
@@ -41,13 +44,15 @@ class FakePool:
         return FakeAcquire()
 
 
-def _wire(monkeypatch, *, stats=None, tick=None, running=True, db_ok=True):
+def _wire(monkeypatch, *, stats=None, tick=None, running=True, db_ok=True, stats_fail=False):
     async def fake_pool():
         if not db_ok:
             raise RuntimeError("connection refused")
         return FakePool()
 
     async def fake_stats():
+        if stats_fail:
+            raise RuntimeError("queue stats query failed")
         return dict(stats if stats is not None else STATS)
 
     async def fake_version(pool):
@@ -121,6 +126,51 @@ def test_index_queue_at_the_threshold_is_healthy(monkeypatch):
     stats = dict(STATS, index_requests_oldest_age_seconds=3600.0)
     body = _wire(monkeypatch, stats=stats).get("/api/health/details").json()
     assert body["status"] == "ok"
+
+
+def test_index_queue_fraction_over_threshold_is_degraded(monkeypatch):
+    # The raw float must be compared against the threshold before it is
+    # truncated to an int for display, or 3600.5s (over budget) would read
+    # as 3600 and wrongly pass as healthy.
+    stats = dict(STATS, index_requests_oldest_age_seconds=3600.5)
+    body = _wire(monkeypatch, stats=stats).get("/api/health/details").json()
+    assert body["status"] == "degraded"
+    assert body["queues"]["index_requests_oldest_age_seconds"] == 3600
+
+
+def test_queue_stats_failure_is_degraded_but_database_stays_ok(monkeypatch):
+    # A failing queue/schema-version query must not overwrite a successful
+    # connectivity probe: database.ok/latency_ms report the probe alone.
+    body = _wire(monkeypatch, stats_fail=True).get("/api/health/details").json()
+    assert body["status"] == "degraded"
+    assert body["database"]["ok"] is True
+    assert body["database"]["latency_ms"] > 0
+    assert body["schema_version"] == 0
+    assert body["queues"] == {
+        "jobs_pending": 0,
+        "jobs_running": 0,
+        "jobs_dead": 0,
+        "index_requests_pending": 0,
+        "index_requests_oldest_age_seconds": 0,
+        "kb_documents_pending": 0,
+        "web_pages_pending": 0,
+    }
+
+
+def test_database_failure_leaves_queues_and_schema_at_zero(monkeypatch):
+    body = _wire(monkeypatch, db_ok=False).get("/api/health/details").json()
+    assert body["status"] == "degraded"
+    assert body["database"] == {"ok": False, "latency_ms": 0}
+    assert body["schema_version"] == 0
+    assert body["queues"] == {
+        "jobs_pending": 0,
+        "jobs_running": 0,
+        "jobs_dead": 0,
+        "index_requests_pending": 0,
+        "index_requests_oldest_age_seconds": 0,
+        "kb_documents_pending": 0,
+        "web_pages_pending": 0,
+    }
 
 
 def test_members_are_rejected(monkeypatch):
