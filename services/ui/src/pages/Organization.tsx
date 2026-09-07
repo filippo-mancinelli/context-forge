@@ -13,6 +13,7 @@ import {
 import { useAppStore } from '../store'
 import { Banner, Button, Card, Input, Select, Badge, Dialog, DialogFooter, Table, Thead, Tbody, Tr, Th, Td, Tabs, TabsList, TabsTrigger, TabsContent, useConfirm, useToast } from '../components/ui'
 import NewProjectDialog from '../components/NewProjectDialog'
+import { useDebouncedValue } from '../lib/useDebouncedValue'
 
 const PROJECT_ROLE_OPTIONS = [
   { value: 'viewer', label: 'Viewer' },
@@ -604,8 +605,14 @@ function AddUserSection({
   )
 }
 
+// Radix's Select.Item throws if given value="" (it reserves the empty string
+// to mean "no selection"), and SelectContent renders its Items even while
+// closed — so a plain '' placeholder value crashes the page on mount. Use a
+// sentinel instead and translate it back to "no filter" at the fetch boundary.
+const ALL = '__all__'
+
 const OUTCOME_OPTIONS = [
-  { value: '', label: 'Any outcome' },
+  { value: ALL, label: 'Any outcome' },
   { value: 'ok', label: 'ok' },
   { value: 'denied', label: 'denied' },
   { value: 'error', label: 'error' },
@@ -628,36 +635,44 @@ function ToolActivitySection({ orgId }: { orgId: number }) {
   const [total, setTotal] = useState(0)
   const [stats, setStats] = useState<ToolCallStats | null>(null)
   const [statsWindow, setStatsWindow] = useState<'24h' | '7d'>('24h')
-  const [tool, setTool] = useState('')
-  const [outcome, setOutcome] = useState('')
+  const [tool, setTool] = useState(ALL)
+  const [outcome, setOutcome] = useState(ALL)
   const [principal, setPrincipal] = useState('')
+  const debouncedPrincipal = useDebouncedValue(principal, 300)
   const [offset, setOffset] = useState(0)
   const [loading, setLoading] = useState(true)
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    // Guards against a slower, stale response (e.g. an earlier filter change)
+    // landing after a newer one and overwriting it.
+    let ignore = false
     setLoading(true)
-    try {
-      const [list, agg] = await Promise.all([
-        api.toolCalls.list(orgId, {
-          limit: PAGE_SIZE,
-          offset,
-          tool: tool || undefined,
-          outcome: outcome || undefined,
-          principal: principal || undefined,
-        }),
-        api.toolCalls.stats(orgId, statsWindow),
-      ])
-      setCalls(list.calls)
-      setTotal(list.total)
-      setStats(agg)
-    } catch (e) {
-      toast.error(String(e))
-    } finally {
-      setLoading(false)
+    void (async () => {
+      try {
+        const [list, agg] = await Promise.all([
+          api.toolCalls.list(orgId, {
+            limit: PAGE_SIZE,
+            offset,
+            tool: tool === ALL ? undefined : tool,
+            outcome: outcome === ALL ? undefined : outcome,
+            principal: debouncedPrincipal || undefined,
+          }),
+          api.toolCalls.stats(orgId, statsWindow),
+        ])
+        if (ignore) return
+        setCalls(list.calls)
+        setTotal(list.total)
+        setStats(agg)
+      } catch (e) {
+        if (!ignore) toast.error(String(e))
+      } finally {
+        if (!ignore) setLoading(false)
+      }
+    })()
+    return () => {
+      ignore = true
     }
-  }, [orgId, offset, tool, outcome, principal, statsWindow, toast])
-
-  useEffect(() => { void load() }, [load])
+  }, [orgId, offset, tool, outcome, debouncedPrincipal, statsWindow, toast])
 
   const projectName = (id: number | null) =>
     id === null ? '—' : projects.find((p) => p.id === id)?.name ?? `#${id}`
@@ -668,7 +683,7 @@ function ToolActivitySection({ orgId }: { orgId: number }) {
     })
 
   const toolOptions = [
-    { value: '', label: 'Any tool' },
+    { value: ALL, label: 'Any tool' },
     ...(stats?.by_tool ?? []).map((row) => ({ value: row.tool, label: row.tool })),
   ]
 
@@ -926,7 +941,16 @@ export default function Organization() {
             {canAddMembers && <TabsTrigger value="activity">Tool activity</TabsTrigger>}
           </TabsList>
 
-          <TabsContent value="overview">
+          {/*
+            forceMount keeps this panel mounted while the "Tool activity" tab
+            is active, so McpPermissionsSection doesn't lose unsaved matrix
+            edits (and refetch) on every tab switch. Radix's forceMount does
+            NOT toggle the native `hidden` attribute here — with forceMount
+            set, its internal Presence state is permanently "present", so we
+            hide the inactive panel ourselves via the data-state attribute
+            Radix does keep in sync.
+          */}
+          <TabsContent value="overview" forceMount className="data-[state=inactive]:hidden">
             <ProjectsSection canAddMembers={canAddMembers} isOwner={isOwner} />
 
             {error && <Banner variant="danger" className="mb-4">{error}</Banner>}
