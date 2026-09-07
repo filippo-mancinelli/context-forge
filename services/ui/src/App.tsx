@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Link, NavLink, Navigate, Route, Routes } from 'react-router-dom'
-import { GitBranch, Brain, Wrench, SlidersHorizontal, Menu, X, Building2, Library, MessagesSquare, Database, Braces, Globe, Server, Boxes, ChevronDown, LogOut, TerminalSquare, UserRound } from 'lucide-react'
+import { GitBranch, Brain, Wrench, SlidersHorizontal, Menu, X, Building2, Library, MessagesSquare, Database, Braces, Globe, Server, Boxes, ChevronDown, LogOut, TerminalSquare, UserRound, ShieldCheck } from 'lucide-react'
 import Repos from './pages/Repos'
 import Chat from './pages/Chat'
 import DataSources from './pages/DataSources'
 import SshSources from './pages/SshSources'
+import Approvals from './pages/Approvals'
 import DataSourceDetail from './pages/DataSourceDetail'
 import ApiContracts from './pages/ApiContracts'
 import Memory from './pages/Memory'
@@ -21,16 +22,18 @@ import Setup from './pages/Setup'
 import Login from './pages/Login'
 import SharedChat from './pages/SharedChat'
 import { api, setAuthToken } from './lib/api'
+import { pendingBadge } from './lib/approvals'
 import { useAppStore } from './store'
 import { Logo } from './components/Logo'
 import { Button, Dialog, DialogFooter, Input, useToast } from './components/ui'
 import NewProjectDialog from './components/NewProjectDialog'
 
-const navLinks = [
+const navLinks: { to: string; icon: typeof GitBranch; label: string; adminOnly?: boolean }[] = [
   { to: '/chat', icon: MessagesSquare, label: 'Agent Chat' },
   { to: '/repos', icon: GitBranch, label: 'Repositories' },
   { to: '/datasources', icon: Database, label: 'Data Sources' },
   { to: '/ssh-sources', icon: TerminalSquare, label: 'SSH Files' },
+  { to: '/approvals', icon: ShieldCheck, label: 'Approvals', adminOnly: true },
   { to: '/contracts', icon: Braces, label: 'API Contracts' },
   { to: '/knowledge', icon: Library, label: 'Knowledge Base' },
   { to: '/web', icon: Globe, label: 'Web Pages' },
@@ -242,27 +245,38 @@ function TopBar() {
 
 function NavItems({ onNavigate, showLogout = false }: { onNavigate?: () => void; showLogout?: boolean }) {
   const logout = useAppStore((s) => s.logout)
+  const role = useAppStore((s) => s.organizations.find((o) => o.id === s.activeOrgId)?.role)
+  const pendingApprovals = useAppStore((s) => s.pendingApprovals)
+  const isOrgAdmin = role === 'admin' || role === 'owner'
+  const badge = pendingBadge(pendingApprovals)
   return (
     <>
       <nav className="flex-1 py-2 px-2 overflow-y-auto scrollbar-thin">
-        {navLinks.map(({ to, icon: Icon, label }) => (
-          <NavLink
-            key={to}
-            to={to}
-            onClick={onNavigate}
-            className={({ isActive }) =>
-              [
-                'flex items-center gap-2.5 px-3 h-10 my-0.5 text-sm rounded border transition-colors',
-                isActive
-                  ? 'text-white border-primary bg-[rgba(124,201,242,0.12)]'
-                  : 'text-sidebar-text border-transparent hover:text-white',
-              ].join(' ')
-            }
-          >
-            <Icon className="w-3.5 h-3.5 flex-shrink-0" />
-            {label}
-          </NavLink>
-        ))}
+        {navLinks
+          .filter((link) => !link.adminOnly || isOrgAdmin)
+          .map(({ to, icon: Icon, label }) => (
+            <NavLink
+              key={to}
+              to={to}
+              onClick={onNavigate}
+              className={({ isActive }) =>
+                [
+                  'flex items-center gap-2.5 px-3 h-10 my-0.5 text-sm rounded border transition-colors',
+                  isActive
+                    ? 'text-white border-primary bg-[rgba(124,201,242,0.12)]'
+                    : 'text-sidebar-text border-transparent hover:text-white',
+                ].join(' ')
+              }
+            >
+              <Icon className="w-3.5 h-3.5 flex-shrink-0" />
+              <span className="flex-1">{label}</span>
+              {to === '/approvals' && badge && (
+                <span className="px-1.5 py-0.5 text-xs font-medium rounded bg-primary text-on-primary">
+                  {badge}
+                </span>
+              )}
+            </NavLink>
+          ))}
       </nav>
       {showLogout && (
         <div className="px-4 py-3 border-t border-[var(--sidebar-border)]">
@@ -410,6 +424,7 @@ export default function App() {
                 <Route path="/datasources" element={<DataSources />} />
                 <Route path="/datasources/:connectionId" element={<DataSourceDetail />} />
                 <Route path="/ssh-sources" element={<SshSources />} />
+                <Route path="/approvals" element={<Approvals />} />
                 <Route path="/contracts" element={<ApiContracts />} />
                 <Route path="/knowledge" element={<Knowledge />} />
                 <Route path="/web" element={<WebPages />} />

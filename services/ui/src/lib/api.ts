@@ -783,6 +783,38 @@ export interface SettingsUpdateResponse {
   requires_vector_reset: boolean
 }
 
+export type WriteRequestKind = 'db_execute' | 'ssh_write_file'
+export type WriteRequestStatus =
+  | 'pending' | 'approved' | 'rejected' | 'executed' | 'failed' | 'expired'
+
+export interface WriteRequest {
+  id: number
+  org_id: number
+  project_id: number
+  kind: WriteRequestKind
+  status: WriteRequestStatus
+  target: string
+  payload: Record<string, unknown>
+  preview: Record<string, unknown>
+  reason: string | null
+  requested_by_kind: string
+  requested_by_id: number | null
+  requested_by: string
+  decided_by: number | null
+  decided_at: string | null
+  decision_note: string | null
+  result: Record<string, unknown> | null
+  error: string | null
+  created_at: string
+  expires_at: string
+}
+
+export interface WriteRequestList {
+  requests: WriteRequest[]
+  total: number
+  pending: number
+}
+
 export const api = {
   config: {
     get: () => request<{ public_mcp_url: string }>('/api/config', undefined, false),
@@ -867,6 +899,27 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(user),
       }),
+  },
+  writeRequests: {
+    list: (opts?: { status?: string; limit?: number; offset?: number }) => {
+      const params = new URLSearchParams()
+      if (opts?.status) params.set('status', opts.status)
+      if (opts?.limit !== undefined) params.set('limit', String(opts.limit))
+      if (opts?.offset !== undefined) params.set('offset', String(opts.offset))
+      const qs = params.toString()
+      return request<WriteRequestList>(`/api/write-requests${qs ? `?${qs}` : ''}`)
+    },
+    get: (id: number) => request<{ request: WriteRequest }>(`/api/write-requests/${id}`),
+    approve: (id: number, note = '') =>
+      request<{ status: string; request: WriteRequest }>(
+        `/api/write-requests/${id}/approve`,
+        { method: 'POST', body: JSON.stringify({ note }) }
+      ),
+    reject: (id: number, note = '') =>
+      request<{ status: string; request: WriteRequest }>(
+        `/api/write-requests/${id}/reject`,
+        { method: 'POST', body: JSON.stringify({ note }) }
+      ),
   },
   toolCalls: {
     list: (orgId: number, filters: ToolCallFilters = {}) => {
