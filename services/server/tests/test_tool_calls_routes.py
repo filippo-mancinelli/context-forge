@@ -1,6 +1,6 @@
 """REST dell'audit: gating di ruolo, filtri passati alla SQL, forma delle stats."""
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -45,9 +45,27 @@ def test_build_filters_all_criteria():
     where, params = routes._build_filters(3, "repo_search", "denied", "ci-bot", 9, since)
     assert where == (
         "WHERE org_id = $1 AND tool = $2 AND outcome = $3 "
-        "AND principal = $4 AND project_id = $5 AND created_at >= $6"
+        r"AND principal ILIKE '%' || $4 || '%' ESCAPE '\' "
+        "AND project_id = $5 AND created_at >= $6"
     )
     assert params == [3, "repo_search", "denied", "ci-bot", 9, since]
+
+
+def test_principal_filter_is_a_substring_match():
+    where, params = routes._build_filters(3, None, None, "bot", None, None)
+    assert where == r"WHERE org_id = $1 AND principal ILIKE '%' || $2 || '%' ESCAPE '\'"
+    assert params == [3, "bot"]
+
+
+def test_principal_filter_escapes_like_wildcards():
+    _where, params = routes._build_filters(3, None, None, r"100%_a\b", None, None)
+    assert params[1] == r"100\%\_a\\b"
+
+
+def test_tool_and_outcome_stay_exact_matches():
+    where, _params = routes._build_filters(3, "repo_search", "denied", None, None, None)
+    assert "tool = $2" in where and "outcome = $3" in where
+    assert "ILIKE" not in where
 
 
 def test_list_serializes_rows_and_total(monkeypatch):
@@ -89,8 +107,25 @@ def test_filters_reach_the_query(monkeypatch):
         )
     )
     sql, args = conn.executed[0]
-    assert "tool = $2" in sql and "outcome = $3" in sql and "principal = $4" in sql
+    assert "tool = $2" in sql and "outcome = $3" in sql
+    assert "principal ILIKE '%' || $4 || '%'" in sql
     assert args[:4] == (3, "repo_search", "denied", "ci-bot")
+
+
+def test_naive_since_is_read_as_utc(monkeypatch):
+    conn = FakeConn(fetch_rows=[], fetchval_results=[0])
+    _wire(monkeypatch, conn)
+    asyncio.run(routes.list_tool_calls(org_id=3, user_id=7, since="2026-09-01T10:00:00"))
+    _sql, args = conn.executed[0]
+    assert args[1] == datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
+
+
+def test_aware_since_keeps_its_offset(monkeypatch):
+    conn = FakeConn(fetch_rows=[], fetchval_results=[0])
+    _wire(monkeypatch, conn)
+    asyncio.run(routes.list_tool_calls(org_id=3, user_id=7, since="2026-09-01T10:00:00+02:00"))
+    _sql, args = conn.executed[0]
+    assert args[1].utcoffset() == timedelta(hours=2)
 
 
 def test_invalid_since_is_422(monkeypatch):
