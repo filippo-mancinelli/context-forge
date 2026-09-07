@@ -30,7 +30,7 @@ Self-hosted context infrastructure for AI coding agents. Exposes a single MCP en
 
 Indexing uses tree-sitter (Python, JS/TS, Go, Java), with scheduled re-indexing via APScheduler. Re-indexing is **incremental**: for git-backed repos, only files changed since the last indexed commit are re-parsed and re-embedded, and the symbol graph is rebuilt for them. Pushes can trigger it immediately via the `/api/webhooks/index` endpoint (set `WEBHOOK_SECRET`; supports GitHub, GitLab, and generic callers).
 
-Vector search is served by one HNSW index per organization and embedding dimension, built on the typed cast `embedding::vector(N)` and partial on `org_id`, so organizations on different embedding models stay independently indexed. The indexes are created and pruned in the background at startup, at the end of a re-embed, and when embedding settings are saved.
+Vector search is served by one HNSW index per organization and embedding dimension, built on the typed cast `embedding::vector(N)` and partial on `org_id`, so organizations on different embedding models stay independently indexed. The indexes are created and pruned in the background at startup, when embedding settings are saved without changing the dimension, and every six hours as a self-healing pass; a re-embed instead drops them before the first batch and rebuilds them inline at the end, because vectors of the new width do not fit the old index. Builds run on a dedicated connection with no command timeout and `HNSW_MAINTENANCE_WORK_MEM` (default `256MB`) of work memory, and an index that an interrupted build left INVALID is dropped and rebuilt by the next pass.
 
 ## Quick start
 
@@ -61,7 +61,7 @@ The schema migrates itself at startup. Coming from a version without projects an
 - the former local OAuth server for MCP is gone: tokens it issued stop working, and MCP clients should use an API key or the OIDC bridge instead;
 - API keys keep working; their legacy scope is mapped to the new permissions (`read` → `context-read`, `write` → `context-read` + `context-write`, `admin` → `*`);
 - global LLM/provider overrides move into the per-organization settings;
-- embedding columns lose their fixed dimension so each organization can pick its own model. The old ivfflat indexes are dropped in the process and replaced by per-organization HNSW indexes, which the server builds in the background on the first startup after the upgrade; vector search stays indexed while a build is in flight, it is simply slower until it completes;
+- embedding columns lose their fixed dimension so each organization can pick its own model. The old ivfflat indexes are dropped in the process and replaced by per-organization HNSW indexes, which the server builds in the background on the first startup after the upgrade; until each build completes vector search runs unindexed on that table (a sequential scan), so it is correct but slow, and the build itself runs on a dedicated connection with no timeout;
 - on the first start after this upgrade the server records the existing schema as migration version 1 (the frozen baseline is replayed once; it is idempotent), and later changes apply as numbered migrations; `python -m src.cli migrate --status` shows the current version.
 
 ## Development
