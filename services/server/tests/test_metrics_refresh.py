@@ -216,3 +216,19 @@ def test_is_scheduler_running_reflects_the_global(monkeypatch):
 
     monkeypatch.setattr(scheduler, "_scheduler", _Live())
     assert scheduler.is_scheduler_running() is True
+
+
+def test_refresh_reports_the_audit_queue_depth(wired):
+    """The gauge makes a stalled MCP audit writer visible in Prometheus."""
+    from src.mcp import audit
+
+    while not audit._queue.empty():
+        audit._queue.get_nowait()
+    try:
+        audit._queue.put_nowait({"tool": "a"})
+        audit._queue.put_nowait({"tool": "b"})
+        asyncio.run(metrics.refresh_metrics())
+        assert _sample("contextforge_mcp_audit_queue_depth") == 2
+    finally:
+        while not audit._queue.empty():
+            audit._queue.get_nowait()

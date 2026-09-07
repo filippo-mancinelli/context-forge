@@ -2,6 +2,7 @@
 import asyncio
 import contextlib
 import json
+import logging
 
 import pytest
 
@@ -146,6 +147,13 @@ def test_record_call_args_summary_uses_default_str_as_a_safety_net():
     assert json.loads(row["args_summary"]) == {"raw": "weird!"}
 
 
+def _fresh_queue(monkeypatch):
+    """asyncio.Queue binds to the first loop that awaits get(): every test that
+    drives the writer needs its own, or the next asyncio.run() sees a queue
+    bound to a dead loop."""
+    monkeypatch.setattr(audit, "_queue", asyncio.Queue(maxsize=audit.MAX_QUEUE))
+
+
 def _sample(name, labels=None):
     for metric in metrics.registry.collect():
         for s in metric.samples:
@@ -261,7 +269,7 @@ def test_writer_loop_caps_batches_at_batch_size(monkeypatch):
     """_writer_loop takes one row via the blocking get() then tops up with
     _take_batch(): 60 queued rows must split into batches of 50 and 10, never
     a single 51-row batch."""
-    _drain()
+    _fresh_queue(monkeypatch)
     batch_sizes = []
     second_batch_written = asyncio.Event()
 
@@ -501,3 +509,136 @@ def test_a_tool_body_raising_access_denied_is_audited_as_an_error():
     finally:
         perms.set_current_permissions(None)
     assert _drain()[0]["outcome"] == "error"
+
+
+def test_queue_depth_reports_the_pending_rows():
+    _drain()
+    assert audit.queue_depth() == 0
+    audit._queue.put_nowait({"tool": "a"})
+    audit._queue.put_nowait({"tool": "b"})
+    assert audit.queue_depth() == 2
+    _drain()
+
+
+def test_write_batch_survives_a_malformed_row(monkeypatch):
+    """A row missing a column must not raise out of the writer: the comprehension
+    that pivots rows into columns has to sit inside the guarded block."""
+    _drain()
+    conn = FakeConn()
+
+    async def fake_pool():
+        return FakePool(conn)
+
+    monkeypatch.setattr(audit, "get_pool", fake_pool)
+    assert asyncio.run(audit._write_batch([{"tool": "a"}])) == 0
+    assert conn.executed == []
+
+
+def test_writer_loop_survives_a_failing_batch(monkeypatch, caplog):
+    _fresh_queue(monkeypatch)
+    monkeypatch.setattr(audit, "WRITER_ERROR_BACKOFF", 0.01)
+    calls = []
+    first_failed = asyncio.Event()
+    second_written = asyncio.Event()
+
+    async def flaky(batch):
+        calls.append(len(batch))
+        if len(calls) == 1:
+            first_failed.set()
+            raise RuntimeError("boom")
+        second_written.set()
+        return len(batch)
+
+    monkeypatch.setattr(audit, "_write_batch", flaky)
+
+    async def scenario():
+        audit._queue.put_nowait({"tool": "a"})
+        task = asyncio.create_task(audit._writer_loop())
+        try:
+            await asyncio.wait_for(first_failed.wait(), timeout=2)
+            audit._queue.put_nowait({"tool": "b"})
+            await asyncio.wait_for(second_written.wait(), timeout=2)
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    with caplog.at_level(logging.WARNING, logger="src.mcp.audit"):
+        asyncio.run(scenario())
+
+    assert calls == [1, 1]
+    assert "MCP audit writer" in caplog.text
+
+
+def test_flush_once_returns_none_on_an_empty_queue():
+    _drain()
+    assert asyncio.run(audit.flush_once()) is None
+
+
+def test_stop_drains_every_queued_row(monkeypatch):
+    _drain()
+    sizes = []
+
+    async def fake_write_batch(batch):
+        sizes.append(len(batch))
+        return len(batch)
+
+    monkeypatch.setattr(audit, "_write_batch", fake_write_batch)
+    monkeypatch.setattr(audit, "_writer_task", None)
+
+    async def scenario():
+        for i in range(120):
+            audit._queue.put_nowait({"tool": f"t{i}"})
+        await audit.stop_audit_writer()
+
+    asyncio.run(scenario())
+    assert sizes == [50, 50, 20]
+    assert audit.queue_depth() == 0
+
+
+def test_stop_warns_with_the_remaining_depth_when_the_drain_times_out(monkeypatch, caplog):
+    _drain()
+    monkeypatch.setattr(audit, "_writer_task", None)
+    monkeypatch.setattr(audit, "DRAIN_TIMEOUT", 0.05)
+
+    async def slow_write_batch(batch):
+        await asyncio.sleep(5)
+        return len(batch)
+
+    monkeypatch.setattr(audit, "_write_batch", slow_write_batch)
+
+    async def scenario():
+        for i in range(120):
+            audit._queue.put_nowait({"tool": f"t{i}"})
+        await audit.stop_audit_writer()
+
+    with caplog.at_level(logging.WARNING, logger="src.mcp.audit"):
+        asyncio.run(scenario())
+
+    assert "MCP audit drain timed out" in caplog.text
+    assert "70" in caplog.text  # 120 queued minus the 50 taken by the batch in flight
+    _drain()
+
+
+def test_metrics_tick_restarts_a_dead_audit_writer(monkeypatch):
+    """A writer that died must come back within a scheduler tick."""
+    from src import scheduler
+
+    async def noop():
+        return None
+
+    _fresh_queue(monkeypatch)
+    monkeypatch.setattr(scheduler, "refresh_metrics", noop)
+
+    async def scenario():
+        dead = asyncio.create_task(noop())
+        await dead
+        monkeypatch.setattr(audit, "_writer_task", dead)
+        await scheduler._refresh_metrics()
+        revived = audit._writer_task
+        assert revived is not None and revived is not dead and not revived.done()
+        revived.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await revived
+
+    asyncio.run(scenario())

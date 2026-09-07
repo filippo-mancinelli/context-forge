@@ -22,6 +22,7 @@ DECLARED = [
     "contextforge_scheduler_tick_timestamp_seconds",
     "contextforge_schema_version",
     "contextforge_mcp_tool_calls_total",
+    "contextforge_mcp_audit_queue_depth",
 ]
 
 

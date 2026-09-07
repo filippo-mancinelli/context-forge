@@ -1,5 +1,6 @@
 """Retention dell'audit: cancella le righe più vecchie della finestra."""
 import asyncio
+import inspect
 
 from src import config, scheduler
 from src.mcp import audit
@@ -57,3 +58,10 @@ def test_scheduler_wrapper_calls_the_purge(monkeypatch):
     monkeypatch.setattr(scheduler, "purge_old_tool_calls", fake_purge, raising=False)
     asyncio.run(scheduler._purge_old_tool_calls())
     assert calls == [True]
+
+
+def test_scheduler_registers_the_retention_job():
+    source = inspect.getsource(scheduler.start_scheduler)
+    assert "_purge_old_tool_calls" in source
+    assert 'id="mcp_audit_retention"' in source
+    assert "hours=24" in source

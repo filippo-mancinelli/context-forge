@@ -7,6 +7,7 @@ from typing import Optional
 from prometheus_client import CollectorRegistry, Counter, Gauge, generate_latest
 
 from .db import get_pool
+from .mcp import audit as mcp_audit
 from .mcp.jobs import JOB_STATUSES
 from .migrations.runner import current_version
 
@@ -42,6 +43,10 @@ schema_version = Gauge(
 mcp_tool_calls_total = Counter(
     "contextforge_mcp_tool_calls_total", "MCP tool calls", ["tool", "outcome"],
     registry=registry,
+)
+mcp_audit_queue_depth = Gauge(
+    "contextforge_mcp_audit_queue_depth",
+    "MCP audit rows waiting to be written", registry=registry,
 )
 
 for _status in JOB_STATUSES:
@@ -111,5 +116,6 @@ async def refresh_metrics() -> None:
     index_requests_oldest_age_seconds.set(stats["index_requests_oldest_age_seconds"])
     kb_documents_pending.set(stats["kb_documents_pending"])
     web_pages_pending.set(stats["web_pages_pending"])
+    mcp_audit_queue_depth.set(mcp_audit.queue_depth())
     schema_version.set(version)
     record_scheduler_tick()
