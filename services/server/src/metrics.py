@@ -92,15 +92,22 @@ def last_scheduler_tick() -> Optional[float]:
 
 
 async def refresh_metrics() -> None:
-    """Repopulate every gauge from the database and beat the heartbeat."""
+    """Repopulate every gauge from the database and beat the heartbeat.
+
+    Every await happens first; the gauges are only touched once all I/O has
+    succeeded, so a failure partway through (e.g. the schema-version lookup)
+    leaves every gauge and the heartbeat at their previous values instead of
+    applying a half-updated tick.
+    """
     stats = await collect_queue_stats()
+    pool = await get_pool()
+    version = await current_version(pool)
+
     for status in JOB_STATUSES:
         jobs_by_status.labels(status=status).set(stats.get(f"jobs_{status}", 0.0))
     index_requests_pending.set(stats["index_requests_pending"])
     index_requests_oldest_age_seconds.set(stats["index_requests_oldest_age_seconds"])
     kb_documents_pending.set(stats["kb_documents_pending"])
     web_pages_pending.set(stats["web_pages_pending"])
-
-    pool = await get_pool()
-    schema_version.set(await current_version(pool))
+    schema_version.set(version)
     record_scheduler_tick()

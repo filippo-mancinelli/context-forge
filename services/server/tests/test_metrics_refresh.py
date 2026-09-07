@@ -128,6 +128,59 @@ def test_record_scheduler_tick_accepts_an_explicit_time():
     assert _sample("contextforge_scheduler_tick_timestamp_seconds") == 1_000_000.0
 
 
+def test_refresh_leaves_every_gauge_and_the_heartbeat_untouched_on_partial_failure(
+    monkeypatch,
+):
+    """schema_version's lookup fails after collect_queue_stats succeeds: nothing
+    should be applied, so the previous gauge values and heartbeat survive."""
+
+    async def fake_collect_queue_stats():
+        return {
+            "jobs_pending": 4.0,
+            "jobs_running": 1.0,
+            "jobs_done": 90.0,
+            "jobs_error": 2.0,
+            "jobs_dead": 3.0,
+            "index_requests_pending": 7.0,
+            "index_requests_oldest_age_seconds": 4200.0,
+            "kb_documents_pending": 5.0,
+            "web_pages_pending": 6.0,
+        }
+
+    async def fake_pool():
+        return object()
+
+    async def fake_version_fails(pool):
+        raise RuntimeError("schema_migrations unreachable")
+
+    monkeypatch.setattr(metrics, "collect_queue_stats", fake_collect_queue_stats)
+    monkeypatch.setattr(metrics, "get_pool", fake_pool)
+    monkeypatch.setattr(metrics, "current_version", fake_version_fails)
+
+    # Seed sentinel values distinct from both the "old" state and the stats above.
+    for status in ("pending", "running", "done", "error", "dead"):
+        metrics.jobs_by_status.labels(status=status).set(-1)
+    metrics.index_requests_pending.set(-1)
+    metrics.index_requests_oldest_age_seconds.set(-1)
+    metrics.kb_documents_pending.set(-1)
+    metrics.web_pages_pending.set(-1)
+    metrics.schema_version.set(-1)
+    metrics.record_scheduler_tick(123.0)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(metrics.refresh_metrics())
+
+    for status in ("pending", "running", "done", "error", "dead"):
+        assert _sample("contextforge_jobs", {"status": status}) == -1
+    assert _sample("contextforge_index_requests_pending") == -1
+    assert _sample("contextforge_index_requests_oldest_age_seconds") == -1
+    assert _sample("contextforge_kb_documents_pending") == -1
+    assert _sample("contextforge_web_pages_pending") == -1
+    assert _sample("contextforge_schema_version") == -1
+    assert metrics.last_scheduler_tick() == 123.0
+    assert _sample("contextforge_scheduler_tick_timestamp_seconds") == 123.0
+
+
 def test_scheduler_refresh_job_delegates_to_metrics(monkeypatch):
     called = []
 
