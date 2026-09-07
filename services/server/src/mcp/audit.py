@@ -10,7 +10,6 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
-from ..config import get_settings
 from ..db import get_pool
 from .context import get_current_org_id, get_current_principal, get_selected_project_id
 
@@ -65,8 +64,12 @@ def summarize_args(kwargs: dict) -> dict:
             out[key] = "<redacted>"
         elif isinstance(value, str):
             out[key] = value[:MAX_STRING]
-        else:
+        elif value is None or isinstance(value, (bool, int, float)):
             out[key] = value
+        else:
+            # Non-JSON-primitive (e.g. FastMCP's injected Context): name it
+            # instead of keeping the raw object, which json.dumps can't serialise.
+            out[key] = f"<{type(value).__name__}>"
     return out
 
 
@@ -119,7 +122,13 @@ async def record_call(
             "outcome": outcome,
             "duration_ms": int(duration_ms),
             "error": error[:MAX_ERROR] if error else None,
-            "args_summary": json.dumps(args_summary) if args_summary else None,
+            # default=str is a safety net: summarize_args should already have
+            # reduced every value to a JSON primitive, but a bare dict/list
+            # (e.g. from record_call called directly, bypassing summarize_args)
+            # must not silently drop the whole row.
+            "args_summary": (
+                json.dumps(args_summary, default=str) if args_summary is not None else None
+            ),
         }
         try:
             _queue.put_nowait(row)
@@ -160,9 +169,9 @@ async def audited(
         )
 
 
-def _take_batch() -> list[dict]:
+def _take_batch(limit: int = BATCH_SIZE) -> list[dict]:
     batch: list[dict] = []
-    while len(batch) < BATCH_SIZE:
+    while len(batch) < limit:
         try:
             batch.append(_queue.get_nowait())
         except asyncio.QueueEmpty:
@@ -193,7 +202,9 @@ async def flush_once() -> int:
 async def _writer_loop() -> None:
     while True:
         row = await _queue.get()
-        await _write_batch([row] + _take_batch())
+        # The blocking get() above already claimed one slot: cap the rest so
+        # the batch never exceeds BATCH_SIZE rows.
+        await _write_batch([row] + _take_batch(BATCH_SIZE - 1))
 
 
 def start_audit_writer() -> None:

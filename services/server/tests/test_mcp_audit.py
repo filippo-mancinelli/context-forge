@@ -1,5 +1,6 @@
 """Audit dei tool MCP: redazione argomenti, esiti, coda e writer."""
 import asyncio
+import contextlib
 import json
 
 import pytest
@@ -43,6 +44,16 @@ def test_summarize_args_keeps_scalars():
     assert out == {"limit": 10, "flag": True, "missing": None}
 
 
+class _FakeContext:
+    """Stand-in for FastMCP's injected Context object (list_projects, use_project,
+    current_project, create_project all declare ``ctx: Context``)."""
+
+
+def test_summarize_args_names_non_primitive_values():
+    out = audit.summarize_args({"ctx": _FakeContext(), "limit": 5})
+    assert out == {"ctx": "<_FakeContext>", "limit": 5}
+
+
 def test_classify_outcome():
     assert audit.classify_outcome(Exception("Access denied: tool requires permission 'jobs'")) == "denied"
     assert audit.classify_outcome(Exception("Rate limit exceeded: 5 calls per minute for this API key")) == "rate_limited"
@@ -81,6 +92,58 @@ def test_audited_records_ok():
     assert row["error"] is None
     assert json.loads(row["args_summary"]) == {"query": "abc"}
     assert isinstance(row["duration_ms"], int) and row["duration_ms"] >= 0
+
+
+def test_audited_records_a_call_with_a_non_primitive_kwarg():
+    """A kwarg that summarize_args can't reduce to a JSON primitive (e.g. the
+    Context FastMCP injects into ctx: Context tools) must not make json.dumps
+    raise inside record_call and silently drop the row."""
+    _drain()
+
+    async def scenario():
+        args_summary = audit.summarize_args({"ctx": _FakeContext()})
+        async with audit.audited("current_project", None, args_summary):
+            return {"selected_project_id": None}
+
+    asyncio.run(scenario())
+
+    rows = _drain()
+    assert len(rows) == 1
+    assert json.loads(rows[0]["args_summary"]) == {"ctx": "<_FakeContext>"}
+
+
+def test_audited_with_no_kwargs_stores_an_empty_object():
+    _drain()
+
+    async def scenario():
+        async with audit.audited("list_projects", None, audit.summarize_args({})):
+            return {"projects": []}
+
+    asyncio.run(scenario())
+
+    row = _drain()[0]
+    assert row["args_summary"] == "{}"
+
+
+def test_record_call_args_summary_uses_default_str_as_a_safety_net():
+    """Even if a caller bypasses summarize_args and passes a raw
+    non-JSON-serialisable value, record_call must not drop the row."""
+    _drain()
+
+    class Weird:
+        def __str__(self):
+            return "weird!"
+
+    async def scenario():
+        await audit.record_call(
+            tool="x", permission=None, outcome="ok", duration_ms=1,
+            args_summary={"raw": Weird()},
+        )
+
+    asyncio.run(scenario())
+
+    row = audit._queue.get_nowait()
+    assert json.loads(row["args_summary"]) == {"raw": "weird!"}
 
 
 def _sample(name, labels=None):
@@ -192,6 +255,37 @@ def test_flush_once_never_raises_when_the_insert_fails(monkeypatch):
         return await audit.flush_once()
 
     assert asyncio.run(scenario()) == 0
+
+
+def test_writer_loop_caps_batches_at_batch_size(monkeypatch):
+    """_writer_loop takes one row via the blocking get() then tops up with
+    _take_batch(): 60 queued rows must split into batches of 50 and 10, never
+    a single 51-row batch."""
+    _drain()
+    batch_sizes = []
+    second_batch_written = asyncio.Event()
+
+    async def fake_write_batch(batch):
+        batch_sizes.append(len(batch))
+        if len(batch_sizes) == 2:
+            second_batch_written.set()
+        return len(batch)
+
+    monkeypatch.setattr(audit, "_write_batch", fake_write_batch)
+
+    async def scenario():
+        for i in range(60):
+            audit._queue.put_nowait({"tool": f"t{i}"})
+        task = asyncio.create_task(audit._writer_loop())
+        try:
+            await asyncio.wait_for(second_batch_written.wait(), timeout=2)
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    asyncio.run(scenario())
+    assert batch_sizes == [50, 10]
 
 
 def test_requires_permission_still_denies_and_audits():
