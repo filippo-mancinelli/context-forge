@@ -72,15 +72,18 @@ async def _applied_versions(conn) -> set[int]:
     return {row["version"] for row in rows}
 
 
+async def applied_versions(pool) -> set[int]:
+    """Recorded versions, empty when schema_migrations does not exist."""
+    async with pool.acquire() as conn:
+        exists = await conn.fetchval("SELECT to_regclass('schema_migrations') IS NOT NULL")
+        if not exists:
+            return set()
+        return await _applied_versions(conn)
+
+
 async def current_version(pool) -> int:
     """Highest recorded version, 0 when schema_migrations does not exist."""
-    async with pool.acquire() as conn:
-        exists = await conn.fetchval(
-            "SELECT to_regclass('schema_migrations') IS NOT NULL"
-        )
-        if not exists:
-            return 0
-        return max(await _applied_versions(conn), default=0)
+    return max(await applied_versions(pool), default=0)
 
 
 async def _record(conn, module) -> None:

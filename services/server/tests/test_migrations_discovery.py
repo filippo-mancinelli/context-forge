@@ -59,6 +59,16 @@ def test_current_version_reads_the_max_applied():
     assert asyncio.run(runner.current_version(FakePool(conn))) == 4
 
 
+def test_applied_versions_is_empty_when_the_table_is_absent():
+    conn = FakeConn(fetchval_results=[False])
+    assert asyncio.run(runner.applied_versions(FakePool(conn))) == set()
+
+
+def test_applied_versions_reads_every_recorded_row():
+    conn = FakeConn(fetchval_results=[True], fetch_rows=[{"version": 1}, {"version": 3}])
+    assert asyncio.run(runner.applied_versions(FakePool(conn))) == {1, 3}
+
+
 def test_discovery_rejects_a_module_missing_the_contract(tmp_path):
     (tmp_path / "0001_a.py").write_text("NAME = 'a'\n", encoding="utf-8")
     with pytest.raises(ValueError, match="0001_a.py"):
