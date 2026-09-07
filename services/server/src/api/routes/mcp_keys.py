@@ -13,6 +13,7 @@ from ..security import (
     get_mcp_api_key,
     list_mcp_api_keys,
     revoke_mcp_api_key,
+    update_mcp_api_key_rate_limit,
     validate_mcp_api_key,
 )
 
@@ -32,6 +33,8 @@ class CreateKeyRequest(BaseModel):
     project_ids: list[int] | None = None
     # Key valida su tutti i progetti dell'org (solo admin/owner).
     all_projects: bool = False
+    # Chiamate al minuto consentite alla key. None = illimitata.
+    rate_limit_per_minute: int | None = Field(default=None, ge=1, le=100000)
 
 
 class CreateKeyResponse(BaseModel):
@@ -41,6 +44,7 @@ class CreateKeyResponse(BaseModel):
     scope: str
     permissions: str
     expires_at: str | None
+    rate_limit_per_minute: int | None = None
 
 
 def _resolve_permissions_csv(req: CreateKeyRequest) -> str:
@@ -133,6 +137,7 @@ async def create_key(
         org_id=org.org_id,
         permissions=permissions_csv,
         project_ids=project_ids,
+        rate_limit_per_minute=req.rate_limit_per_minute,
     )
 
     keys = await list_mcp_api_keys(org_id=org.org_id)
@@ -147,6 +152,7 @@ async def create_key(
         scope=key_info["scope"],
         permissions=key_info["permissions"],
         expires_at=key_info["expires_at"].isoformat() if key_info["expires_at"] else None,
+        rate_limit_per_minute=key_info.get("rate_limit_per_minute"),
     )
 
 
@@ -165,6 +171,30 @@ async def list_keys(org: ActiveOrg = Depends(get_active_org)):
     """List MCP API keys for the active organization."""
     keys = await list_mcp_api_keys(org_id=org.org_id)
     return {"keys": [_serialize_key(k) for k in keys]}
+
+
+class UpdateKeyRequest(BaseModel):
+    rate_limit_per_minute: int | None = Field(default=None, ge=1, le=100000)
+
+
+@router.put("/{key_id}")
+async def update_key(
+    key_id: int,
+    req: UpdateKeyRequest,
+    user_id: int = Depends(get_current_user_id),
+    org: ActiveOrg = Depends(get_active_org),
+):
+    """Change a key's rate limit. Creator or org admin only; null = unlimited."""
+    key = await get_mcp_api_key(key_id)
+    if not key or key.get("org_id") != org.org_id:
+        raise HTTPException(status_code=404, detail="Key not found")
+    if key.get("created_by") != user_id and not tenancy.role_at_least(org.role, "admin"):
+        raise HTTPException(
+            status_code=403, detail="Only the key creator or an org admin can update this key"
+        )
+    if not await update_mcp_api_key_rate_limit(key_id, org.org_id, req.rate_limit_per_minute):
+        raise HTTPException(status_code=404, detail="Key not found")
+    return {"status": "ok", "rate_limit_per_minute": req.rate_limit_per_minute}
 
 
 @router.delete("/{key_id}")
