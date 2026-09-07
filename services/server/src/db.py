@@ -8,11 +8,13 @@ import asyncpg
 from asyncpg import Pool
 
 from .config import get_settings
+from .migrations.runner import run_migrations
 
 logger = logging.getLogger(__name__)
 
 _pool: Pool | None = None
 
+# Frozen baseline schema replayed by migrations/versions/0001_baseline.py: new changes go in a new version module.
 DDL = """
 CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -927,11 +929,9 @@ async def get_pool() -> Pool:
 
 
 async def init_db() -> None:
-    settings = get_settings()
     pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(DDL.format(dims=settings.embeddings_dims))
-    logger.info("Database initialized")
+    applied = await run_migrations(pool)
+    logger.info("Database initialized (migrations applied: %s)", applied or "none")
 
 
 async def close_db() -> None:
