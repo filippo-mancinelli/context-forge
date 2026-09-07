@@ -52,6 +52,7 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:-}
       # MCP endpoint auth: disabled | transition | enabled (see .env.example)
       - MCP_AUTH_MODE=${MCP_AUTH_MODE:-disabled}
+      - MCP_AUDIT_RETENTION_DAYS=${MCP_AUDIT_RETENTION_DAYS:-90}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       # OIDC login (optional; inert unless OIDC_ENABLED=true)
       - OIDC_ENABLED=${OIDC_ENABLED:-false}

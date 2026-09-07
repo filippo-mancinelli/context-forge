@@ -15,7 +15,7 @@ Self-hosted context infrastructure for AI coding agents. Exposes a single MCP en
 - **CI/CD context** — live view of recent GitHub Actions / GitLab CI runs for configured repos, and a "why is the pipeline red" tool that returns the failed jobs/steps with the ANSI-stripped tail of their error logs. Uses the tokens already configured for indexing; nothing extra to set up.
 - **Async jobs** — offload slow downstream calls without hitting client timeouts. Jobs are executed by the scheduler, so they survive a restart; transient failures are retried with exponential backoff and exhausted jobs land in a `dead` state.
 - **Agent chat** — a built-in chat page where a tool-using agent searches your repos, memory, knowledge base, and connected databases, showing every retrieval inline so you can verify context is surfaced correctly. Streams responses (and model reasoning when available), switches models on the fly across the providers you have keys for (OpenAI, Anthropic, DeepSeek), keeps a per-user chat history, and can publish a conversation snapshot as a public share link.
-- **Multi-tenancy** — organizations as isolation boundaries with `owner / admin / member / viewer` roles. Each organization holds one or more **projects** that scope every source, search, and memory namespace; users are created by org admins with per-project visibility. Provider keys, embedding model, git tokens, and the Telegram capture bot can all be overridden per organization.
+- **Multi-tenancy** — organizations as isolation boundaries with `owner / admin / member / viewer` roles. Each organization holds one or more **projects** that scope every source, search, and memory namespace; users are created by org admins with per-project visibility. Provider keys, embedding model, git tokens, and the Telegram capture bot can all be overridden per organization. Every MCP tool call is audited per organization, and API keys can carry a per-minute rate limit.
 - **Authentication** — local admin login, or any OIDC provider (Keycloak, Authentik, Entra ID, ...) with just-in-time user provisioning. The MCP endpoint accepts API keys with granular permissions or OIDC bearer tokens, and can act as an OAuth authorization server so MCP clients log in from the browser without an API key.
 - **Runtime-first config** — manage repositories, providers, tokens, and indexing from the UI; `.env` and YAML are only for bootstrap.
 - **Pluggable providers** — OpenAI, Jina, OpenAI-compatible, or fully local embeddings.
@@ -163,6 +163,8 @@ The REST API/UI is authenticated after setup (local admin login, or OIDC when `O
 
 Expose the MCP port only behind TLS with `MCP_AUTH_MODE=enabled`. Data-source and SSH credentials are encrypted at rest when `ENCRYPTION_KEY` is set; git and OIDC tokens are never echoed in error messages.
 
+Every MCP tool call is recorded: who called it (OIDC user, API key, or anonymous), the tool, the project, the outcome (`ok`, `denied`, `error`, `rate_limited`), the duration, and a redacted summary of the arguments — secrets, tokens and payloads never reach the log, while audited SQL is kept truncated. Org admins and owners read the trail under **Organization → Tool activity**, with a 24h/7d stats strip and filters by tool, outcome and principal. History is pruned daily according to `MCP_AUDIT_RETENTION_DAYS` (default 90).
+
 ### MCP permissions
 
 The identity provider only authenticates. Authorization of MCP tools is managed in the application database: each organization role (viewer, member, admin, owner) has a set of permissions, editable from the dashboard under **Organization → MCP permissions**.
@@ -182,7 +184,7 @@ The identity provider only authenticates. Authorization of MCP tools is managed 
 
 Defaults: viewer → `context-read`; member → `context-read`, `context-write`, `db-query`, `ssh-read`; admin → the member set plus `jobs`, `projects-write`, `sources-write`; owner → `*`. Write capabilities (`db-write`, `ssh-write`, `repo-write`) are owner-only until granted explicitly.
 
-API keys get granular permissions chosen at creation (**Settings → MCP keys**), never more than the creator's own role allows. OIDC groups under `OIDC_GROUP_PREFIX` are only used to suggest the initial role when a user first logs in.
+API keys get granular permissions chosen at creation (**Settings → MCP keys**), never more than the creator's own role allows, plus an optional rate limit in calls per minute (empty = unlimited; enforced per server process). OIDC groups under `OIDC_GROUP_PREFIX` are only used to suggest the initial role when a user first logs in.
 
 ## License
 
