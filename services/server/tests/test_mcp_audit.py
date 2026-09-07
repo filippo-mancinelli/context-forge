@@ -346,6 +346,10 @@ def test_scrub_url_leaves_a_non_url_string_alone():
     assert audit.scrub_url("just a sentence") == "just a sentence"
 
 
+def test_scrub_url_brackets_an_ipv6_host():
+    assert audit.scrub_url("https://[::1]:8000/p?x=1") == "https://[::1]:8000/p"
+
+
 def test_summarize_args_scrubs_url_keys():
     out = audit.summarize_args(
         {"repo_url": "https://x-token:ghp_secret@github.com/acme/app.git?a=1",
@@ -362,11 +366,31 @@ def test_summarize_args_scrubs_a_url_embedded_in_a_plain_string():
     assert out["message"] == "cloning https://github.com/a/b.git now"
 
 
+def test_summarize_args_scrubs_a_url_embedded_in_url_keyed_prose():
+    out = audit.summarize_args({"url": "see https://u:pat@host/p?x=1"})
+    assert out["url"] == "see https://host/p"
+
+
 def test_scrub_text_rewrites_every_url_in_a_message():
     text = "fatal: could not read from https://tok:x@a.io/r.git and ssh://u:p@b.io/z"
     assert audit.scrub_text(text) == (
         "fatal: could not read from https://a.io/r.git and ssh://b.io/z"
     )
+
+
+def test_scrub_text_keeps_trailing_text_after_a_query_carrying_url_in_json():
+    text = 'body {"url":"https://u:p@h/p?x=1","code":500}'
+    assert audit.scrub_text(text) == 'body {"url":"https://h/p","code":500}'
+
+
+def test_scrub_text_keeps_trailing_text_after_a_url_in_parentheses():
+    text = "(https://h/p?x=1) retrying"
+    assert audit.scrub_text(text) == "(https://h/p) retrying"
+
+
+def test_scrub_text_restores_a_trailing_period_dropped_with_the_query():
+    text = "verify at https://u:p@a.io/p?x=1."
+    assert audit.scrub_text(text) == "verify at https://a.io/p."
 
 
 def test_record_call_scrubs_the_error_text():
