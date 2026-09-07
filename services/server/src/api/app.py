@@ -22,6 +22,7 @@ from .routes import gitlab as gitlab_routes
 from .routes import mcp_keys as mcp_keys_routes
 from .routes import organizations as organizations_routes
 from .routes import tool_calls as tool_calls_routes
+from .routes import write_requests as write_requests_routes
 from .routes import webhooks as webhooks_routes
 from .routes import datasources as datasources_routes
 from .routes import ssh_sources as ssh_sources_routes
@@ -90,6 +91,7 @@ api.include_router(gitlab_routes.router, prefix="/api")
 api.include_router(mcp_keys_routes.router, prefix="/api")
 api.include_router(organizations_routes.router, prefix="/api")
 api.include_router(tool_calls_routes.router, prefix="/api")
+api.include_router(write_requests_routes.router, prefix="/api")
 api.include_router(webhooks_routes.router, prefix="/api")
 api.include_router(datasources_routes.router, prefix="/api")
 api.include_router(ssh_sources_routes.router, prefix="/api")
