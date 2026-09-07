@@ -1,6 +1,8 @@
 """Discovery orders modules by number; current_version reads the table."""
 import asyncio
 
+import pytest
+
 from src.migrations import runner
 from tests.fake_db import FakeConn, FakePool
 
@@ -55,3 +57,18 @@ def test_current_version_is_zero_when_the_table_is_absent():
 def test_current_version_reads_the_max_applied():
     conn = FakeConn(fetchval_results=[True, 4])
     assert asyncio.run(runner.current_version(FakePool(conn))) == 4
+
+
+def test_discovery_rejects_a_module_missing_the_contract(tmp_path):
+    (tmp_path / "0001_a.py").write_text("NAME = 'a'\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="0001_a.py"):
+        runner.discover_versions(tmp_path)
+
+
+def test_discovery_rejects_duplicate_versions(tmp_path):
+    write_versions(tmp_path, [(1, "a", True)])
+    (tmp_path / "0001_b.py").write_text(
+        MODULE.format(version=1, name="b", transactional=True), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="duplicate migration version 1"):
+        runner.discover_versions(tmp_path)
