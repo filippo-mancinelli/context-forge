@@ -425,6 +425,7 @@ export interface MCPApiKey {
   created_by: number
   project_id?: number
   project_slug?: string
+  rate_limit_per_minute?: number | null
 }
 
 export type McpPermission = 'context-read' | 'context-write' | 'db-query' | 'repo-write' | 'jobs'
@@ -1274,8 +1275,8 @@ export const api = {
   },
   mcpKeys: {
     list: () => request<{ keys: MCPApiKey[] }>('/api/mcp/keys'),
-    create: (body: { name: string; permissions?: string[]; scope?: string; expires_days?: number; project_id?: number }) =>
-      request<{ key: string; id: number; name: string; scope: string; permissions: string; expires_at: string | null }>('/api/mcp/keys', {
+    create: (body: { name: string; permissions?: string[]; scope?: string; expires_days?: number; project_id?: number; rate_limit_per_minute?: number }) =>
+      request<{ key: string; id: number; name: string; scope: string; permissions: string; expires_at: string | null; rate_limit_per_minute: number | null }>('/api/mcp/keys', {
         method: 'POST',
         body: JSON.stringify(body),
       }),
