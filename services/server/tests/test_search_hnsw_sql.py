@@ -5,6 +5,7 @@ import pytest
 
 from src import search
 from src.org_settings import OrgSettings
+from src.vector_index import search_session_sql
 
 
 class FakeConn:
@@ -97,7 +98,10 @@ def test_every_vector_search_sets_ef_search_in_a_transaction(monkeypatch):
     asyncio.run(search.search_kb_chunks(42, "q", project_id=7))
     asyncio.run(search.search_web_chunks(42, "q", project_id=7))
 
-    assert conn.executed == ["SET LOCAL hnsw.ef_search = 100"] * 3
+    assert conn.executed == [search_session_sql()] * 3
+    assert "SET LOCAL hnsw.ef_search = 100" in conn.executed[0]
+    assert "SET LOCAL hnsw.iterative_scan = 'relaxed_order'" in conn.executed[0]
+    assert "SET LOCAL plan_cache_mode = 'force_custom_plan'" in conn.executed[0]
 
 
 def test_hybrid_sql_keeps_the_lexical_half_and_the_parameter_layout(monkeypatch):
