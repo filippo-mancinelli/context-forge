@@ -39,6 +39,16 @@ DEF_NODES: dict[str, set[str]] = {
         "interface_declaration",
         "enum_declaration",
     },
+    "csharp": {
+        "class_declaration",
+        "interface_declaration",
+        "struct_declaration",
+        "record_declaration",
+        "enum_declaration",
+        "method_declaration",
+        "constructor_declaration",
+        "property_declaration",
+    },
 }
 
 # Nodi che valgono come uso di un nome.

@@ -57,6 +57,7 @@ _LANGUAGE_LOADERS: dict[str, tuple[str, str]] = {
     "tsx": ("tree_sitter_typescript", "language_tsx"),
     "go": ("tree_sitter_go", "language"),
     "java": ("tree_sitter_java", "language"),
+    "csharp": ("tree_sitter_c_sharp", "language"),
 }
 
 _PARSER_CACHE: dict[str, Any] = {}
@@ -106,7 +107,7 @@ _CHUNK_NODES: dict[str, list[str]] = {
 }
 
 # Profondita' massima a cui cercare un nodo da spezzare, per linguaggio.
-_CHUNK_MAX_DEPTH: dict[str, int] = {}
+_CHUNK_MAX_DEPTH: dict[str, int] = {"csharp": 3}
 
 
 def _extract_chunks_treesitter(content: str, language: str, config: IndexingConfig) -> list[dict]:
