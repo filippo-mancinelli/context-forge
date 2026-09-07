@@ -1,8 +1,8 @@
 """FastAPI application for the Web UI backend."""
 from __future__ import annotations
 
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..config import get_settings
@@ -139,6 +139,24 @@ async def auth_guard(request, call_next):
 async def health():
     """Health check endpoint."""
     return {"status": "ok", "service": "context-forge-api"}
+
+
+@api.get("/metrics")
+async def metrics(request: Request):
+    """Prometheus exposition. Guarded by METRICS_TOKEN when it is set."""
+    import hmac
+
+    from prometheus_client import CONTENT_TYPE_LATEST
+
+    from ..metrics import render_metrics
+
+    token = get_settings().metrics_token
+    if token:
+        expected = f"Bearer {token}"
+        supplied = request.headers.get("Authorization") or ""
+        if not hmac.compare_digest(supplied, expected):
+            return PlainTextResponse("Unauthorized", status_code=401)
+    return PlainTextResponse(render_metrics(), media_type=CONTENT_TYPE_LATEST)
 
 
 @api.get("/api/tools")
