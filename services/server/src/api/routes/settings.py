@@ -8,6 +8,7 @@ org_reembed job).
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -25,11 +26,18 @@ from ...indexer.indexer import sync_repos_config
 from ...tenancy import role_at_least
 from ...mcp.memory import reset_memory_client
 from ...org_config import get_org_config, persist_org_config
+from ...vector_index import ensure_org_indexes
 from ..deps import ActiveOrg, get_active_org, require_role
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 _background_tasks: set = set()
+
+
+def _schedule(coro) -> None:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -104,6 +112,11 @@ async def update_runtime_settings(
         await persist_org_settings_overrides(org.org_id, next_overrides)
         reset_embedder_clients()
         reset_memory_client()
+        # A changed dimension is handled by the re-embed, which ensures too.
+        if not embeddings_dims_changed:
+            _schedule(
+                ensure_org_indexes(org.org_id, int(next_overrides["embeddings_dims"]))
+            )
 
     return {
         "status": "ok",
@@ -116,8 +129,6 @@ async def update_runtime_settings(
 @router.post("/reembed")
 async def start_reembed(org: ActiveOrg = Depends(require_role("admin"))):
     """Avvia il ricalcolo degli embedding dell'organizzazione (job asincrono)."""
-    import asyncio
-
     from ...db import get_pool
     from ...projects import get_default_project_id
     from ...reembed import reembed_org
@@ -130,7 +141,5 @@ async def start_reembed(org: ActiveOrg = Depends(require_role("admin"))):
             "VALUES ('org_reembed', 'pending', $1, $2) RETURNING id",
             org.org_id, project_id,
         )
-    task = asyncio.create_task(reembed_org(org.org_id, str(job_id)))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    _schedule(reembed_org(org.org_id, str(job_id)))
     return {"status": "ok", "job_id": str(job_id)}
