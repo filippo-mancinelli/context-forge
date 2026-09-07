@@ -1,13 +1,16 @@
 """APScheduler setup for periodic, per-organization indexing and git pulls."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from .db import get_pool
 from .indexer.git_manager import pull_all_repos
 from .indexer.indexer import run_index_repo, run_pending_index_requests, sync_repos_config
+from .mcp.jobs import run_claimed_job
 from .mcp.oauth_bridge import purge_expired_flows
 from .org_config import get_org_config, iter_org_configs
 from .vector_index import ensure_all_indexes
@@ -102,6 +105,40 @@ async def _purge_expired_oauth_flows() -> None:
         logger.info("Purged %d expired OAuth bridge flow(s)", deleted)
 
 
+_JOB_CLAIM_BATCH = 5
+_JOB_STUCK_MINUTES = 10
+
+
+async def _check_jobs() -> None:
+    """Requeue jobs stuck in 'running', then claim and run the jobs that are due."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE jobs SET status = 'pending', updated_at = NOW() "
+            "WHERE status = 'running' AND updated_at < NOW() - INTERVAL '10 minutes'"
+        )
+        rows = await conn.fetch(
+            """
+            UPDATE jobs
+            SET status = 'running', attempts = attempts + 1, updated_at = NOW()
+            WHERE id IN (
+                SELECT id FROM jobs
+                WHERE status = 'pending' AND next_attempt_at <= NOW()
+                ORDER BY next_attempt_at
+                LIMIT 5
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id, params, attempts, max_attempts
+            """
+        )
+
+    if not rows:
+        return
+    await asyncio.gather(
+        *(run_claimed_job(dict(row)) for row in rows), return_exceptions=True
+    )
+
+
 async def start_scheduler() -> None:
     global _scheduler
     _scheduler = AsyncIOScheduler()
@@ -109,6 +146,11 @@ async def start_scheduler() -> None:
     # Check for pending index requests every 10 seconds.
     _scheduler.add_job(
         _check_index_requests, "interval", seconds=10, id="index_requests", replace_existing=True
+    )
+
+    # Claim and run due async jobs; also requeues jobs stranded by a crash.
+    _scheduler.add_job(
+        _check_jobs, "interval", seconds=5, id="jobs", replace_existing=True
     )
 
     # Safety-net for knowledge-base documents whose background task didn't run.

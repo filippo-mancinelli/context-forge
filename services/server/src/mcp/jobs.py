@@ -46,44 +46,82 @@ def classify_exception(exc: BaseException) -> str:
     return "retry" if isinstance(exc, httpx.TransportError) else "error"
 
 
-async def _execute_http_job(job_id: str, url: str, method: str, payload: dict, headers: dict) -> None:
-    """Background task: run HTTP call and update job status in DB."""
+async def finalize_job(
+    job_id: str,
+    outcome: str,
+    attempts: int,
+    max_attempts: int,
+    result: Any = None,
+    error: Optional[str] = None,
+) -> str:
+    """Write one attempt's outcome. Returns the resulting job status."""
+    if outcome == "done":
+        status, delay = "done", 0
+    elif outcome == "retry" and attempts < max_attempts:
+        status, delay = "pending", next_backoff_seconds(attempts)
+    elif outcome == "retry":
+        status, delay = "dead", 0
+    else:
+        status, delay = "error", 0
+
+    terminal_error = error if status in ("error", "dead") else None
     pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE jobs
+            SET status = $1,
+                result = COALESCE($2::jsonb, result),
+                last_error = $3,
+                error_message = COALESCE($4, error_message),
+                next_attempt_at = NOW() + make_interval(secs => $5),
+                updated_at = NOW()
+            WHERE id = $6
+            """,
+            status,
+            json.dumps(result) if result is not None else None,
+            error,
+            terminal_error,
+            float(delay),
+            job_id,
+        )
+    return status
 
-    async def _update(status: str, result: Any = None, error: str = None):
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                UPDATE jobs
-                SET status = $1, result = $2, error_message = $3, updated_at = NOW()
-                WHERE id = $4
-                """,
-                status,
-                json.dumps(result) if result is not None else None,
-                error,
-                job_id,
-            )
 
-    await _update("running")
+async def run_claimed_job(job: dict) -> None:
+    """Execute one claimed job row and persist its outcome."""
+    job_id = str(job["id"])
+    params = job["params"]
+    if isinstance(params, str):
+        params = json.loads(params)
+    params = params or {}
+
+    url = params.get("url", "")
+    method = (params.get("method") or "POST").upper()
+    payload = params.get("payload") or {}
+    headers = params.get("headers") or {}
+
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
-            if method.upper() == "GET":
+            if method == "GET":
                 resp = await client.get(url, headers=headers)
             else:
                 resp = await client.post(url, json=payload, headers=headers)
-
         try:
             result_data = resp.json()
         except Exception:
             result_data = {"text": resp.text, "status_code": resp.status_code}
+        outcome = classify_http_status(resp.status_code)
+        error = None if outcome == "done" else f"HTTP {resp.status_code}"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Job %s attempt %s failed: %s", job_id, job["attempts"], exc)
+        result_data = None
+        outcome = classify_exception(exc)
+        error = str(exc) or exc.__class__.__name__
 
-        if resp.is_success:
-            await _update("done", result_data)
-        else:
-            await _update("error", result_data, f"HTTP {resp.status_code}")
-    except Exception as e:
-        logger.error("Job %s failed: %s", job_id, e)
-        await _update("error", error=str(e))
+    await finalize_job(
+        job_id, outcome, int(job["attempts"]), int(job["max_attempts"]), result_data, error
+    )
 
 
 @mcp.tool()
