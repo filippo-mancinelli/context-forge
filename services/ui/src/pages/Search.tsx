@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type Job, type Memory, type RepoRelationship, type RepoSearchResult, type RepoSymbol } from '../lib/api'
-import { Button, Input } from '../components/ui'
+import { Banner, Button, Card, Input } from '../components/ui'
 
 function snippet(content: string, max = 260) {
   const flat = content.replace(/\s+/g, ' ').trim()
@@ -95,14 +95,7 @@ export default function Search() {
           </Button>
         </div>
 
-        {error && (
-          <div
-            style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
-            className="text-sm p-3 mb-4 bg-[#fef2f2]"
-          >
-            {error}
-          </div>
-        )}
+        {error && <Banner variant="danger" className="mb-4">{error}</Banner>}
 
         {!hasSearched ? null : (
           <div className="space-y-8">
@@ -119,11 +112,8 @@ export default function Search() {
               ) : (
                 <div className="space-y-4">
                   {grouped.map(([repoName, items]) => (
-                    <div key={repoName} style={{ border: '1px solid var(--border)' }}>
-                      <div
-                        style={{ borderBottom: '1px solid var(--border)' }}
-                        className="flex items-center justify-between px-3 py-2 bg-surface"
-                      >
+                    <Card key={repoName}>
+                      <div className="border-b border-border flex items-center justify-between px-3 py-2 bg-surface">
                         <span className="text-sm font-medium text-accent">{repoName}</span>
                         <Link
                           to={`/repos/${encodeURIComponent(repoName)}`}
@@ -136,8 +126,7 @@ export default function Search() {
                         {items.slice(0, 4).map((result, idx) => (
                           <div
                             key={`${result.file_path}-${idx}`}
-                            style={{ borderBottom: '1px solid var(--border)' }}
-                            className="px-3 py-2 last:border-b-0"
+                            className="border-b border-border px-3 py-2 last:border-b-0"
                           >
                             <p className="text-xs text-muted font-mono mb-1">
                               {result.file_path} · {result.chunk_type} · score {result.score.toFixed(3)}
@@ -146,7 +135,7 @@ export default function Search() {
                           </div>
                         ))}
                       </div>
-                    </div>
+                    </Card>
                   ))}
                 </div>
               )}
@@ -159,14 +148,13 @@ export default function Search() {
                   Symbols
                   <span className="text-muted font-normal text-sm ml-2">({symbolResults.length})</span>
                 </h2>
-                <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto">
+                <Card className="overflow-x-auto">
                   <table className="w-full min-w-[480px]">
                     <tbody>
                       {symbolResults.map((sym, idx) => (
                         <tr
                           key={`${sym.repo_name}-${sym.file_path}-${sym.name}-${idx}`}
-                          style={{ borderBottom: '1px solid var(--border)' }}
-                          className="last:border-b-0"
+                          className="border-b border-border last:border-b-0"
                         >
                           <td className="px-3 py-2 align-top">
                             <div className="flex items-center gap-2">
@@ -187,7 +175,7 @@ export default function Search() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </Card>
               </section>
             )}
 
@@ -197,23 +185,21 @@ export default function Search() {
                 <h2 className="text-base font-semibold mb-3">Memory &amp; Jobs</h2>
                 <div className="space-y-2">
                   {memories.slice(0, 4).map(memory => (
-                    <div
+                    <Card
                       key={memory.id}
-                      style={{ border: '1px solid var(--border)' }}
                       className="px-3 py-2 text-sm"
                     >
                       {snippet(memory.memory, 140)}
-                    </div>
+                    </Card>
                   ))}
                   {jobMatches.map(job => (
-                    <div
+                    <Card
                       key={job.id}
-                      style={{ border: '1px solid var(--border)' }}
                       className="px-3 py-2 text-sm"
                     >
                       <code className="font-mono text-xs">{job.tool}</code>
                       <span className="text-muted text-xs ml-2">{job.status} · {job.id.slice(0, 8)}...</span>
-                    </div>
+                    </Card>
                   ))}
                 </div>
               </section>
@@ -223,14 +209,13 @@ export default function Search() {
             {relationships.length > 0 && (
               <section>
                 <h2 className="text-base font-semibold mb-3">Repository relationships</h2>
-                <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto">
+                <Card className="overflow-x-auto">
                   <table className="w-full min-w-[420px]">
                     <tbody>
                       {relationships.map(edge => (
                         <tr
                           key={`${edge.repo_a}-${edge.repo_b}`}
-                          style={{ borderBottom: '1px solid var(--border)' }}
-                          className="last:border-b-0"
+                          className="border-b border-border last:border-b-0"
                         >
                           <td className="px-3 py-2 text-sm font-mono">
                             {edge.repo_a} → {edge.repo_b}
@@ -242,7 +227,7 @@ export default function Search() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </Card>
               </section>
             )}
           </div>

@@ -8,6 +8,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from .indexer.git_manager import pull_all_repos
 from .indexer.indexer import run_index_repo, run_pending_index_requests, sync_repos_config
+from .mcp.oauth_bridge import purge_expired_flows
 from .org_config import get_org_config, iter_org_configs
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,13 @@ async def _check_web_sites() -> None:
     await process_pending_sites()
 
 
+async def _purge_expired_oauth_flows() -> None:
+    """Delete expired OAuth bridge flows: they hold Keycloak tokens in clear text."""
+    deleted = await purge_expired_flows()
+    if deleted:
+        logger.info("Purged %d expired OAuth bridge flow(s)", deleted)
+
+
 async def start_scheduler() -> None:
     global _scheduler
     _scheduler = AsyncIOScheduler()
@@ -115,6 +123,13 @@ async def start_scheduler() -> None:
     # Safety-net for site crawls whose background task didn't run.
     _scheduler.add_job(
         _check_web_sites, "interval", seconds=30, id="web_sites", replace_existing=True
+    )
+
+    # Reaper: expired OAuth bridge flows hold Keycloak tokens in clear text and
+    # must not outlive their TTL. Global job (not per-organization).
+    _scheduler.add_job(
+        _purge_expired_oauth_flows, "interval", minutes=5, id="oauth_flow_reaper",
+        replace_existing=True,
     )
 
     _scheduler.start()

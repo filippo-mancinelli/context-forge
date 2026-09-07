@@ -125,25 +125,29 @@ async def _fetch(url: str, client: Any = None) -> tuple[Optional[str], str, list
     return title, text, links, str(resp.url)
 
 
-async def add_url(org_id: int, url: str, site_id: Optional[int] = None) -> dict[str, Any]:
+async def add_url(
+    org_id: int, project_id: int, url: str, site_id: Optional[int] = None
+) -> dict[str, Any]:
     """Register a URL as a ``pending`` web page. Returns the created record.
 
-    Re-adding an existing URL resets it to ``pending`` so it will be re-fetched.
-    A page discovered by a site crawl adopts that site (site_id).
+    Re-adding an existing URL of the same project resets it to ``pending`` so
+    it will be re-fetched. A page discovered by a site crawl adopts that site
+    (site_id).
     """
     norm = normalize_url(url)
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO web_pages (org_id, url, status, metadata, site_id)
-            VALUES ($1, $2, 'pending', '{}'::jsonb, $3)
-            ON CONFLICT (org_id, url)
+            INSERT INTO web_pages (org_id, project_id, url, status, metadata, site_id)
+            VALUES ($1, $2, $3, 'pending', '{}'::jsonb, $4)
+            ON CONFLICT (project_id, url)
             DO UPDATE SET status='pending', error_message=NULL,
                           site_id=COALESCE(EXCLUDED.site_id, web_pages.site_id)
             RETURNING id, url, title, status
             """,
             org_id,
+            project_id,
             norm,
             site_id,
         )
@@ -164,16 +168,25 @@ async def process_page(page_id: int) -> bool:
             UPDATE web_pages
             SET status='processing', error_message=NULL
             WHERE id=$1 AND status IN ('pending', 'error')
-            RETURNING id, org_id, url, metadata
+            RETURNING id, org_id, project_id, url, metadata
             """,
             page_id,
         )
     if row is None:
         return False
 
+    project_id = row["project_id"]
+    if project_id is None:
+        # Pages created before project scoping fall back to the org's default
+        # project so processing never leaves them unscoped.
+        from ..projects import get_default_project_id
+
+        project_id = await get_default_project_id(int(row["org_id"]))
+
     await _run_fetch(
         page_id=int(row["id"]),
         org_id=int(row["org_id"]),
+        project_id=int(project_id),
         url=row["url"],
         existing_meta=row["metadata"],
     )
@@ -181,7 +194,7 @@ async def process_page(page_id: int) -> bool:
 
 
 async def embed_and_store(
-    *, page_id: int, org_id: int, url: str, title: Optional[str], text: str,
+    *, page_id: int, org_id: int, project_id: int, url: str, title: Optional[str], text: str,
     existing_meta: Any = None,
 ) -> None:
     """Chunk, embed, and persist a page's extracted text; mark it ``ready``.
@@ -208,7 +221,7 @@ async def embed_and_store(
     embeddings: list[list[float]] = []
     batch_size = 20
     for i in range(0, len(chunk_texts), batch_size):
-        embeddings.extend(await embed_batch(chunk_texts[i:i + batch_size]))
+        embeddings.extend(await embed_batch(chunk_texts[i:i + batch_size], org_id))
 
     base_meta = existing_meta if isinstance(existing_meta, dict) else {}
     if isinstance(existing_meta, str):
@@ -224,12 +237,13 @@ async def embed_and_store(
             await conn.executemany(
                 """
                 INSERT INTO web_chunks
-                    (org_id, page_id, chunk_index, content, metadata, embedding)
-                VALUES ($1, $2, $3, $4, $5::jsonb, $6::vector)
+                    (org_id, project_id, page_id, chunk_index, content, metadata, embedding)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::vector)
                 """,
                 [
                     (
                         org_id,
+                        project_id,
                         page_id,
                         idx,
                         chunk_texts[idx],
@@ -267,13 +281,15 @@ async def mark_page_error(page_id: int, message: str) -> None:
         )
 
 
-async def _run_fetch(*, page_id: int, org_id: int, url: str, existing_meta: Any) -> None:
+async def _run_fetch(
+    *, page_id: int, org_id: int, project_id: int, url: str, existing_meta: Any
+) -> None:
     started = time.monotonic()
     try:
         title, text, _links, _final = await _fetch(url)
         await embed_and_store(
-            page_id=page_id, org_id=org_id, url=url, title=title, text=text,
-            existing_meta=existing_meta,
+            page_id=page_id, org_id=org_id, project_id=project_id, url=url, title=title,
+            text=text, existing_meta=existing_meta,
         )
         logger.info(
             "WEB processed page=%s elapsed=%.1fs", page_id, time.monotonic() - started
@@ -311,25 +327,29 @@ async def reset_stale_processing() -> None:
         )
 
 
-async def delete_page(org_id: int, page_id: int) -> bool:
+async def delete_page(org_id: int, project_id: int, page_id: int) -> bool:
     """Delete a page and its chunks (via cascade). Returns True if found."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         deleted = await conn.fetchval(
-            "DELETE FROM web_pages WHERE id=$1 AND org_id=$2 RETURNING id",
+            "DELETE FROM web_pages WHERE id=$1 AND org_id=$2 AND project_id=$3 RETURNING id",
             page_id,
             org_id,
+            project_id,
         )
     return deleted is not None
 
 
 async def search_pages(
     org_id: int,
+    project_id: int,
     query: str,
     limit: int = 10,
     page_ids: Optional[list[int]] = None,
 ) -> list[dict[str, Any]]:
-    """Search a tenant's web-page chunks (hybrid vector + full-text)."""
+    """Search a project's web-page chunks (hybrid vector + full-text)."""
     from ..search import search_web_chunks
 
-    return await search_web_chunks(org_id, query, page_ids=page_ids, limit=limit)
+    return await search_web_chunks(
+        org_id, query, page_ids=page_ids, limit=limit, project_id=project_id
+    )

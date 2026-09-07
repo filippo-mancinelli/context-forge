@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 CONTRACT_TYPES = ("openapi", "graphql")
 
 _CONTRACT_FIELDS = (
-    "id, org_id, name, type, source_url, description, title, version, status, "
+    "id, org_id, project_id, name, type, source_url, description, title, version, status, "
     "error_message, endpoint_count, fetched_at, created_at, updated_at"
 )
 
@@ -33,28 +33,28 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
     return d
 
 
-async def list_contracts(org_id: int) -> list[dict[str, Any]]:
+async def list_contracts(org_id: int, project_id: int) -> list[dict[str, Any]]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            f"SELECT {_CONTRACT_FIELDS} FROM api_contracts WHERE org_id=$1 ORDER BY name",
-            org_id,
+            f"SELECT {_CONTRACT_FIELDS} FROM api_contracts WHERE org_id=$1 AND project_id=$2 ORDER BY name",
+            org_id, project_id,
         )
     return [_row_to_dict(r) for r in rows]
 
 
-async def get_contract(org_id: int, ref: int | str) -> dict[str, Any]:
+async def get_contract(org_id: int, project_id: int, ref: int | str) -> dict[str, Any]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         if isinstance(ref, int) or (isinstance(ref, str) and ref.isdigit()):
             row = await conn.fetchrow(
-                f"SELECT {_CONTRACT_FIELDS} FROM api_contracts WHERE org_id=$1 AND id=$2",
-                org_id, int(ref),
+                f"SELECT {_CONTRACT_FIELDS} FROM api_contracts WHERE org_id=$1 AND project_id=$2 AND id=$3",
+                org_id, project_id, int(ref),
             )
         else:
             row = await conn.fetchrow(
-                f"SELECT {_CONTRACT_FIELDS} FROM api_contracts WHERE org_id=$1 AND name=$2",
-                org_id, ref,
+                f"SELECT {_CONTRACT_FIELDS} FROM api_contracts WHERE org_id=$1 AND project_id=$2 AND name=$3",
+                org_id, project_id, ref,
             )
     if row is None:
         raise ContractNotFoundError(f"API contract '{ref}' not found")
@@ -75,7 +75,7 @@ def _parse(contract_type: str, raw_spec: str) -> dict[str, Any]:
 
 
 async def _store_parse_result(
-    org_id: int, contract_id: int, raw_spec: str, parsed: dict[str, Any]
+    org_id: int, project_id: int, contract_id: int, raw_spec: str, parsed: dict[str, Any]
 ) -> None:
     endpoints = parsed["endpoints"]
     pool = await get_pool()
@@ -86,12 +86,12 @@ async def _store_parse_result(
                 await conn.execute(
                     """
                     INSERT INTO api_endpoints
-                        (contract_id, org_id, method, path, operation_id, summary,
+                        (contract_id, org_id, project_id, method, path, operation_id, summary,
                          description, tags, deprecated, request_schema, response_schema)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb)
                     ON CONFLICT (contract_id, method, path) DO NOTHING
                     """,
-                    contract_id, org_id,
+                    contract_id, org_id, project_id,
                     ep["method"], ep["path"], ep.get("operation_id"),
                     ep.get("summary"), ep.get("description"),
                     ep.get("tags") or [], bool(ep.get("deprecated")),
@@ -119,7 +119,10 @@ async def _mark_error(contract_id: int, error: str) -> None:
         )
 
 
-async def ingest(org_id: int, contract_id: int, contract_type: str, source_url: Optional[str], raw_spec: Optional[str]) -> dict[str, Any]:
+async def ingest(
+    org_id: int, project_id: int, contract_id: int, contract_type: str,
+    source_url: Optional[str], raw_spec: Optional[str],
+) -> dict[str, Any]:
     """Fetch (if needed), parse, and store a contract's endpoints."""
     try:
         if not raw_spec:
@@ -133,34 +136,36 @@ async def ingest(org_id: int, contract_id: int, contract_type: str, source_url: 
         parsed = _parse(contract_type, raw_spec)
         if not parsed["endpoints"]:
             raise SpecParseError("Parsed successfully but no operations were found")
-        await _store_parse_result(org_id, contract_id, raw_spec, parsed)
+        await _store_parse_result(org_id, project_id, contract_id, raw_spec, parsed)
     except (SpecParseError, GraphQLIngestError, httpx.HTTPError) as e:
         await _mark_error(contract_id, str(e))
     except Exception as e:  # noqa: BLE001
         logger.error("contract ingest failed: %s", e)
         await _mark_error(contract_id, str(e))
-    return await get_contract(org_id, contract_id)
+    return await get_contract(org_id, project_id, contract_id)
 
 
-async def create_contract(org_id: int, data: dict[str, Any]) -> dict[str, Any]:
+async def create_contract(org_id: int, project_id: int, data: dict[str, Any]) -> dict[str, Any]:
     if data.get("type") not in CONTRACT_TYPES:
         raise ValueError(f"Unsupported contract type '{data.get('type')}'. Supported: {', '.join(CONTRACT_TYPES)}")
     pool = await get_pool()
     async with pool.acquire() as conn:
         contract_id = await conn.fetchval(
             """
-            INSERT INTO api_contracts (org_id, name, type, source_url, description)
-            VALUES ($1, $2, $3, $4, $5) RETURNING id
+            INSERT INTO api_contracts (org_id, project_id, name, type, source_url, description)
+            VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
             """,
-            org_id, data["name"], data["type"],
+            org_id, project_id, data["name"], data["type"],
             data.get("source_url") or None, data.get("description"),
         )
-    return await ingest(org_id, contract_id, data["type"], data.get("source_url"), data.get("raw_spec"))
+    return await ingest(org_id, project_id, contract_id, data["type"], data.get("source_url"), data.get("raw_spec"))
 
 
-async def refresh_contract(org_id: int, contract_id: int, raw_spec: Optional[str] = None) -> dict[str, Any]:
+async def refresh_contract(
+    org_id: int, project_id: int, contract_id: int, raw_spec: Optional[str] = None
+) -> dict[str, Any]:
     """Re-fetch from the source URL (or re-parse pasted content) and re-index endpoints."""
-    contract = await get_contract(org_id, contract_id)
+    contract = await get_contract(org_id, project_id, contract_id)
     if not raw_spec and not contract.get("source_url"):
         # Pasted spec with no URL: re-parse the stored document.
         pool = await get_pool()
@@ -168,15 +173,15 @@ async def refresh_contract(org_id: int, contract_id: int, raw_spec: Optional[str
             raw_spec = await conn.fetchval(
                 "SELECT raw_spec FROM api_contracts WHERE id=$1", contract_id
             )
-    return await ingest(org_id, contract_id, contract["type"], contract.get("source_url"), raw_spec)
+    return await ingest(org_id, project_id, contract_id, contract["type"], contract.get("source_url"), raw_spec)
 
 
-async def delete_contract(org_id: int, contract_id: int) -> None:
+async def delete_contract(org_id: int, project_id: int, contract_id: int) -> None:
     pool = await get_pool()
     async with pool.acquire() as conn:
         deleted = await conn.fetchval(
-            "DELETE FROM api_contracts WHERE org_id=$1 AND id=$2 RETURNING id",
-            org_id, contract_id,
+            "DELETE FROM api_contracts WHERE org_id=$1 AND project_id=$2 AND id=$3 RETURNING id",
+            org_id, project_id, contract_id,
         )
     if deleted is None:
         raise ContractNotFoundError(f"API contract '{contract_id}' not found")
@@ -196,6 +201,7 @@ def _endpoint_row(row: Any, include_schemas: bool) -> dict[str, Any]:
 
 async def list_endpoints(
     org_id: int,
+    project_id: int,
     contract_ref: Optional[int | str] = None,
     tag: Optional[str] = None,
     search: Optional[str] = None,
@@ -204,7 +210,7 @@ async def list_endpoints(
     """List/search endpoints; without contract_ref searches across all contracts."""
     contract_id = None
     if contract_ref is not None:
-        contract_id = (await get_contract(org_id, contract_ref))["id"]
+        contract_id = (await get_contract(org_id, project_id, contract_ref))["id"]
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -222,18 +228,19 @@ async def list_endpoints(
                    e.summary ILIKE '%' || $4 || '%' OR
                    e.description ILIKE '%' || $4 || '%' OR
                    EXISTS (SELECT 1 FROM unnest(e.tags) t WHERE t ILIKE '%' || $4 || '%'))
+              AND e.project_id = $6
             ORDER BY c.name, e.path, e.method
             LIMIT $5
             """,
-            org_id, contract_id, tag, search, limit,
+            org_id, contract_id, tag, search, limit, project_id,
         )
     return [_endpoint_row(r, include_schemas=False) for r in rows]
 
 
 async def get_endpoint(
-    org_id: int, contract_ref: int | str, method: str, path: str
+    org_id: int, project_id: int, contract_ref: int | str, method: str, path: str
 ) -> dict[str, Any]:
-    contract = await get_contract(org_id, contract_ref)
+    contract = await get_contract(org_id, project_id, contract_ref)
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(

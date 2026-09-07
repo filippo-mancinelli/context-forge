@@ -4,7 +4,10 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from ..datasources import service
 from .server import mcp
+from .permissions import requires_permission
+from .source_links import ui_link
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +29,7 @@ def _slim_connections(connections: list[dict]) -> list[dict]:
 
 async def _resolve_connection_ref(
     org_id: int,
+    project_id: int,
     connection: Optional[str],
     hint: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[dict]]:
@@ -37,11 +41,11 @@ async def _resolve_connection_ref(
     from ..datasources.service import ConnectionAmbiguousError, ConnectionNotFoundError
 
     if not connection and not hint:
-        connections = await service.list_connections(org_id)
+        connections = await service.list_connections(org_id, project_id)
         return None, {"status": "ok", "connections": _slim_connections(connections), "count": len(connections)}
 
     if connection and service.is_list_sentinel(connection):
-        connections = await service.list_connections(org_id)
+        connections = await service.list_connections(org_id, project_id)
         return None, {
             "status": "ok",
             "connections": _slim_connections(connections),
@@ -53,22 +57,22 @@ async def _resolve_connection_ref(
     resolve_hint = hint or connection
     if connection and not service.is_list_sentinel(connection) and not hint:
         try:
-            record = await service.get_connection(org_id, connection)
+            record = await service.get_connection(org_id, project_id, connection)
             return record["name"], None
         except ConnectionNotFoundError:
             resolve_hint = connection
 
     try:
-        record = await service.resolve_connection(org_id, resolve_hint)
+        record = await service.resolve_connection(org_id, project_id, resolve_hint)
     except ConnectionAmbiguousError as e:
-        connections = await service.list_connections(org_id)
+        connections = await service.list_connections(org_id, project_id)
         return None, {
             "status": "error",
             "error": str(e),
             "connections": _slim_connections(connections),
         }
     except ConnectionNotFoundError as e:
-        connections = await service.list_connections(org_id)
+        connections = await service.list_connections(org_id, project_id)
         payload: dict = {"status": "error", "error": str(e)}
         if connections:
             payload["connections"] = _slim_connections(connections)
@@ -78,8 +82,9 @@ async def _resolve_connection_ref(
 
 
 @mcp.tool()
+@requires_permission("context-read")
 async def db_list() -> dict:
-    """List the external database connections available to this organization.
+    """List the external database connections available to the current project.
 
     Returns connection names to use with db_schema, db_describe, and db_query,
     plus engine type, target database, and last known reachability status.
@@ -93,11 +98,12 @@ async def db_list() -> dict:
         description, annotation_count)
     """
     from ..datasources import service
-    from .context import resolve_org_id
+    from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
+    project_id = await require_project_id()
     try:
-        connections = await service.list_connections(org_id)
+        connections = await service.list_connections(org_id, project_id)
     except Exception as e:  # noqa: BLE001
         logger.error("db_list failed: %s", e)
         return {"status": "error", "error": str(e)}
@@ -106,12 +112,14 @@ async def db_list() -> dict:
 
 
 @mcp.tool()
+@requires_permission("context-read")
 async def db_schema(
     connection: Optional[str] = None,
     schema: Optional[str] = None,
     hint: Optional[str] = None,
 ) -> dict:
-    """Get the schema overview of an external database: tables, views, row estimates.
+    """Get the schema overview of an external database of the current project:
+    tables, views, row estimates.
 
     Shallow context: every table with its column count, estimated row count,
     database comment, and human-curated description when available. Use
@@ -130,14 +138,15 @@ async def db_schema(
         no connection is specified
     """
     from ..datasources import service
-    from .context import resolve_org_id
+    from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
+    project_id = await require_project_id()
     try:
-        ref, list_payload = await _resolve_connection_ref(org_id, connection, hint)
+        ref, list_payload = await _resolve_connection_ref(org_id, project_id, connection, hint)
         if list_payload is not None:
             return list_payload
-        overview = await service.schema_overview(org_id, ref, schema=schema)
+        overview = await service.schema_overview(org_id, project_id, ref, schema=schema)
     except Exception as e:  # noqa: BLE001
         logger.error("db_schema failed: %s", e)
         return {"status": "error", "error": str(e)}
@@ -145,6 +154,7 @@ async def db_schema(
 
 
 @mcp.tool()
+@requires_permission("context-read")
 async def db_describe(
     table: str,
     connection: Optional[str] = None,
@@ -152,7 +162,7 @@ async def db_describe(
     sample_rows: int = 0,
     hint: Optional[str] = None,
 ) -> dict:
-    """Describe a table of an external database in depth.
+    """Describe a table of an external database of the current project in depth.
 
     Deep context: columns (type, nullable, default, comment, curated
     description), primary key, foreign keys, indexes, unique constraints, and
@@ -171,15 +181,16 @@ async def db_describe(
         unique_constraints, estimated_rows, and optional sample_rows
     """
     from ..datasources import service
-    from .context import resolve_org_id
+    from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
+    project_id = await require_project_id()
     try:
-        ref, list_payload = await _resolve_connection_ref(org_id, connection, hint)
+        ref, list_payload = await _resolve_connection_ref(org_id, project_id, connection, hint)
         if list_payload is not None:
             return list_payload
         detail = await service.describe_table(
-            org_id, ref, table, schema=schema, sample_rows=sample_rows
+            org_id, project_id, ref, table, schema=schema, sample_rows=sample_rows
         )
     except Exception as e:  # noqa: BLE001
         logger.error("db_describe failed: %s", e)
@@ -188,13 +199,15 @@ async def db_describe(
 
 
 @mcp.tool()
+@requires_permission("db-query")
 async def db_query(
     sql: str,
     connection: Optional[str] = None,
     max_rows: int = 100,
     hint: Optional[str] = None,
 ) -> dict:
-    """Run a read-only SQL query against an external database connection.
+    """Run a read-only SQL query against an external database connection of
+    the current project.
 
     Only a single SELECT / WITH...SELECT / SHOW / DESCRIBE / EXPLAIN statement
     is allowed; mutating statements are rejected. A LIMIT is enforced
@@ -214,17 +227,104 @@ async def db_query(
     """
     from ..datasources import service
     from ..datasources.validator import QueryValidationError
-    from .context import resolve_org_id
+    from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
+    project_id = await require_project_id()
     try:
-        ref, list_payload = await _resolve_connection_ref(org_id, connection, hint)
+        ref, list_payload = await _resolve_connection_ref(org_id, project_id, connection, hint)
         if list_payload is not None:
             return list_payload
-        result = await service.run_query(org_id, ref, sql, max_rows=max_rows, source="mcp")
+        result = await service.run_query(org_id, project_id, ref, sql, max_rows=max_rows, source="mcp")
     except QueryValidationError as e:
         return {"status": "error", "error": f"Query rejected: {e}"}
     except Exception as e:  # noqa: BLE001
         logger.error("db_query failed: %s", e)
         return {"status": "error", "error": str(e)}
     return {"status": "ok", **result}
+
+
+@mcp.tool()
+@requires_permission("db-write")
+async def db_execute(connection: str, sql: str) -> dict:
+    """Execute a single INSERT, UPDATE or DELETE on a project datasource.
+
+    Guarded: one DML statement only, UPDATE/DELETE must have a WHERE clause,
+    DDL is rejected. Runs in its own transaction and returns the affected
+    row count (no result set).
+
+    Args:
+        connection: datasource name or id (from db_list).
+        sql: the DML statement to execute.
+    """
+    from .context import resolve_org_id, require_project_id
+
+    org_id = await resolve_org_id()
+    project_id = await require_project_id()
+    try:
+        return await service.run_write(org_id, project_id, connection, sql, source="mcp")
+    except Exception as e:  # noqa: BLE001
+        logger.error("db_execute failed: %s", e)
+        return {"status": "error", "error": str(e)}
+
+
+@mcp.tool()
+@requires_permission("sources-write")
+async def db_add(
+    name: str,
+    engine: str,
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+    database_name: Optional[str] = None,
+    username: Optional[str] = None,
+    description: Optional[str] = None,
+) -> dict:
+    """Register a database connection for the active project, without its password.
+
+    The connection is created in 'pending_secret' state: a person adds the
+    password from the web UI before it can be queried. This tool takes no
+    credential of any kind.
+
+    Args:
+        name: unique connection name within the project.
+        engine: database engine, e.g. postgres or mysql.
+        host: database host as reachable from the server.
+        port: database port.
+        database_name: database (schema) to connect to.
+        username: user the connection authenticates as.
+        description: optional free-text description.
+
+    Returns:
+        dict with the created connection and where to add its password.
+    """
+    from .context import require_project_id, resolve_org_id
+
+    org_id = await resolve_org_id()
+    project_id = await require_project_id()
+    data = {
+        "name": name,
+        "engine": engine,
+        "host": host,
+        "port": port,
+        "database_name": database_name,
+        "username": username,
+        "description": description,
+        "options": {},
+    }
+    try:
+        connection = await service.create_connection(org_id, project_id, data)
+    except ValueError as exc:
+        return {"status": "error", "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001 — vincoli di unicità e errori del driver
+        return {"status": "error", "error": str(exc)}
+
+    await service.mark_pending_secret(org_id, project_id, connection["id"])
+    return {
+        "status": "ok",
+        "connection": {**connection, "status": "pending_secret"},
+        "next_step": (
+            f"Connection '{name}' has no password yet. Add it from the Datasources "
+            "page in the web UI; queries fail until then."
+        ),
+        "ui_url": ui_link("/datasources"),
+    }

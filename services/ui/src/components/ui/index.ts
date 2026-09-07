@@ -1,6 +1,8 @@
 export { Button } from './Button'
 export { Input, Textarea } from './Input'
 export { Badge } from './Badge'
+export { Banner } from './Banner'
+export { Card } from './Card'
 export { Table, Thead, Tbody, Tr, Th, Td } from './Table'
 export { Dialog, DialogFooter, DialogPrimitive } from './Dialog'
 export { Tabs, TabsList, TabsTrigger, TabsContent } from './Tabs'

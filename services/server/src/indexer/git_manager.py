@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
 from ..config import RepoConfig, get_settings
+from ..org_settings import get_org_settings
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +29,18 @@ def get_repo_local_path(repo: RepoConfig, org_id: int | None = None) -> str:
 
 
 def _inject_token(url: str, token: str) -> str:
-    """Inject a token into a Git HTTPS URL for authentication."""
+    """Inject a token into a Git URL for authentication.
+
+    Forces https: hosts that redirect http->https drop the embedded credentials
+    on the cross-scheme redirect (clone then fails with "Access denied"), and a
+    token must never travel over plain http anyway.
+    """
     parsed = urlparse(url)
     netloc = f"oauth2:{token}@{parsed.hostname}"
     if parsed.port:
         netloc += f":{parsed.port}"
-    return urlunparse(parsed._replace(netloc=netloc))
+    scheme = "https" if parsed.scheme == "http" else parsed.scheme
+    return urlunparse(parsed._replace(scheme=scheme, netloc=netloc))
 
 
 _GIT_TIMEOUT_SECONDS = 600
@@ -119,6 +126,24 @@ async def get_changed_files(
     return changed, deleted
 
 
+async def _resolve_repo_token(repo: RepoConfig, org_id: int | None) -> str | None:
+    """Resolve the auth token to use for cloning/pulling ``repo``.
+
+    An explicit per-repo token always wins; otherwise falls back to the
+    calling organization's configured github_token/gitlab_token.
+    """
+    if repo.token:
+        return repo.token
+    if org_id is None:
+        return None
+    s = await get_org_settings(org_id)
+    if repo.type == "github" and s.github_token:
+        return s.github_token
+    if repo.type == "gitlab" and s.gitlab_token:
+        return s.gitlab_token
+    return None
+
+
 async def ensure_repo_cloned(repo: RepoConfig, org_id: int | None = None) -> str:
     """Clone a remote repo if not already present. Returns local path."""
     if repo.type == "local":
@@ -127,13 +152,7 @@ async def ensure_repo_cloned(repo: RepoConfig, org_id: int | None = None) -> str
     local_path = get_repo_local_path(repo, org_id)
     path = Path(local_path)
 
-    token = repo.token
-    if not token:
-        settings = get_settings()
-        if repo.type == "github" and settings.github_token:
-            token = settings.github_token
-        elif repo.type == "gitlab" and settings.gitlab_token:
-            token = settings.gitlab_token
+    token = await _resolve_repo_token(repo, org_id)
 
     clone_url = _inject_token(repo.url, token) if token else repo.url
 

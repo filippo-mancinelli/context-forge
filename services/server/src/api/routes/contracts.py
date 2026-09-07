@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from ...contracts import service
 from ...contracts.service import CONTRACT_TYPES, ContractNotFoundError
-from ..deps import ActiveOrg, get_active_org, require_role
+from ..deps import ActiveProject, get_active_project, require_project_role
 
 router = APIRouter(prefix="/contracts", tags=["contracts"])
 
@@ -26,21 +26,21 @@ class ContractRefreshRequest(BaseModel):
 
 
 @router.get("")
-async def list_contracts(org: ActiveOrg = Depends(get_active_org)):
-    contracts = await service.list_contracts(org.org_id)
+async def list_contracts(org: ActiveProject = Depends(get_active_project)):
+    contracts = await service.list_contracts(org.org_id, org.project_id)
     return {"contracts": contracts, "types": list(CONTRACT_TYPES)}
 
 
 @router.post("")
-async def create_contract(req: ContractCreateRequest, org: ActiveOrg = Depends(require_role("member"))):
+async def create_contract(req: ContractCreateRequest, org: ActiveProject = Depends(require_project_role("member"))):
     if not req.source_url and not req.raw_spec:
         raise HTTPException(status_code=400, detail="Provide a source URL or paste the spec content")
     try:
-        contract = await service.create_contract(org.org_id, req.model_dump())
+        contract = await service.create_contract(org.org_id, org.project_id, req.model_dump())
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001
-        if "api_contracts_org_id_name_key" in str(e):
+        if "api_contracts_project_name_key" in str(e):
             raise HTTPException(status_code=400, detail=f"Contract '{req.name}' already exists")
         raise HTTPException(status_code=500, detail=str(e))
     return {"status": "ok", "contract": contract}
@@ -51,9 +51,9 @@ async def create_contract(req: ContractCreateRequest, org: ActiveOrg = Depends(r
 async def search_endpoints(
     q: str,
     limit: int = 100,
-    org: ActiveOrg = Depends(get_active_org),
+    org: ActiveProject = Depends(get_active_project),
 ):
-    endpoints = await service.list_endpoints(org.org_id, search=q, limit=min(limit, 500))
+    endpoints = await service.list_endpoints(org.org_id, org.project_id, search=q, limit=min(limit, 500))
     return {"endpoints": endpoints, "count": len(endpoints)}
 
 
@@ -61,11 +61,11 @@ async def search_endpoints(
 async def refresh_contract(
     contract_id: int,
     req: Optional[ContractRefreshRequest] = None,
-    org: ActiveOrg = Depends(require_role("member")),
+    org: ActiveProject = Depends(require_project_role("member")),
 ):
     try:
         contract = await service.refresh_contract(
-            org.org_id, contract_id, raw_spec=(req.raw_spec if req else None)
+            org.org_id, org.project_id, contract_id, raw_spec=(req.raw_spec if req else None)
         )
     except ContractNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -73,9 +73,9 @@ async def refresh_contract(
 
 
 @router.delete("/{contract_id}")
-async def delete_contract(contract_id: int, org: ActiveOrg = Depends(require_role("member"))):
+async def delete_contract(contract_id: int, org: ActiveProject = Depends(require_project_role("member"))):
     try:
-        await service.delete_contract(org.org_id, contract_id)
+        await service.delete_contract(org.org_id, org.project_id, contract_id)
     except ContractNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"status": "ok"}
@@ -87,11 +87,11 @@ async def list_endpoints(
     tag: Optional[str] = None,
     search: Optional[str] = None,
     limit: int = 500,
-    org: ActiveOrg = Depends(get_active_org),
+    org: ActiveProject = Depends(get_active_project),
 ):
     try:
         endpoints = await service.list_endpoints(
-            org.org_id, contract_ref=contract_id, tag=tag, search=search, limit=min(limit, 1000)
+            org.org_id, org.project_id, contract_ref=contract_id, tag=tag, search=search, limit=min(limit, 1000)
         )
     except ContractNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -103,9 +103,9 @@ async def get_endpoint(
     contract_id: int,
     method: str,
     path: str,
-    org: ActiveOrg = Depends(get_active_org),
+    org: ActiveProject = Depends(get_active_project),
 ):
     try:
-        return await service.get_endpoint(org.org_id, contract_id, method, path)
+        return await service.get_endpoint(org.org_id, org.project_id, contract_id, method, path)
     except ContractNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))

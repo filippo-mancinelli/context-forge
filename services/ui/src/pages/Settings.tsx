@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertCircle, Check, Clipboard, Plus, Save, Trash2, X } from 'lucide-react'
-import { api, type Repo, type MCPApiKey } from '../lib/api'
-import { Button, Input, Textarea, Select, Tabs, TabsList, TabsTrigger, TabsContent, Badge, Dialog, DialogFooter, useConfirm, useToast } from '../components/ui'
+import { api, type Repo, type MCPApiKey, type OrgRole } from '../lib/api'
+import { Banner, Button, Card, Input, Textarea, Select, Tabs, TabsList, TabsTrigger, TabsContent, Badge, Dialog, DialogFooter, Table, Thead, Tbody, Tr, Th, Td, useConfirm, useToast } from '../components/ui'
+import { useAppStore } from '../store'
 
 type Tab = 'access' | 'models' | 'runtime' | 'mcp_keys' | 'channels'
 
@@ -40,16 +41,17 @@ interface SettingsData {
   settings_overrides_editable?: boolean
 }
 
-function GlobalSettingsNotice() {
+function GlobalSettingsNotice({ text }: { text?: React.ReactNode } = {}) {
   return (
-    <div
-      style={{ border: '1px solid var(--border)' }}
-      className="text-xs text-muted p-3 mb-4 bg-surface"
-    >
-      These are <span className="font-medium text-text">global</span> settings shared by every
-      organization (they are tied to the shared vector store). Only organization admins can change
-      them.
-    </div>
+    <Card className="text-xs text-muted p-3 mb-4 bg-surface">
+      {text ?? (
+        <>
+          These are <span className="font-medium text-text">global</span> settings shared by every
+          organization (they are tied to the shared vector store). Only organization admins can change
+          them.
+        </>
+      )}
+    </Card>
   )
 }
 
@@ -85,11 +87,12 @@ function SecretField({
           value={value || ''}
           onChange={e => onChange(e.target.value)}
           placeholder={placeholder}
+          className="pr-14"
         />
         <button
           type="button"
           onClick={() => setVisible(v => !v)}
-          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted hover:text-text"
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-muted hover:text-text bg-bg pl-1"
         >
           {visible ? 'Hide' : 'Show'}
         </button>
@@ -245,13 +248,13 @@ function ModelsTab({
     <div className="space-y-6">
       {!editable && <GlobalSettingsNotice />}
       {embeddingRisk.changed && (
-        <div style={{ border: '1px solid var(--warning)', color: 'var(--warning)' }} className="text-sm p-3 bg-[#fef9e7]">
+        <Banner variant="warning">
           <p className="font-medium mb-1">Embedding changes require re-indexing</p>
           <p className="text-xs">
             Changing the embeddings provider or model will invalidate existing vectors. Re-index all repositories after saving.
             {embeddingRisk.dimsChanged && ' Changing dimensions also requires resetting vector-backed data.'}
           </p>
-        </div>
+        </Banner>
       )}
 
       <div className="grid gap-6 lg:grid-cols-3">
@@ -324,14 +327,20 @@ function ModelsTab({
 function RuntimeTab({
   config,
   onChange,
+  editable = true,
 }: {
   config: SettingsData['forge_config']
   onChange: (path: string, value: unknown) => void
+  editable?: boolean
 }) {
   const indexing = config.indexing || {}
   const memory = config.memory || { user_id: 'default' }
 
   return (
+    <fieldset disabled={!editable} className="contents">
+    {!editable && (
+      <GlobalSettingsNotice text="These settings apply to this organization. Only organization admins can change them." />
+    )}
     <div className="grid gap-6 lg:grid-cols-2">
       <section>
         <h3 className="text-sm font-semibold mb-3">Indexing</h3>
@@ -382,6 +391,7 @@ function RuntimeTab({
         </Field>
       </section>
     </div>
+    </fieldset>
   )
 }
 
@@ -408,9 +418,9 @@ function CopyButton({ text, className }: { text: string; className?: string }) {
   )
 }
 
-function NewKeyBanner({ apiKey, onDismiss }: { apiKey: string; onDismiss: () => void }) {
+function NewKeyBanner({ apiKey, endpoint, onDismiss }: { apiKey: string; endpoint: string; onDismiss: () => void }) {
   return (
-    <div style={{ border: '1px solid var(--success)', color: 'var(--success)' }} className="text-sm p-4 mb-4 bg-[#eafaf1]">
+    <Banner variant="success" className="p-4 mb-4">
       <div className="flex items-start justify-between mb-2">
         <p className="font-medium">
           <Check className="inline w-3.5 h-3.5 mr-1" />
@@ -420,12 +430,34 @@ function NewKeyBanner({ apiKey, onDismiss }: { apiKey: string; onDismiss: () => 
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
-      <div className="flex items-center gap-1 bg-white border border-[#a9dfbf] p-2 rounded">
+      <div className="flex items-center gap-1 bg-surface border border-[var(--success-border)] p-2 rounded">
         <code className="text-xs font-mono flex-1 overflow-x-auto select-all">{apiKey}</code>
         <CopyButton text={apiKey} />
       </div>
-    </div>
+      {endpoint && (
+        <div className="flex items-center gap-1 bg-surface border border-[var(--success-border)] p-2 rounded mt-2">
+          <span className="text-xs text-muted mr-1">Endpoint:</span>
+          <code className="text-xs font-mono flex-1 overflow-x-auto select-all">{endpoint}</code>
+          <CopyButton text={endpoint} />
+        </div>
+      )}
+    </Banner>
   )
+}
+
+const KEY_PERMISSION_OPTIONS = [
+  { value: '*', label: 'All tools (*)' },
+  { value: 'context-read', label: 'context-read — search & read context' },
+  { value: 'context-write', label: 'context-write — annotate & store memory' },
+  { value: 'db-query', label: 'db-query — read-only SQL on connected databases' },
+  { value: 'repo-write', label: 'repo-write — index & manage repositories' },
+  { value: 'jobs', label: 'jobs — submit & manage background jobs' },
+]
+
+function togglePermission(current: string[], value: string): string[] {
+  if (value === '*') return current.includes('*') ? [] : ['*']
+  const without = current.filter((p) => p !== '*' && p !== value)
+  return current.includes(value) ? without : [...without, value]
 }
 
 function McpKeysTab() {
@@ -435,11 +467,17 @@ function McpKeysTab() {
   const [creating, setCreating] = useState(false)
   const confirm = useConfirm()
   const toast = useToast()
-  const [newKey, setNewKey] = useState<{ key: string; name: string } | null>(null)
+  const [newKey, setNewKey] = useState<{ key: string; name: string; endpoint: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [keyName, setKeyName] = useState('')
-  const [keyScope, setKeyScope] = useState('read,write')
+  const [keyPermissions, setKeyPermissions] = useState<string[]>(['context-read', 'context-write'])
   const [expiresDays, setExpiresDays] = useState('')
+  const projects = useAppStore((s) => s.projects)
+  const activeProjectId = useAppStore((s) => s.activeProjectId)
+  const organizations = useAppStore((s) => s.organizations)
+  const activeOrgId = useAppStore((s) => s.activeOrgId)
+  const orgSlug = organizations.find((o) => o.id === activeOrgId)?.slug ?? ''
+  const [keyProjectId, setKeyProjectId] = useState<number | null>(activeProjectId)
 
   const loadKeys = useCallback(async () => {
     try {
@@ -459,17 +497,21 @@ function McpKeysTab() {
     setCreating(true)
     setError(null)
     try {
+      const chosen = projects.find((p) => p.id === keyProjectId)
       const response = await api.mcpKeys.create({
         name: keyName,
-        scope: keyScope,
+        permissions: keyPermissions,
         expires_days: expiresDays ? parseInt(expiresDays, 10) : undefined,
+        project_id: keyProjectId ?? undefined,
       })
-      setNewKey({ key: response.key, name: response.name })
+      const endpoint = chosen && orgSlug ? `/mcp/${orgSlug}/${chosen.slug}` : ''
+      setNewKey({ key: response.key, name: response.name, endpoint })
       toast.success(`API key "${response.name}" generated`)
       await loadKeys()
       setShowCreate(false)
       setKeyName('')
       setExpiresDays('')
+      setKeyPermissions(['context-read', 'context-write'])
     } catch (e) {
       toast.error(String(e))
     } finally {
@@ -497,20 +539,20 @@ function McpKeysTab() {
     <div>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-4">
         <p className="text-sm text-muted">API keys allow CLI agents to authenticate with this instance.</p>
-        <Button variant="primary" size="sm" onClick={() => setShowCreate(true)} className="self-start">
+        <Button variant="primary" size="sm" onClick={() => { setKeyProjectId(activeProjectId); setShowCreate(true) }} className="self-start">
           <Plus className="w-3.5 h-3.5" />
           Generate key
         </Button>
       </div>
 
       {error && (
-        <div style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }} className="text-sm p-3 mb-4 bg-[#fef2f2]">
+        <Banner variant="danger" className="mb-4">
           <AlertCircle className="inline w-3.5 h-3.5 mr-1" />{error}
-        </div>
+        </Banner>
       )}
 
       {newKey && (
-        <NewKeyBanner apiKey={newKey.key} onDismiss={() => setNewKey(null)} />
+        <NewKeyBanner apiKey={newKey.key} endpoint={newKey.endpoint} onDismiss={() => setNewKey(null)} />
       )}
 
       {loading ? (
@@ -518,43 +560,59 @@ function McpKeysTab() {
       ) : keys.length === 0 ? (
         <p className="text-muted text-sm">No API keys configured yet.</p>
       ) : (
-        <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto">
-          <table className="w-full min-w-[600px]">
-            <thead>
-              <tr style={{ borderBottom: '2px solid var(--border)' }}>
-                <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-4 py-2">Name</th>
-                <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2">Scope</th>
-                <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2">Created</th>
-                <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2">Last used</th>
-                <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2">Expires</th>
-                <th className="px-3 py-2" />
-              </tr>
-            </thead>
-            <tbody>
+        <Card className="overflow-x-auto">
+          <Table>
+            <Thead>
+              <Tr>
+                <Th>Name</Th>
+                <Th>Project</Th>
+                <Th>Permissions</Th>
+                <Th>Created</Th>
+                <Th>Last used</Th>
+                <Th>Expires</Th>
+                <Th></Th>
+              </Tr>
+            </Thead>
+            <Tbody>
               {keys.map(key => (
-                <tr key={key.id} style={{ borderBottom: '1px solid var(--border)' }} className="last:border-b-0 hover:bg-surface">
-                  <td className="px-4 py-3 text-sm font-medium">
+                <Tr key={key.id} className="hover:bg-surface">
+                  <Td className="font-medium">
                     {key.name}
                     {isExpired(key.expires_at) && <Badge variant="danger" className="ml-2">Expired</Badge>}
-                  </td>
-                  <td className="px-3 py-3">
-                    <code className="text-xs font-mono text-muted">{key.scope}</code>
-                  </td>
-                  <td className="px-3 py-3 text-xs text-muted">{fmtDate(key.created_at)}</td>
-                  <td className="px-3 py-3 text-xs text-muted">{fmtDate(key.last_used_at)}</td>
-                  <td className="px-3 py-3 text-xs text-muted">
+                  </Td>
+                  <Td className="text-xs">
+                    {key.project_slug ? (
+                      <div className="flex items-center gap-1">
+                        <span className="text-muted">{projects.find((p) => p.slug === key.project_slug)?.name ?? key.project_slug}</span>
+                        {orgSlug && (
+                          <>
+                            <code className="font-mono text-muted">/mcp/{orgSlug}/{key.project_slug}</code>
+                            <CopyButton text={`/mcp/${orgSlug}/${key.project_slug}`} />
+                          </>
+                        )}
+                      </div>
+                    ) : (
+                      '—'
+                    )}
+                  </Td>
+                  <Td>
+                    <code className="text-xs font-mono text-muted">{key.permissions ?? key.scope}</code>
+                  </Td>
+                  <Td className="text-xs text-muted">{fmtDate(key.created_at)}</Td>
+                  <Td className="text-xs text-muted">{fmtDate(key.last_used_at)}</Td>
+                  <Td className="text-xs text-muted">
                     {key.expires_at ? <span className={isExpired(key.expires_at) ? 'text-danger' : ''}>{fmtDate(key.expires_at)}</span> : 'Never'}
-                  </td>
-                  <td className="px-3 py-3">
-                    <Button size="sm" variant="danger" onClick={() => handleRevoke(key.id)}>
+                  </Td>
+                  <Td>
+                    <Button size="sm" variant="ghost" onClick={() => handleRevoke(key.id)} title="Revoke" aria-label={`Revoke ${key.name}`}>
                       <Trash2 className="w-3 h-3" />
                     </Button>
-                  </td>
-                </tr>
+                  </Td>
+                </Tr>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </Tbody>
+          </Table>
+        </Card>
       )}
 
       <Dialog
@@ -570,16 +628,26 @@ function McpKeysTab() {
             placeholder="My CLI agent"
           />
           <Select
-            label="Scope"
-            value={keyScope}
-            onValueChange={setKeyScope}
-            options={[
-              { value: 'read', label: 'Read only' },
-              { value: 'write', label: 'Write only' },
-              { value: 'read,write', label: 'Read + Write (recommended)' },
-              { value: 'admin', label: 'Full admin access' },
-            ]}
+            label="Project"
+            value={String(keyProjectId ?? '')}
+            onValueChange={(v) => setKeyProjectId(Number(v))}
+            options={projects.map((p) => ({ value: String(p.id), label: p.name }))}
           />
+          <div>
+            <span className="text-sm font-medium block mb-1.5">Permissions</span>
+            <div className="space-y-1.5">
+              {KEY_PERMISSION_OPTIONS.map((opt) => (
+                <label key={opt.value} className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={keyPermissions.includes(opt.value)}
+                    onChange={() => setKeyPermissions((p) => togglePermission(p, opt.value))}
+                  />
+                  <span>{opt.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
           <Input
             label="Expires in days (optional)"
             type="number"
@@ -590,7 +658,7 @@ function McpKeysTab() {
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
-          <Button variant="primary" onClick={handleCreate} disabled={!keyName || creating} loading={creating}>
+          <Button variant="primary" onClick={handleCreate} disabled={!keyName || keyPermissions.length === 0 || creating} loading={creating}>
             Generate
           </Button>
         </DialogFooter>
@@ -616,8 +684,15 @@ export default function Settings() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
+  const [requiresReindex, setRequiresReindex] = useState(false)
+  const [reembedding, setReembedding] = useState(false)
   const confirm = useConfirm()
   const toast = useToast()
+
+  const organizations = useAppStore((s) => s.organizations)
+  const activeOrgId = useAppStore((s) => s.activeOrgId)
+  const myRole: OrgRole = organizations.find((o) => o.id === activeOrgId)?.role ?? 'viewer'
+  const runtimeEditable = myRole === 'admin' || myRole === 'owner'
 
   const load = useCallback(async () => {
     try {
@@ -686,10 +761,23 @@ export default function Settings() {
       setBaselineEmbedding(getEmbeddingSignature(data.settings_overrides))
       toast.success('Settings saved')
       setWarnings(result.warnings)
+      setRequiresReindex(result.requires_reindex)
     } catch (e) {
       toast.error(String(e))
     } finally {
       setSaving(false)
+    }
+  }
+
+  const startReembed = async () => {
+    setReembedding(true)
+    try {
+      const res = await api.settings.reembed()
+      toast.success(`Re-embed started (job ${res.job_id})`)
+    } catch (e) {
+      toast.error(String(e))
+    } finally {
+      setReembedding(false)
     }
   }
 
@@ -711,14 +799,22 @@ export default function Settings() {
         </div>
 
         {error && (
-          <div style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }} className="text-sm p-3 mb-4 bg-[#fef2f2]">
+          <Banner variant="danger" className="mb-4">
             <AlertCircle className="inline w-3.5 h-3.5 mr-1" />{error}
-          </div>
+          </Banner>
         )}
         {warnings.length > 0 && (
-          <div style={{ border: '1px solid var(--warning)', color: 'var(--warning)' }} className="text-sm p-3 mb-4 bg-[#fef9e7]">
+          <Banner variant="warning" className="mb-4">
             {warnings.map(w => <p key={w}>{w}</p>)}
-          </div>
+          </Banner>
+        )}
+        {requiresReindex && (
+          <Banner variant="warning" className="mb-4 flex items-center justify-between gap-3">
+            <span>Embeddings configuration changed. Re-embed this organization's content.</span>
+            <Button size="sm" variant="primary" onClick={startReembed} loading={reembedding}>
+              Re-embed now
+            </Button>
+          </Banner>
         )}
 
         <Tabs value={activeTab} onValueChange={v => setActiveTab(v as Tab)}>
@@ -737,7 +833,7 @@ export default function Settings() {
             <ModelsTab settings={data.settings_overrides} onChange={updateOverride} embeddingRisk={embeddingRisk} editable={overridesEditable} />
           </TabsContent>
           <TabsContent value="runtime">
-            <RuntimeTab config={data.forge_config} onChange={updateForgeConfig} />
+            <RuntimeTab config={data.forge_config} onChange={updateForgeConfig} editable={runtimeEditable} />
           </TabsContent>
           <TabsContent value="mcp_keys">
             <McpKeysTab />

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { Plus, Database, RefreshCw, Pencil, Trash2 } from 'lucide-react'
 import { api, type DbConnection, type DbConnectionRequest, type DbEngine } from '../lib/api'
-import { Badge, Button, Dialog, DialogFooter, Input, Select, Table, Tbody, Td, Th, Thead, Tr, useConfirm, useToast } from '../components/ui'
+import { Badge, Banner, Button, Card, Dialog, DialogFooter, Input, Select, Table, Tbody, Td, Textarea, Th, Thead, Tr, useConfirm, useToast } from '../components/ui'
 
 const ENGINE_OPTIONS: { value: DbEngine; label: string }[] = [
   { value: 'postgresql', label: 'PostgreSQL' },
@@ -23,7 +23,19 @@ const EMPTY_FORM: DbConnectionRequest = {
   username: '',
   password: '',
   description: '',
+  ssh_enabled: false,
+  ssh_host: '',
+  ssh_port: 22,
+  ssh_username: '',
+  ssh_auth_method: 'password',
+  ssh_password: '',
+  ssh_private_key: '',
 }
+
+const SSH_AUTH_OPTIONS = [
+  { value: 'password', label: 'Password' },
+  { value: 'key', label: 'Private key' },
+]
 
 function statusVariant(status: DbConnection['status']) {
   if (status === 'ok') return 'success' as const
@@ -60,6 +72,13 @@ function ConnectionDialog({
         username: editing.username ?? '',
         password: '',
         description: editing.description ?? '',
+        ssh_enabled: editing.ssh_enabled ?? false,
+        ssh_host: editing.ssh_host ?? '',
+        ssh_port: editing.ssh_port ?? 22,
+        ssh_username: editing.ssh_username ?? '',
+        ssh_auth_method: editing.ssh_auth_method ?? 'password',
+        ssh_password: '',
+        ssh_private_key: '',
       })
     } else {
       setForm(EMPTY_FORM)
@@ -73,6 +92,7 @@ function ConnectionDialog({
     e.preventDefault()
     setSaving(true)
     setError(null)
+    const sshOn = !isSqlite && !!form.ssh_enabled
     const payload: DbConnectionRequest = {
       ...form,
       host: isSqlite ? undefined : form.host || undefined,
@@ -81,6 +101,15 @@ function ConnectionDialog({
       password: isSqlite ? undefined : form.password || undefined,
       database_name: form.database_name || undefined,
       description: form.description || undefined,
+      ssh_enabled: sshOn,
+      ssh_host: sshOn ? form.ssh_host || undefined : undefined,
+      ssh_port: sshOn ? form.ssh_port || 22 : undefined,
+      ssh_username: sshOn ? form.ssh_username || undefined : undefined,
+      ssh_auth_method: sshOn ? form.ssh_auth_method : undefined,
+      ssh_password:
+        sshOn && form.ssh_auth_method === 'password' ? form.ssh_password || undefined : undefined,
+      ssh_private_key:
+        sshOn && form.ssh_auth_method === 'key' ? form.ssh_private_key || undefined : undefined,
     }
     try {
       if (editing) await api.datasources.update(editing.id, payload)
@@ -108,7 +137,7 @@ function ConnectionDialog({
           label="Name"
           value={form.name}
           onChange={(e) => set({ name: e.target.value })}
-          placeholder="e.g. askmechat-prod"
+          placeholder="e.g. billing-prod"
           required
         />
         <Select
@@ -177,6 +206,80 @@ function ConnectionDialog({
               placeholder={editing?.has_password ? '(unchanged)' : ''}
               autoComplete="new-password"
             />
+          </div>
+        )}
+        {!isSqlite && (
+          <div className="rounded-md border border-border p-3 space-y-3">
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                className="accent-accent"
+                checked={!!form.ssh_enabled}
+                onChange={(e) => set({ ssh_enabled: e.target.checked })}
+              />
+              Connect through an SSH bastion
+            </label>
+            {form.ssh_enabled && (
+              <div className="space-y-3">
+                <p className="text-xs text-muted">
+                  Host and port above are the database as seen from the bastion.
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="col-span-2">
+                    <Input
+                      label="SSH host"
+                      value={form.ssh_host ?? ''}
+                      onChange={(e) => set({ ssh_host: e.target.value })}
+                      placeholder="bastion.internal"
+                      required
+                    />
+                  </div>
+                  <Input
+                    label="SSH port"
+                    type="number"
+                    value={form.ssh_port ?? 22}
+                    onChange={(e) => set({ ssh_port: e.target.value ? Number(e.target.value) : 22 })}
+                    placeholder="22"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <Input
+                    label="SSH username"
+                    value={form.ssh_username ?? ''}
+                    onChange={(e) => set({ ssh_username: e.target.value })}
+                    autoComplete="off"
+                    required
+                  />
+                  <Select
+                    label="Authentication"
+                    value={form.ssh_auth_method ?? 'password'}
+                    onValueChange={(v) => set({ ssh_auth_method: v as 'key' | 'password' })}
+                    options={SSH_AUTH_OPTIONS}
+                  />
+                </div>
+                {form.ssh_auth_method === 'key' ? (
+                  <Textarea
+                    label="Private key"
+                    value={form.ssh_private_key ?? ''}
+                    onChange={(e) => set({ ssh_private_key: e.target.value })}
+                    placeholder={
+                      editing?.has_ssh_secret ? '(unchanged)' : '-----BEGIN OPENSSH PRIVATE KEY-----'
+                    }
+                    rows={4}
+                    autoComplete="off"
+                  />
+                ) : (
+                  <Input
+                    label="SSH password"
+                    type="password"
+                    value={form.ssh_password ?? ''}
+                    onChange={(e) => set({ ssh_password: e.target.value })}
+                    placeholder={editing?.has_ssh_secret ? '(unchanged)' : ''}
+                    autoComplete="new-password"
+                  />
+                )}
+              </div>
+            )}
           </div>
         )}
         <Input
@@ -310,28 +413,18 @@ export default function DataSources() {
           </Button>
         </div>
 
-        {error && (
-          <div
-            style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
-            className="text-sm p-3 mb-4 bg-[#fef2f2] break-words"
-          >
-            {error}
-          </div>
-        )}
+        {error && <Banner variant="danger" className="mb-4 break-words">{error}</Banner>}
 
         {loading ? (
           <p className="text-muted text-sm">Loading...</p>
         ) : connections.length === 0 ? (
-          <div
-            style={{ border: '1px dashed var(--border)' }}
-            className="p-8 text-center text-sm text-muted"
-          >
+          <div className="border border-dashed border-border p-8 text-center text-sm text-muted">
             <Database className="w-6 h-6 mx-auto mb-2 opacity-50" />
             No database connections yet. Add one to give agents schema context and
             read-only query access.
           </div>
         ) : (
-          <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto max-w-5xl">
+          <Card className="overflow-x-auto max-w-5xl">
             <Table>
               <Thead>
                 <Tr>
@@ -411,7 +504,7 @@ export default function DataSources() {
                 ))}
               </Tbody>
             </Table>
-          </div>
+          </Card>
         )}
 
         <ConnectionDialog

@@ -5,14 +5,15 @@ from typing import Optional
 from urllib.parse import quote_plus
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ...config import RepoConfig, get_settings
 from ...indexer.indexer import sync_repos_config
 from ...org_config import get_org_config, persist_org_config
-from ..deps import ActiveOrg, require_role
-from ..security import require_valid_token_or_raise
+from ...org_settings import get_org_settings
+from ...projects import bind_repo_to_project, get_repo_project_name
+from ..deps import ActiveOrg, ActiveProject, get_active_org, require_project_role
 
 router = APIRouter(prefix="/gitlab", tags=["gitlab"])
 
@@ -44,7 +45,13 @@ def _gitlab_headers(token: str) -> dict[str, str]:
 
 
 def _gitlab_base_url() -> str:
-    return "https://gitlab.com/api/v4"
+    """GitLab API v4 base URL.
+
+    Configurable via GITLAB_URL (self-hosted instance root or a full /api/v4
+    URL); defaults to gitlab.com. No host is hardcoded beyond that default.
+    """
+    raw = (get_settings().gitlab_url or "https://gitlab.com").strip().rstrip("/")
+    return raw if raw.endswith("/api/v4") else f"{raw}/api/v4"
 
 
 def _map_repo(project: dict) -> GitLabRepo:
@@ -69,19 +76,17 @@ def _map_repo(project: dict) -> GitLabRepo:
 async def list_gitlab_repos(
     page: int = 1,
     per_page: int = 100,
-    authorization: str | None = Header(default=None),
+    org: ActiveOrg = Depends(get_active_org),
 ):
     """List GitLab repositories accessible to the configured token."""
-    await require_valid_token_or_raise(authorization)
-
-    settings = get_settings()
-    if not settings.gitlab_token:
+    s = await get_org_settings(org.org_id)
+    if not s.gitlab_token:
         raise HTTPException(status_code=400, detail="GitLab token not configured")
 
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{_gitlab_base_url()}/projects",
-            headers=_gitlab_headers(settings.gitlab_token),
+            headers=_gitlab_headers(s.gitlab_token),
             params={
                 "membership": True,
                 "owned": False,
@@ -103,53 +108,65 @@ async def list_gitlab_repos(
 @router.get("/branches")
 async def list_gitlab_branches(
     full_name: str,
-    authorization: str | None = Header(default=None),
+    org: ActiveOrg = Depends(get_active_org),
 ):
-    """List branches for a GitLab repository."""
-    await require_valid_token_or_raise(authorization)
+    """List branches for a GitLab repository.
 
-    settings = get_settings()
-    if not settings.gitlab_token:
+    Repositories routinely have far more branches than a single API page
+    holds, so we page through the branches endpoint until it is exhausted
+    (bounded by a safety cap). Returning only the first page would hide any
+    branch beyond it (e.g. ``hotfix/*`` sorting after the first 100 names),
+    breaking the client-side branch filter.
+    """
+    s = await get_org_settings(org.org_id)
+    if not s.gitlab_token:
         raise HTTPException(status_code=400, detail="GitLab token not configured")
 
     encoded = quote_plus(full_name)
+    url = f"{_gitlab_base_url()}/projects/{encoded}/repository/branches"
+    headers = _gitlab_headers(s.gitlab_token)
+    collected: list[dict] = []
+    max_pages = 30  # cap: 30 * 100 = 3000 branches
     async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{_gitlab_base_url()}/projects/{encoded}/repository/branches",
-            headers=_gitlab_headers(settings.gitlab_token),
-            params={"per_page": 100},
-            timeout=30.0,
-        )
+        for page in range(1, max_pages + 1):
+            resp = await client.get(
+                url,
+                headers=headers,
+                params={"per_page": 100, "page": page},
+                timeout=30.0,
+            )
+            if resp.status_code != 200:
+                raise HTTPException(status_code=resp.status_code, detail=f"GitLab API error: {resp.text}")
+            batch = resp.json()
+            # GitLab returns a dict with an error key for missing projects
+            if isinstance(batch, dict):
+                raise HTTPException(status_code=404, detail=batch.get("message", "Project not found"))
+            if not batch:
+                break
+            collected.extend(batch)
+            if not resp.headers.get("X-Next-Page"):
+                break
 
-    if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail=f"GitLab API error: {resp.text}")
-
-    branches = resp.json()
-    # GitLab sometimes returns a dict with an error key for missing projects
-    if isinstance(branches, dict):
-        raise HTTPException(status_code=404, detail=branches.get("message", "Project not found"))
     return [
         {"name": b["name"], "is_default": b.get("default", False)}
-        for b in branches
+        for b in collected
     ]
 
 
 @router.get("/search")
 async def search_gitlab_repos(
     q: str,
-    authorization: str | None = Header(default=None),
+    org: ActiveOrg = Depends(get_active_org),
 ):
     """Search GitLab repositories visible to the configured token."""
-    await require_valid_token_or_raise(authorization)
-
-    settings = get_settings()
-    if not settings.gitlab_token:
+    s = await get_org_settings(org.org_id)
+    if not s.gitlab_token:
         raise HTTPException(status_code=400, detail="GitLab token not configured")
 
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{_gitlab_base_url()}/projects",
-            headers=_gitlab_headers(settings.gitlab_token),
+            headers=_gitlab_headers(s.gitlab_token),
             params={
                 "membership": True,
                 "search": q,
@@ -171,23 +188,29 @@ async def search_gitlab_repos(
 @router.post("/repos/add")
 async def add_gitlab_repo(
     req: AddGitLabRepoRequest,
-    org: ActiveOrg = Depends(require_role("member")),
+    org: ActiveProject = Depends(require_project_role("member")),
 ):
-    """Add a GitLab repository to the active organization's config."""
+    """Add a GitLab repository to the active project."""
     cfg = await get_org_config(org.org_id)
     repo_name = req.full_name.replace("/", "-")
     if any(repo.name == repo_name for repo in cfg.repos):
-        raise HTTPException(status_code=400, detail="Repository already configured")
+        holder = await get_repo_project_name(org.org_id, repo_name)
+        detail = (
+            f"Repository already configured in project '{holder}'"
+            if holder
+            else "Repository already configured"
+        )
+        raise HTTPException(status_code=400, detail=detail)
 
-    settings = get_settings()
-    if not settings.gitlab_token:
+    s = await get_org_settings(org.org_id)
+    if not s.gitlab_token:
         raise HTTPException(status_code=400, detail="GitLab token not configured")
 
     encoded = quote_plus(req.full_name)
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{_gitlab_base_url()}/projects/{encoded}",
-            headers=_gitlab_headers(settings.gitlab_token),
+            headers=_gitlab_headers(s.gitlab_token),
             timeout=30.0,
         )
 
@@ -209,6 +232,7 @@ async def add_gitlab_repo(
 
     await persist_org_config(org.org_id, cfg)
     await sync_repos_config(org.org_id)
+    await bind_repo_to_project(org.org_id, org.project_id, repo_name)
 
     return {
         "status": "ok",

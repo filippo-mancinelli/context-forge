@@ -76,8 +76,7 @@ def _normalize_scores(rows: list[dict[str, Any]]) -> None:
 # --------------------------------------------------------------------------- #
 # Both branches keep a stable parameter layout so the optional repo filter never
 # needs dynamic placeholder renumbering:
-#   $1 embedding  $2 org_id  $3 candidate pool  $4 query text
-#   $5 repos (text[] or NULL)  $6 limit
+#   $1 embedding $2 org_id $3 candidate pool $4 query $5 repos (text[] or NULL) $6 limit $7 project (bigint or NULL)
 _REPO_HYBRID_SQL = f"""
 WITH tsq AS (
     SELECT websearch_to_tsquery('{TSQUERY_CONFIG}', $4) AS query
@@ -85,14 +84,16 @@ WITH tsq AS (
 vec AS (
     SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $1::vector) AS rank
     FROM repo_chunks
-    WHERE org_id = $2 AND ($5::text[] IS NULL OR repo_name = ANY($5))
+    WHERE org_id = $2 AND ($7::bigint IS NULL OR project_id = $7)
+      AND ($5::text[] IS NULL OR repo_name = ANY($5))
     ORDER BY embedding <=> $1::vector
     LIMIT $3
 ),
 kw AS (
     SELECT c.id, ROW_NUMBER() OVER (ORDER BY ts_rank_cd(c.content_tsv, tsq.query) DESC) AS rank
     FROM repo_chunks c, tsq
-    WHERE c.org_id = $2 AND ($5::text[] IS NULL OR c.repo_name = ANY($5))
+    WHERE c.org_id = $2 AND ($7::bigint IS NULL OR c.project_id = $7)
+      AND ($5::text[] IS NULL OR c.repo_name = ANY($5))
       AND c.content_tsv @@ tsq.query
     ORDER BY ts_rank_cd(c.content_tsv, tsq.query) DESC
     LIMIT $3
@@ -115,7 +116,8 @@ _REPO_VECTOR_SQL = """
 SELECT repo_name, file_path, chunk_type, content, metadata,
        1 - (embedding <=> $1::vector) AS score
 FROM repo_chunks
-WHERE org_id = $2 AND ($3::text[] IS NULL OR repo_name = ANY($3))
+WHERE org_id = $2 AND ($5::bigint IS NULL OR project_id = $5)
+  AND ($3::text[] IS NULL OR repo_name = ANY($3))
 ORDER BY embedding <=> $1::vector
 LIMIT $4
 """
@@ -126,6 +128,7 @@ async def search_repo_chunks(
     query: str,
     repos: Optional[list[str]] = None,
     limit: int = 10,
+    project_id: Optional[int] = None,
 ) -> list[dict[str, Any]]:
     """Search indexed repository chunks for an organization.
 
@@ -133,18 +136,20 @@ async def search_repo_chunks(
     to vector-only cosine similarity. Returns dicts with ``repo_name``,
     ``file_path``, ``chunk_type``, ``content``, ``metadata`` and a ``score``.
     """
-    embedding_str = _vector_to_pg(await embed_text(query))
+    if project_id is None:
+        raise ValueError("project_id is required for scoped search")
+    embedding_str = _vector_to_pg(await embed_text(query, org_id))
     pool = await get_pool()
     hybrid = hybrid_enabled()
 
     async with pool.acquire() as conn:
         if hybrid:
             rows = await conn.fetch(
-                _REPO_HYBRID_SQL, embedding_str, org_id, CANDIDATE_POOL, query, repos, limit
+                _REPO_HYBRID_SQL, embedding_str, org_id, CANDIDATE_POOL, query, repos, limit, project_id
             )
         else:
             rows = await conn.fetch(
-                _REPO_VECTOR_SQL, embedding_str, org_id, repos, limit
+                _REPO_VECTOR_SQL, embedding_str, org_id, repos, limit, project_id
             )
 
     results = [
@@ -186,6 +191,7 @@ _SYMBOL_SEARCH_SQL = """
 SELECT repo_name, file_path, chunk_type, metadata, content
 FROM repo_chunks
 WHERE org_id = $1
+  AND ($7::bigint IS NULL OR project_id = $7)
   AND chunk_type = ANY($2::text[])
   AND metadata->>'name' IS NOT NULL
   AND metadata->>'name' ILIKE $3
@@ -212,6 +218,7 @@ async def search_repo_symbols(
     repos: Optional[list[str]] = None,
     symbol_types: Optional[list[str]] = None,
     limit: int = 20,
+    project_id: Optional[int] = None,
 ) -> list[dict[str, Any]]:
     """Look up function/class/method/type definitions by name.
 
@@ -221,11 +228,13 @@ async def search_repo_symbols(
     chunk_type, name, a one-line signature preview, and start_line (when the
     parser recorded one).
     """
+    if project_id is None:
+        raise ValueError("project_id is required for scoped search")
     types = list(symbol_types) if symbol_types else list(SYMBOL_CHUNK_TYPES)
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            _SYMBOL_SEARCH_SQL, org_id, types, f"%{query}%", repos, query, limit
+            _SYMBOL_SEARCH_SQL, org_id, types, f"%{query}%", repos, query, limit, project_id
         )
 
     results = []
@@ -246,7 +255,7 @@ async def search_repo_symbols(
 # Web-page chunk search
 # --------------------------------------------------------------------------- #
 #   $1 embedding  $2 org_id  $3 candidate pool  $4 query text
-#   $5 page_ids (bigint[] or NULL)  $6 limit
+#   $5 page_ids (bigint[] or NULL)  $6 limit  $7 project (bigint or NULL)
 _WEB_HYBRID_SQL = f"""
 WITH tsq AS (
     SELECT websearch_to_tsquery('{TSQUERY_CONFIG}', $4) AS query
@@ -254,14 +263,16 @@ WITH tsq AS (
 vec AS (
     SELECT c.id, ROW_NUMBER() OVER (ORDER BY c.embedding <=> $1::vector) AS rank
     FROM web_chunks c
-    WHERE c.org_id = $2 AND ($5::bigint[] IS NULL OR c.page_id = ANY($5))
+    WHERE c.org_id = $2 AND ($7::bigint IS NULL OR c.project_id = $7)
+      AND ($5::bigint[] IS NULL OR c.page_id = ANY($5))
     ORDER BY c.embedding <=> $1::vector
     LIMIT $3
 ),
 kw AS (
     SELECT c.id, ROW_NUMBER() OVER (ORDER BY ts_rank_cd(c.content_tsv, tsq.query) DESC) AS rank
     FROM web_chunks c, tsq
-    WHERE c.org_id = $2 AND ($5::bigint[] IS NULL OR c.page_id = ANY($5))
+    WHERE c.org_id = $2 AND ($7::bigint IS NULL OR c.project_id = $7)
+      AND ($5::bigint[] IS NULL OR c.page_id = ANY($5))
       AND c.content_tsv @@ tsq.query
     ORDER BY ts_rank_cd(c.content_tsv, tsq.query) DESC
     LIMIT $3
@@ -288,7 +299,8 @@ SELECT c.page_id, c.chunk_index, c.content, c.metadata,
        1 - (c.embedding <=> $1::vector) AS score
 FROM web_chunks c
 JOIN web_pages p ON p.id = c.page_id
-WHERE c.org_id = $2 AND ($3::bigint[] IS NULL OR c.page_id = ANY($3))
+WHERE c.org_id = $2 AND ($5::bigint IS NULL OR c.project_id = $5)
+  AND ($3::bigint[] IS NULL OR c.page_id = ANY($3))
 ORDER BY c.embedding <=> $1::vector
 LIMIT $4
 """
@@ -299,20 +311,24 @@ async def search_web_chunks(
     query: str,
     page_ids: Optional[list[int]] = None,
     limit: int = 10,
+    project_id: Optional[int] = None,
 ) -> list[dict[str, Any]]:
-    """Search scraped web-page chunks for an organization (hybrid or vector-only)."""
-    embedding_str = _vector_to_pg(await embed_text(query))
+    """Search scraped web-page chunks for a project (hybrid or vector-only)."""
+    if project_id is None:
+        raise ValueError("project_id is required for scoped search")
+    embedding_str = _vector_to_pg(await embed_text(query, org_id))
     pool = await get_pool()
     hybrid = hybrid_enabled()
 
     async with pool.acquire() as conn:
         if hybrid:
             rows = await conn.fetch(
-                _WEB_HYBRID_SQL, embedding_str, org_id, CANDIDATE_POOL, query, page_ids, limit
+                _WEB_HYBRID_SQL, embedding_str, org_id, CANDIDATE_POOL, query, page_ids, limit,
+                project_id,
             )
         else:
             rows = await conn.fetch(
-                _WEB_VECTOR_SQL, embedding_str, org_id, page_ids, limit
+                _WEB_VECTOR_SQL, embedding_str, org_id, page_ids, limit, project_id
             )
 
     results = [
@@ -339,7 +355,7 @@ async def search_web_chunks(
 # Knowledge-base chunk search
 # --------------------------------------------------------------------------- #
 #   $1 embedding  $2 org_id  $3 candidate pool  $4 query text
-#   $5 document_ids (bigint[] or NULL)  $6 limit
+#   $5 document_ids (bigint[] or NULL)  $6 limit  $7 project (bigint or NULL)
 _KB_HYBRID_SQL = f"""
 WITH tsq AS (
     SELECT websearch_to_tsquery('{TSQUERY_CONFIG}', $4) AS query
@@ -347,14 +363,16 @@ WITH tsq AS (
 vec AS (
     SELECT c.id, ROW_NUMBER() OVER (ORDER BY c.embedding <=> $1::vector) AS rank
     FROM kb_chunks c
-    WHERE c.org_id = $2 AND ($5::bigint[] IS NULL OR c.document_id = ANY($5))
+    WHERE c.org_id = $2 AND ($7::bigint IS NULL OR c.project_id = $7)
+      AND ($5::bigint[] IS NULL OR c.document_id = ANY($5))
     ORDER BY c.embedding <=> $1::vector
     LIMIT $3
 ),
 kw AS (
     SELECT c.id, ROW_NUMBER() OVER (ORDER BY ts_rank_cd(c.content_tsv, tsq.query) DESC) AS rank
     FROM kb_chunks c, tsq
-    WHERE c.org_id = $2 AND ($5::bigint[] IS NULL OR c.document_id = ANY($5))
+    WHERE c.org_id = $2 AND ($7::bigint IS NULL OR c.project_id = $7)
+      AND ($5::bigint[] IS NULL OR c.document_id = ANY($5))
       AND c.content_tsv @@ tsq.query
     ORDER BY ts_rank_cd(c.content_tsv, tsq.query) DESC
     LIMIT $3
@@ -381,7 +399,8 @@ SELECT c.document_id, c.chunk_index, c.content, c.metadata,
        1 - (c.embedding <=> $1::vector) AS score
 FROM kb_chunks c
 JOIN kb_documents d ON d.id = c.document_id
-WHERE c.org_id = $2 AND ($3::bigint[] IS NULL OR c.document_id = ANY($3))
+WHERE c.org_id = $2 AND ($5::bigint IS NULL OR c.project_id = $5)
+  AND ($3::bigint[] IS NULL OR c.document_id = ANY($3))
 ORDER BY c.embedding <=> $1::vector
 LIMIT $4
 """
@@ -392,20 +411,23 @@ async def search_kb_chunks(
     query: str,
     document_ids: Optional[list[int]] = None,
     limit: int = 10,
+    project_id: Optional[int] = None,
 ) -> list[dict[str, Any]]:
     """Search knowledge-base chunks for an organization (hybrid or vector-only)."""
-    embedding_str = _vector_to_pg(await embed_text(query))
+    if project_id is None:
+        raise ValueError("project_id is required for scoped search")
+    embedding_str = _vector_to_pg(await embed_text(query, org_id))
     pool = await get_pool()
     hybrid = hybrid_enabled()
 
     async with pool.acquire() as conn:
         if hybrid:
             rows = await conn.fetch(
-                _KB_HYBRID_SQL, embedding_str, org_id, CANDIDATE_POOL, query, document_ids, limit
+                _KB_HYBRID_SQL, embedding_str, org_id, CANDIDATE_POOL, query, document_ids, limit, project_id
             )
         else:
             rows = await conn.fetch(
-                _KB_VECTOR_SQL, embedding_str, org_id, document_ids, limit
+                _KB_VECTOR_SQL, embedding_str, org_id, document_ids, limit, project_id
             )
 
     results = [

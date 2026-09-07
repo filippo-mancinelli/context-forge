@@ -145,6 +145,7 @@ async def _sitemap_urls(client: Any, root_url: str) -> list[str]:
 
 async def add_site(
     org_id: int,
+    project_id: int,
     root_url: str,
     max_pages: int = DEFAULT_MAX_PAGES,
     exclude_patterns: Optional[list[str]] = None,
@@ -157,15 +158,16 @@ async def add_site(
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO web_sites (org_id, root_url, status, max_pages, exclude_patterns)
-            VALUES ($1, $2, 'pending', $3, $4::jsonb)
-            ON CONFLICT (org_id, root_url)
+            INSERT INTO web_sites (org_id, project_id, root_url, status, max_pages, exclude_patterns)
+            VALUES ($1, $2, $3, 'pending', $4, $5::jsonb)
+            ON CONFLICT (project_id, root_url)
             DO UPDATE SET status='pending', error_message=NULL,
                           max_pages=EXCLUDED.max_pages,
                           exclude_patterns=EXCLUDED.exclude_patterns
             RETURNING id, root_url, status, max_pages, exclude_patterns
             """,
             org_id,
+            project_id,
             norm,
             max_pages,
             json.dumps(patterns),
@@ -198,7 +200,7 @@ async def crawl_site(site_id: int) -> bool:
             UPDATE web_sites
             SET status='crawling', error_message=NULL
             WHERE id=$1 AND status IN ('pending', 'error')
-            RETURNING id, org_id, root_url, max_pages, exclude_patterns
+            RETURNING id, org_id, project_id, root_url, max_pages, exclude_patterns
             """,
             site_id,
         )
@@ -212,10 +214,19 @@ async def crawl_site(site_id: int) -> bool:
         except Exception:
             patterns = []
 
+    project_id = row["project_id"]
+    if project_id is None:
+        # Sites created before project scoping fall back to the org's default
+        # project so crawling never leaves discovered pages unscoped.
+        from ..projects import get_default_project_id
+
+        project_id = await get_default_project_id(int(row["org_id"]))
+
     try:
         pages_found = await _run_crawl(
             site_id=int(row["id"]),
             org_id=int(row["org_id"]),
+            project_id=int(project_id),
             root_url=row["root_url"],
             max_pages=int(row["max_pages"]),
             exclude_patterns=list(patterns or []),
@@ -263,7 +274,7 @@ async def _delete_excluded_pages(
 
 
 async def _run_crawl(
-    *, site_id: int, org_id: int, root_url: str,
+    *, site_id: int, org_id: int, project_id: int, root_url: str,
     max_pages: int, exclude_patterns: list[str],
 ) -> int:
     """BFS-crawl the site and index each page. Returns the number of pages found."""
@@ -322,7 +333,7 @@ async def _run_crawl(
                     continue
 
                 links: list[str] = []
-                record = await store.add_url(org_id, url, site_id=site_id)
+                record = await store.add_url(org_id, project_id, url, site_id=site_id)
                 page_id = record["id"]
                 async with pool.acquire() as conn:
                     await conn.execute(
@@ -335,7 +346,8 @@ async def _run_crawl(
                         if resolved and eligible(resolved):
                             links.append(resolved)
                     await store.embed_and_store(
-                        page_id=page_id, org_id=org_id, url=url, title=title, text=text,
+                        page_id=page_id, org_id=org_id, project_id=project_id, url=url,
+                        title=title, text=text,
                     )
                     indexed += 1
                 except Exception as e:  # noqa: BLE001
@@ -376,27 +388,29 @@ async def process_pending_sites(limit: int = 2) -> None:
             logger.error("WEB pending crawl error for site=%s: %s", row["id"], e)
 
 
-async def delete_site(org_id: int, site_id: int) -> bool:
+async def delete_site(org_id: int, project_id: int, site_id: int) -> bool:
     """Delete a site and its pages/chunks (via cascade). Returns True if found."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         deleted = await conn.fetchval(
-            "DELETE FROM web_sites WHERE id=$1 AND org_id=$2 RETURNING id",
+            "DELETE FROM web_sites WHERE id=$1 AND org_id=$2 AND project_id=$3 RETURNING id",
             site_id,
             org_id,
+            project_id,
         )
     return deleted is not None
 
 
 async def update_site(
     org_id: int,
+    project_id: int,
     site_id: int,
     max_pages: Optional[int] = None,
     exclude_patterns: Optional[list[str]] = None,
 ) -> Optional[dict[str, Any]]:
     """Update a site's crawl settings. Returns the updated record, or None."""
     sets: list[str] = []
-    params: list[Any] = [site_id, org_id]
+    params: list[Any] = [site_id, org_id, project_id]
     if max_pages is not None:
         params.append(max(1, min(int(max_pages), HARD_MAX_PAGES)))
         sets.append(f"max_pages=${len(params)}")
@@ -405,14 +419,14 @@ async def update_site(
         params.append(json.dumps(cleaned))
         sets.append(f"exclude_patterns=${len(params)}::jsonb")
     if not sets:
-        return await get_site(org_id, site_id)
+        return await get_site(org_id, project_id, site_id)
 
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             f"""
             UPDATE web_sites SET {', '.join(sets)}
-            WHERE id=$1 AND org_id=$2
+            WHERE id=$1 AND org_id=$2 AND project_id=$3
             RETURNING id, root_url, status, max_pages, exclude_patterns,
                       pages_found, error_message, created_at, crawled_at
             """,
@@ -421,16 +435,17 @@ async def update_site(
     return site_row_to_dict(row) if row else None
 
 
-async def get_site(org_id: int, site_id: int) -> Optional[dict[str, Any]]:
+async def get_site(org_id: int, project_id: int, site_id: int) -> Optional[dict[str, Any]]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
             SELECT id, root_url, status, max_pages, exclude_patterns,
                    pages_found, error_message, created_at, crawled_at
-            FROM web_sites WHERE id=$1 AND org_id=$2
+            FROM web_sites WHERE id=$1 AND org_id=$2 AND project_id=$3
             """,
             site_id,
             org_id,
+            project_id,
         )
     return site_row_to_dict(row) if row else None

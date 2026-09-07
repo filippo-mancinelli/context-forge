@@ -8,7 +8,7 @@ import {
   type ApiEndpointDetail,
   type ApiEndpointSummary,
 } from '../lib/api'
-import { Badge, Button, Dialog, DialogFooter, Input, Select, Textarea, useConfirm, useToast } from '../components/ui'
+import { Badge, Banner, Button, Card, Dialog, DialogFooter, Input, Select, Textarea, useConfirm, useToast } from '../components/ui'
 
 const METHOD_COLOR: Record<string, string> = {
   GET: '#1a7a45',
@@ -168,7 +168,7 @@ function EndpointRow({ contract, endpoint }: { contract: ApiContract; endpoint: 
   }
 
   return (
-    <div style={{ borderBottom: '1px solid var(--border)' }} className="last:border-b-0">
+    <div className="border-b border-border last:border-b-0">
       <button
         onClick={toggle}
         className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-surface transition-colors"
@@ -201,8 +201,7 @@ function EndpointRow({ contract, endpoint }: { contract: ApiContract; endpoint: 
                 <div>
                   <p className="text-xs font-medium mb-1">Request</p>
                   <pre
-                    style={{ border: '1px solid var(--border)', background: 'var(--code-bg)' }}
-                    className="text-xs font-mono p-2 overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap break-words"
+                    className="border border-border bg-code-bg text-xs font-mono p-2 overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap break-words"
                   >
                     {JSON.stringify(detail.request_schema, null, 2)}
                   </pre>
@@ -210,8 +209,7 @@ function EndpointRow({ contract, endpoint }: { contract: ApiContract; endpoint: 
                 <div>
                   <p className="text-xs font-medium mb-1">Response</p>
                   <pre
-                    style={{ border: '1px solid var(--border)', background: 'var(--code-bg)' }}
-                    className="text-xs font-mono p-2 overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap break-words"
+                    className="border border-border bg-code-bg text-xs font-mono p-2 overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap break-words"
                   >
                     {JSON.stringify(detail.response_schema, null, 2)}
                   </pre>
@@ -276,7 +274,7 @@ function ContractCard({
   }
 
   return (
-    <div style={{ border: '1px solid var(--border)' }}>
+    <Card>
       <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
         <button
           onClick={() => setExpanded((v) => !v)}
@@ -309,7 +307,7 @@ function ContractCard({
         <p className="text-xs text-danger px-4 pb-3 break-words">{contract.error_message}</p>
       )}
       {expanded && (
-        <div style={{ borderTop: '1px solid var(--border)' }}>
+        <div className="border-t border-border">
           <div className="p-3">
             <Input
               value={filter}
@@ -328,7 +326,7 @@ function ContractCard({
           </div>
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -372,21 +370,13 @@ export default function ApiContracts() {
           </Button>
         </div>
 
-        {error && (
-          <div
-            style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
-            className="text-sm p-3 mb-4 bg-[#fef2f2] break-words"
-          >
-            {error}
-          </div>
-        )}
+        {error && <Banner variant="danger" className="mb-4 break-words">{error}</Banner>}
 
         {loading ? (
           <p className="text-muted text-sm">Loading...</p>
         ) : contracts.length === 0 ? (
           <div
-            style={{ border: '1px dashed var(--border)' }}
-            className="p-8 text-center text-sm text-muted"
+            className="border border-dashed border-border p-8 text-center text-sm text-muted"
           >
             <Braces className="w-6 h-6 mx-auto mb-2 opacity-50" />
             No API contracts yet. Ingest an OpenAPI spec or a GraphQL schema so agents

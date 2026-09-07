@@ -420,7 +420,7 @@ export function UserBubble({ content }: { content: string }) {
   return (
     <div className="flex justify-end">
       <div
-        className="max-w-[85%] sm:max-w-[80%] rounded px-3 py-2 text-sm bg-[#eaf4fb] whitespace-pre-wrap break-words"
+        className="max-w-[85%] sm:max-w-[80%] rounded px-3 py-2 text-sm bg-primary-light whitespace-pre-wrap break-words"
         style={{ border: '1px solid var(--border)' }}
       >
         {content}
