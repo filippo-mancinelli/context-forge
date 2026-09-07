@@ -84,6 +84,13 @@ def test_queue_stats_query_reads_every_source(wired):
     assert "from web_pages" in sql
 
 
+def test_queue_stats_count_only_the_jobs_the_executor_owns(wired):
+    """`org_reembed` rows have their own producer and must not skew the gauges."""
+    asyncio.run(metrics.collect_queue_stats())
+    sql = wired.queries[0]
+    assert sql.count("tool = 'http'") == 5
+
+
 def test_queue_stats_tolerate_nulls(monkeypatch):
     row = dict(ROW, index_requests_oldest_age_seconds=None)
     conn = FakeConn(row)

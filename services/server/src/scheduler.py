@@ -108,7 +108,11 @@ async def _purge_expired_oauth_flows() -> None:
 
 async def _refresh_metrics() -> None:
     """Repopulate the Prometheus gauges and beat the scheduler heartbeat."""
-    await refresh_metrics()
+    try:
+        await refresh_metrics()
+    except Exception as exc:  # noqa: BLE001
+        # One line, no traceback: a database outage would otherwise spam every tick.
+        logger.warning("Metrics refresh tick failed: %s", exc)
 
 
 def is_scheduler_running() -> bool:
@@ -118,35 +122,69 @@ def is_scheduler_running() -> bool:
 _JOB_CLAIM_BATCH = 5
 _JOB_STUCK_MINUTES = 10
 
+# `jobs` has a second producer: src/api/routes/settings.py inserts 'org_reembed'
+# rows that src/reembed.py drives itself. Every statement here is scoped to the
+# rows this executor owns.
+_JOB_CLAIM_SQL = f"""
+UPDATE jobs
+SET status = 'running', attempts = attempts + 1, updated_at = NOW()
+WHERE id IN (
+    SELECT id FROM jobs
+    WHERE tool = 'http' AND status = 'pending' AND next_attempt_at <= NOW()
+      AND attempts < max_attempts
+    ORDER BY next_attempt_at
+    LIMIT {_JOB_CLAIM_BATCH}
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id, params, attempts, max_attempts
+"""
+
+_JOB_STUCK_RESET_SQL = (
+    "UPDATE jobs SET status = 'pending', updated_at = NOW() "
+    "WHERE tool = 'http' AND status = 'running' "
+    f"AND updated_at < NOW() - INTERVAL '{_JOB_STUCK_MINUTES} minutes'"
+)
+
+# A process that dies mid-attempt never reaches finalize_job, so the max_attempts
+# check there never runs: without this sweep such a job cycles forever.
+_JOB_DEAD_SWEEP_SQL = (
+    "UPDATE jobs SET status = 'dead', "
+    "error_message = COALESCE(error_message, last_error, 'exceeded max_attempts'), "
+    "updated_at = NOW() "
+    "WHERE tool = 'http' AND status = 'pending' AND attempts >= max_attempts"
+)
+
 
 async def _check_jobs() -> None:
-    """Requeue jobs stuck in 'running', then claim and run the jobs that are due."""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE jobs SET status = 'pending', updated_at = NOW() "
-            "WHERE status = 'running' AND updated_at < NOW() - INTERVAL '10 minutes'"
+    """Claim and run the http jobs that are due."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(_JOB_CLAIM_SQL)
+        if not rows:
+            return
+        outcomes = await asyncio.gather(
+            *(run_claimed_job(dict(row)) for row in rows), return_exceptions=True
         )
-        rows = await conn.fetch(
-            """
-            UPDATE jobs
-            SET status = 'running', attempts = attempts + 1, updated_at = NOW()
-            WHERE id IN (
-                SELECT id FROM jobs
-                WHERE status = 'pending' AND next_attempt_at <= NOW()
-                ORDER BY next_attempt_at
-                LIMIT 5
-                FOR UPDATE SKIP LOCKED
-            )
-            RETURNING id, params, attempts, max_attempts
-            """
-        )
+        for row, outcome in zip(rows, outcomes):
+            if outcome is not None:
+                logger.warning("Job %s raised: %s", row["id"], outcome)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Job executor tick failed: %s", exc)
 
-    if not rows:
-        return
-    await asyncio.gather(
-        *(run_claimed_job(dict(row)) for row in rows), return_exceptions=True
-    )
+
+async def _maintain_jobs() -> None:
+    """Requeue jobs stranded in 'running' and dead-letter those past max_attempts.
+
+    Kept off the executor tick so it still runs while a long job blocks it.
+    """
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(_JOB_STUCK_RESET_SQL)
+            await conn.execute(_JOB_DEAD_SWEEP_SQL)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Job maintenance tick failed: %s", exc)
 
 
 async def start_scheduler() -> None:
@@ -158,9 +196,18 @@ async def start_scheduler() -> None:
         _check_index_requests, "interval", seconds=10, id="index_requests", replace_existing=True
     )
 
-    # Claim and run due async jobs; also requeues jobs stranded by a crash.
+    # Claim and run due async jobs. One instance at a time, coalescing missed
+    # runs: back-pressure while a batch is in flight is intentional, not a misfire.
     _scheduler.add_job(
-        _check_jobs, "interval", seconds=5, id="jobs", replace_existing=True
+        _check_jobs, "interval", seconds=5, id="jobs", replace_existing=True,
+        max_instances=1, coalesce=True, misfire_grace_time=None,
+    )
+
+    # Requeue stranded jobs and dead-letter crash-looped ones, on its own tick.
+    _scheduler.add_job(
+        _maintain_jobs, "interval", seconds=60, id="jobs_maintenance",
+        replace_existing=True, max_instances=1, coalesce=True,
+        misfire_grace_time=None,
     )
 
     # Refresh the Prometheus gauges and the heartbeat.
