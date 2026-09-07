@@ -374,3 +374,130 @@ def test_record_call_scrubs_the_error_text():
     row = _drain()[0]
     assert "ghp_secret" not in row["error"]
     assert row["error"].endswith("https://github.com/a/b.git")
+
+
+def test_classify_outcome_uses_the_exception_type():
+    from src.mcp.permissions import PermissionDenied
+    from src.mcp.ratelimit import RateLimited
+
+    assert audit.classify_outcome(PermissionDenied("nope")) == "denied"
+    assert audit.classify_outcome(RateLimited("slow down")) == "rate_limited"
+
+
+def test_classify_outcome_does_not_deny_on_an_unrelated_access_denied():
+    """A tool body forwarding an upstream 'Access denied' is an error, not a
+    permission decision taken by this server."""
+    from src.mcp.permissions import ToolError
+
+    assert audit.classify_outcome(ToolError("Access denied by upstream")) == "error"
+
+
+def test_audited_records_a_dict_error_return_as_an_error():
+    _drain()
+
+    async def scenario():
+        async with audit.audited("db_execute", "db-write", {}) as call:
+            result = {"status": "error", "error": "syntax error at or near FROM"}
+            call.set_result(result)
+            return result
+
+    out = asyncio.run(scenario())
+    assert out == {"status": "error", "error": "syntax error at or near FROM"}
+    row = _drain()[0]
+    assert row["outcome"] == "error"
+    assert row["error"] == "syntax error at or near FROM"
+
+
+def test_audited_scrubs_a_url_in_a_dict_error_return():
+    _drain()
+
+    async def scenario():
+        async with audit.audited("repo_clone", "repo-write", {}) as call:
+            call.set_result({"status": "error", "error": "auth failed for https://u:p@h/r.git?a=1"})
+
+    asyncio.run(scenario())
+    assert _drain()[0]["error"] == "auth failed for https://h/r.git"
+
+
+def test_audited_records_a_dict_ok_return_as_ok():
+    _drain()
+
+    async def scenario():
+        async with audit.audited("db_query", "db-query", {}) as call:
+            call.set_result({"status": "ok", "rows": []})
+
+    asyncio.run(scenario())
+    row = _drain()[0]
+    assert row["outcome"] == "ok"
+    assert row["error"] is None
+
+
+def test_decorated_tool_returning_a_dict_error_is_audited_as_an_error():
+    from src.mcp import permissions as perms
+
+    _drain()
+
+    @perms.requires_permission("db-write")
+    async def db_execute() -> dict:
+        return {"status": "error", "error": "relation does not exist"}
+
+    perms.set_current_permissions(frozenset({"*"}))
+    try:
+        assert asyncio.run(db_execute()) == {"status": "error", "error": "relation does not exist"}
+    finally:
+        perms.set_current_permissions(None)
+
+    row = _drain()[0]
+    assert row["outcome"] == "error"
+    assert row["error"] == "relation does not exist"
+
+
+def test_audit_only_tool_returning_a_dict_error_is_audited_as_an_error():
+    from src.mcp import permissions as perms
+
+    _drain()
+
+    @perms.audit_only
+    async def use_project() -> dict:
+        return {"status": "error", "error": "project not found"}
+
+    asyncio.run(use_project())
+    row = _drain()[0]
+    assert row["outcome"] == "error"
+    assert row["error"] == "project not found"
+
+
+def test_denied_by_the_decorator_raises_permission_denied():
+    from src.mcp import permissions as perms
+
+    _drain()
+
+    @perms.requires_permission("jobs")
+    async def fake_tool() -> int:
+        return 1
+
+    perms.set_current_permissions(frozenset({"context-read"}))
+    try:
+        with pytest.raises(perms.PermissionDenied):
+            asyncio.run(fake_tool())
+    finally:
+        perms.set_current_permissions(None)
+    assert _drain()[0]["outcome"] == "denied"
+
+
+def test_a_tool_body_raising_access_denied_is_audited_as_an_error():
+    from src.mcp import permissions as perms
+
+    _drain()
+
+    @perms.requires_permission("db-query")
+    async def db_query() -> dict:
+        raise perms.ToolError("Access denied by upstream")
+
+    perms.set_current_permissions(frozenset({"*"}))
+    try:
+        with pytest.raises(perms.ToolError):
+            asyncio.run(db_query())
+    finally:
+        perms.set_current_permissions(None)
+    assert _drain()[0]["outcome"] == "error"

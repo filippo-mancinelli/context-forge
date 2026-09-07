@@ -8,6 +8,11 @@ try:
 except ImportError:  # older fastmcp
     ToolError = PermissionError
 
+
+class PermissionDenied(ToolError):
+    """Il chiamante non ha il permesso richiesto dal tool."""
+
+
 PERMISSIONS = (
     "context-read",
     "context-write",
@@ -99,16 +104,18 @@ def requires_permission(permission: str):
             from .audit import audited, summarize_args
             from .ratelimit import enforce_rate_limit
 
-            async with audited(fn.__name__, permission, summarize_args(kwargs)):
+            async with audited(fn.__name__, permission, summarize_args(kwargs)) as call:
                 perms = _current_permissions.get()
                 if perms is not None and "*" not in perms and permission not in perms:
-                    raise ToolError(
+                    raise PermissionDenied(
                         f"Access denied: tool requires permission '{permission}'. "
                         f"Ask an organization admin to grant it in the dashboard's "
                         f"Organization -> MCP permissions matrix."
                     )
                 enforce_rate_limit()
-                return await fn(*args, **kwargs)
+                result = await fn(*args, **kwargs)
+                call.set_result(result)
+                return result
         return wrapper
     return decorator
 
@@ -119,6 +126,8 @@ def audit_only(fn):
     async def wrapper(*args, **kwargs):
         from .audit import audited, summarize_args
 
-        async with audited(fn.__name__, None, summarize_args(kwargs)):
-            return await fn(*args, **kwargs)
+        async with audited(fn.__name__, None, summarize_args(kwargs)) as call:
+            result = await fn(*args, **kwargs)
+            call.set_result(result)
+            return result
     return wrapper
