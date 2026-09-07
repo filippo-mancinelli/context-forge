@@ -157,8 +157,10 @@ async def metrics(request: Request):
 
     token = get_settings().metrics_token
     if token:
-        expected = f"Bearer {token}"
-        supplied = request.headers.get("Authorization") or ""
+        # Compared as bytes: compare_digest rejects non-ASCII str, which would
+        # turn a malformed header into a 500 instead of a 401.
+        expected = f"Bearer {token}".encode()
+        supplied = (request.headers.get("Authorization") or "").encode("latin-1", "ignore")
         if not hmac.compare_digest(supplied, expected):
             return PlainTextResponse("Unauthorized", status_code=401)
     return PlainTextResponse(render_metrics(), media_type=CONTENT_TYPE_LATEST)
