@@ -12,14 +12,15 @@ from src.mcp import jobs as jobs_tools
 
 
 class FakeConn:
-    def __init__(self, fetch_rows=None):
+    def __init__(self, fetch_rows=None, execute_tag="UPDATE 1"):
         self.fetch_rows = fetch_rows or []
+        self.execute_tag = execute_tag
         self.executed = []
         self.fetched = []
 
     async def execute(self, sql, *args):
         self.executed.append((sql, args))
-        return "UPDATE 1"
+        return self.execute_tag
 
     async def fetch(self, sql, *args):
         self.fetched.append((sql, args))
@@ -99,6 +100,24 @@ def test_terminal_states_write_error_message_but_retries_do_not(monkeypatch):
     # last_error is always written; error_message only on terminal states.
     assert "HTTP 503" in retry_args and None in retry_args
     assert error_args.count("HTTP 404") == 2
+
+
+def test_finalize_is_fenced_on_the_attempt_it_belongs_to(monkeypatch):
+    conn = _wire_pool(monkeypatch, jobs_tools, FakeConn())
+    asyncio.run(jobs_tools.finalize_job("j1", "done", 2, 3, {"ok": True}, None))
+    sql, args = conn.executed[0]
+    assert "attempts = $7" in sql
+    assert args[5] == "j1"
+    assert args[6] == 2
+
+
+def test_a_late_finalize_from_a_stale_attempt_is_ignored(monkeypatch, caplog):
+    """Another replica re-claimed the job; the older attempt must not overwrite it."""
+    _wire_pool(monkeypatch, jobs_tools, FakeConn(execute_tag="UPDATE 0"))
+    with caplog.at_level(logging.INFO, logger="src.mcp.jobs"):
+        status = asyncio.run(jobs_tools.finalize_job("j1", "done", 1, 3, {"ok": 1}, None))
+    assert status == "stale"
+    assert "stale attempt" in caplog.text
 
 
 # ── run_claimed_job ───────────────────────────────────────────────────────────
@@ -224,6 +243,33 @@ def test_run_claimed_job_classifies_a_404_as_permanent_error(monkeypatch):
     ))
 
     assert captured["outcome"] == "error"
+
+
+def test_the_attempt_budget_is_five_minutes():
+    assert jobs_tools.JOB_ATTEMPT_TIMEOUT_SECONDS == 300
+
+
+def test_an_attempt_that_outruns_its_budget_is_a_retry(monkeypatch):
+    """`running` is only really capped if the whole attempt has a deadline."""
+
+    class SlowClient(FakeClient):
+        async def post(self, url, json=None, headers=None):
+            await asyncio.sleep(5)
+            return self.response
+
+    monkeypatch.setattr(jobs_tools, "JOB_ATTEMPT_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(
+        jobs_tools.httpx, "AsyncClient",
+        lambda *a, **kw: SlowClient(FakeResponse(200, {"ok": True})),
+    )
+    captured = _capture_finalize(monkeypatch)
+
+    asyncio.run(jobs_tools.run_claimed_job(
+        {"id": "j1", "params": {"url": "http://svc"}, "attempts": 1, "max_attempts": 3}
+    ))
+
+    assert captured["outcome"] == "retry"
+    assert captured["result"] is None
 
 
 # ── _check_jobs ───────────────────────────────────────────────────────────────

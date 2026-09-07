@@ -48,6 +48,10 @@ def test_connection_error_is_retryable():
     assert jobs_tools.classify_exception(httpx.ConnectError("refused")) == "retry"
 
 
+def test_an_attempt_deadline_is_retryable():
+    assert jobs_tools.classify_exception(TimeoutError("attempt budget spent")) == "retry"
+
+
 def test_programming_error_is_not_retryable():
     assert jobs_tools.classify_exception(ValueError("bad url")) == "error"
 
