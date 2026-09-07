@@ -12,6 +12,7 @@ from .indexer.git_manager import pull_all_repos
 from .indexer.indexer import run_index_repo, run_pending_index_requests, sync_repos_config
 from .mcp.jobs import run_claimed_job
 from .mcp.oauth_bridge import purge_expired_flows
+from .metrics import record_scheduler_tick, refresh_metrics
 from .org_config import get_org_config, iter_org_configs
 from .vector_index import ensure_all_indexes
 
@@ -105,6 +106,15 @@ async def _purge_expired_oauth_flows() -> None:
         logger.info("Purged %d expired OAuth bridge flow(s)", deleted)
 
 
+async def _refresh_metrics() -> None:
+    """Repopulate the Prometheus gauges and beat the scheduler heartbeat."""
+    await refresh_metrics()
+
+
+def is_scheduler_running() -> bool:
+    return _scheduler is not None and bool(getattr(_scheduler, "running", False))
+
+
 _JOB_CLAIM_BATCH = 5
 _JOB_STUCK_MINUTES = 10
 
@@ -153,6 +163,11 @@ async def start_scheduler() -> None:
         _check_jobs, "interval", seconds=5, id="jobs", replace_existing=True
     )
 
+    # Refresh the Prometheus gauges and the heartbeat.
+    _scheduler.add_job(
+        _refresh_metrics, "interval", seconds=30, id="metrics", replace_existing=True
+    )
+
     # Safety-net for knowledge-base documents whose background task didn't run.
     _scheduler.add_job(
         _check_kb_documents, "interval", seconds=20, id="kb_documents", replace_existing=True
@@ -182,6 +197,7 @@ async def start_scheduler() -> None:
     )
 
     _scheduler.start()
+    record_scheduler_tick()
     await sync_scheduler_jobs()
     logger.info("Scheduler started (per-organization refresh jobs)")
 
