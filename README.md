@@ -8,8 +8,8 @@ Self-hosted context infrastructure for AI coding agents. Exposes a single MCP en
 - **Knowledge base** — upload documents (PDF, Word, Excel, PowerPoint, images with OCR, text, and more) via drag-and-drop, or fetch them from a URL (with SSRF guards); they're extracted, chunked, embedded, and made semantically searchable.
 - **Hybrid repository search** — index and query local, GitHub, and GitLab repos (gitlab.com or self-hosted via `GITLAB_URL`) using tree-sitter parsing. Retrieval fuses dense vector embeddings with lexical full-text ranking (Reciprocal Rank Fusion) so exact identifiers, error strings, and rare tokens surface alongside semantic matches. Set `SEARCH_HYBRID=false` to fall back to vector-only.
 - **Code intelligence** — a symbol graph (definitions, references, imports) built at index time powers `repo_map` (ranked file overview for a query, definitions first), `repo_neighbors` (callers, callees, and related files) and `repo_symbols`; `repo_get_file` reads by line window so agents pull only the lines they need.
-- **Data sources** — connect external databases (PostgreSQL, MySQL, MariaDB, SQLite) directly or through an SSH tunnel. Agents get live schema context (tables, columns, keys, indexes, row estimates) enriched by a human-curated **data dictionary** (per-table and per-column descriptions edited in the UI), and can run validated read-only SQL (single SELECT/SHOW/EXPLAIN statement, enforced LIMIT, timeouts, full audit log). With the `db-write` permission, `db_execute` runs a single validated DML statement (real top-level WHERE required) inside a transaction with a DB-side timeout. Credentials are encrypted at rest when `ENCRYPTION_KEY` is set.
-- **SSH file sources** — register a host and a root directory reachable over SSH; agents list, read (head/tail/offset windows), and grep files there, and with `ssh-write` can atomically write files confined to that root.
+- **Data sources** — connect external databases (PostgreSQL, MySQL, MariaDB, SQLite) directly or through an SSH tunnel. Agents get live schema context (tables, columns, keys, indexes, row estimates) enriched by a human-curated **data dictionary** (per-table and per-column descriptions edited in the UI), and can run validated read-only SQL (single SELECT/SHOW/EXPLAIN statement, enforced LIMIT, timeouts, full audit log). With the `db-write` permission, `db_execute` runs a single validated DML statement (real top-level WHERE required) inside a transaction with a DB-side timeout; without it, a caller holding `context-write` gets a **proposal** instead — the statement is stored with an `EXPLAIN` preview for an admin to approve from the Approvals page. Credentials are encrypted at rest when `ENCRYPTION_KEY` is set.
+- **SSH file sources** — register a host and a root directory reachable over SSH; agents list, read (head/tail/offset windows), and grep files there, and with `ssh-write` can atomically write files confined to that root. Without `ssh-write`, a caller holding `context-write` proposes the write instead: the content is stored with a size/hash preview for an admin to approve.
 - **Code changes** — `repo_commit_files` and `repo_open_pr` clone a scratch workspace, commit agent-proposed changes on a branch, push, and open a GitHub PR / GitLab MR for human review.
 - **API contracts** — ingest OpenAPI/Swagger specs (URL or pasted JSON/YAML) and GraphQL schemas (live introspection or pasted result). Every operation becomes individually listable and searchable, with `$ref`-resolved request/response schemas, so agents know exactly which endpoints exist and with what payloads.
 - **CI/CD context** — live view of recent GitHub Actions / GitLab CI runs for configured repos, and a "why is the pipeline red" tool that returns the failed jobs/steps with the ANSI-stripped tail of their error logs. Uses the tokens already configured for indexing; nothing extra to set up.
@@ -114,8 +114,9 @@ An organization can hold several projects. Connect to the organization-level end
 - **Repositories:** `repo_list`, `repo_search`, `repo_symbols`, `repo_get_file`, `repo_index`, `repo_relationships`, `repo_add`
 - **Code intelligence:** `repo_references`, `code_explain`, `repo_annotate`, `repo_annotations`, `repo_map`, `repo_neighbors`
 - **Code changes:** `repo_commit_files`, `repo_open_pr` — create a branch, push agent-proposed file changes, and open a GitHub PR / GitLab MR for human review (requires the `repo-write` permission; git tokens need write scope)
-- **Data sources:** `db_list`, `db_schema`, `db_describe`, `db_query`, `db_execute` (`db-write`), `db_add` (`sources-write`)
-- **SSH files:** `ssh_sources`, `ssh_list_files`, `ssh_read_file`, `ssh_grep`, `ssh_write_file` (`ssh-write`), `ssh_source_add` (`sources-write`)
+- **Data sources:** `db_list`, `db_schema`, `db_describe`, `db_query`, `db_execute` (`db-write`, otherwise a proposal), `db_add` (`sources-write`)
+- **SSH files:** `ssh_sources`, `ssh_list_files`, `ssh_read_file`, `ssh_grep`, `ssh_write_file` (`ssh-write`, otherwise a proposal), `ssh_source_add` (`sources-write`)
+- **Write approvals:** `write_request_status` — check whether a proposed write was approved, rejected, or executed
 - **Web pages:** `web_search`, `web_list`, `web_get_page`, `web_add`, `web_refetch`, `web_list_sites`, `web_crawl`, `web_delete`, `web_delete_site`
 - **API contracts:** `api_list`, `api_endpoints`, `api_get_endpoint`, `api_add`
 - **CI/CD:** `ci_runs`, `ci_failure`
@@ -165,6 +166,21 @@ Expose the MCP port only behind TLS with `MCP_AUTH_MODE=enabled`. Data-source an
 
 Every MCP tool call is recorded: who called it (OIDC user, API key, or anonymous), the tool, the project, the outcome (`ok`, `denied`, `error`, `rate_limited`), the duration, and a redacted summary of the arguments — credentials, tokens, secrets and payloads are redacted; URLs are stored without userinfo or query strings, while audited SQL is kept truncated. A tool that answers with an error instead of raising is recorded as `error` too, so the **Errors** tile counts every call that reported one. Org admins and owners read the trail under **Organization → Tool activity**, with a 24h/7d stats strip and filters by tool, by outcome, and by principal (substring match). History is pruned daily according to `MCP_AUDIT_RETENTION_DAYS` (default 90).
 
+### Human approvals for writes
+
+`db_execute` and `ssh_write_file` execute immediately only for a caller holding
+`db-write` / `ssh-write`. A caller holding `context-write` but not the write
+permission does not execute: the tool stores a **write request** — the statement
+or the file content, plus a preview (estimated rows and plan excerpt for SQL,
+sizes and sha256 hashes for files) — and returns `pending_approval` with a
+request id to poll via `write_request_status`. A caller with neither permission
+is denied as before.
+
+Organization admins and owners review the queue under **Approvals** in the
+dashboard. Approving requires the same write permission the request needs
+(owners always qualify), and the change then runs under the approver's identity.
+Pending requests expire after 7 days; a daily job marks them `expired`.
+
 ### MCP permissions
 
 The identity provider only authenticates. Authorization of MCP tools is managed in the application database: each organization role (viewer, member, admin, owner) has a set of permissions, editable from the dashboard under **Organization → MCP permissions**.
@@ -174,15 +190,15 @@ The identity provider only authenticates. Authorization of MCP tools is managed 
 | `context-read` | search and read memory, repositories, knowledge base, web pages, API contracts, CI runs, database schemas |
 | `context-write` | add or delete memories, annotate code, add and refetch web pages |
 | `db-query` | read-only SQL on connected databases |
-| `db-write` | `db_execute` (validated single-statement DML) |
+| `db-write` | `db_execute` (validated single-statement DML) and approving SQL write requests |
 | `repo-write` | `repo_commit_files`, `repo_open_pr` |
 | `jobs` | submit and read async jobs |
-| `ssh-read` / `ssh-write` | read / write files on SSH sources |
+| `ssh-read` / `ssh-write` | read / write files on SSH sources; `ssh-write` also approves file write requests |
 | `projects-write` | create, rename, delete projects and manage their members |
 | `sources-write` | register repositories, API contracts, knowledge-base URLs, databases, and SSH sources |
 | `*` | everything, including re-indexing and web crawling/deletion |
 
-Defaults: viewer → `context-read`; member → `context-read`, `context-write`, `db-query`, `ssh-read`; admin → the member set plus `jobs`, `projects-write`, `sources-write`; owner → `*`. Write capabilities (`db-write`, `ssh-write`, `repo-write`) are owner-only until granted explicitly.
+Defaults: viewer → `context-read`; member → `context-read`, `context-write`, `db-query`, `ssh-read`; admin → the member set plus `jobs`, `projects-write`, `sources-write`; owner → `*`. Write capabilities (`db-write`, `ssh-write`, `repo-write`) are owner-only until granted explicitly. Members holding `context-write` can still *propose* SQL and file writes; an admin with the matching write permission approves them under **Approvals**.
 
 API keys get granular permissions chosen at creation (**Settings → MCP keys**), never more than the creator's own role allows, plus an optional rate limit in calls per minute (empty = unlimited; enforced per server process), editable afterwards from the key list. OIDC groups under `OIDC_GROUP_PREFIX` are only used to suggest the initial role when a user first logs in.
 
