@@ -123,3 +123,16 @@ def test_decorator_audits_rate_limited_calls_as_rate_limited():
         assert row["permission"] == "context-read"
     finally:
         perms.set_current_permissions(None)
+
+
+def test_enforce_raises_rate_limited():
+    set_current_principal(Principal(kind="api_key", id=9, label="ci-bot", rate_limit_per_minute=1))
+    ratelimit.enforce_rate_limit()
+    with pytest.raises(ratelimit.RateLimited, match="Rate limit exceeded: 1 calls per minute"):
+        ratelimit.enforce_rate_limit()
+
+
+def test_rate_limited_is_a_tool_error():
+    from src.mcp.permissions import ToolError
+
+    assert issubclass(ratelimit.RateLimited, ToolError)

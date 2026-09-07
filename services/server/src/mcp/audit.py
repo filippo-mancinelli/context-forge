@@ -106,10 +106,20 @@ def summarize_args(kwargs: dict) -> dict:
 
 
 def classify_outcome(exc: BaseException) -> str:
+    """Esito dall'eccezione: prima il tipo, poi il messaggio per i chiamanti legacy."""
+    from .permissions import PermissionDenied
+    from .ratelimit import RateLimited
+
+    if isinstance(exc, RateLimited):
+        return "rate_limited"
+    if isinstance(exc, PermissionDenied):
+        return "denied"
     message = str(exc)
     if message.startswith("Rate limit exceeded"):
         return "rate_limited"
-    if "Access denied" in message:
+    # Solo il messaggio esatto del decoratore: un "Access denied" propagato
+    # dal corpo di un tool resta un errore, non una decisione di permessi.
+    if message.startswith("Access denied: tool requires permission"):
         return "denied"
     return "error"
 
@@ -174,29 +184,44 @@ async def record_call(
         logger.debug("MCP audit row not recorded", exc_info=True)
 
 
+class AuditedCall:
+    """Esito in corso: il chiamante gli consegna il valore di ritorno del tool."""
+
+    __slots__ = ("outcome", "error")
+
+    def __init__(self) -> None:
+        self.outcome = "ok"
+        self.error: Optional[str] = None
+
+    def set_result(self, result: Any) -> None:
+        """Un tool che ritorna {"status": "error", ...} ha fallito, senza sollevare."""
+        if isinstance(result, dict) and result.get("status") == "error":
+            self.outcome = "error"
+            self.error = scrub_text(str(result.get("error") or ""))[:MAX_ERROR]
+
+
 @asynccontextmanager
 async def audited(
     tool_name: str, permission: Optional[str] = None, args_summary: Optional[dict] = None
 ):
     """Misura una chiamata, ne classifica l'esito e la registra."""
     start = time.perf_counter()
-    outcome = "ok"
-    error: Optional[str] = None
+    call = AuditedCall()
     try:
-        yield
+        yield call
     except BaseException as exc:
-        outcome = classify_outcome(exc)
-        error = str(exc)
+        call.outcome = classify_outcome(exc)
+        call.error = str(exc)
         raise
     finally:
         duration_ms = int((time.perf_counter() - start) * 1000)
-        _increment_metric(tool_name, outcome)
+        _increment_metric(tool_name, call.outcome)
         await record_call(
             tool=tool_name,
             permission=permission,
-            outcome=outcome,
+            outcome=call.outcome,
             duration_ms=duration_ms,
-            error=error,
+            error=call.error,
             args_summary=args_summary,
         )
 

@@ -56,9 +56,12 @@ New module `src/mcp/audit.py`:
   Recording never raises into the tool.
 - `audited(tool_name, permission)` async context manager used by the
   permission decorator: measures duration, sets outcome from the exception
-  type (`ToolError` with "Access denied" → `denied`, rate-limit error →
-  `rate_limited`, other exceptions → `error`, else `ok`), increments the
-  `contextforge_mcp_tool_calls_total{tool,outcome}` counter from `src/metrics.py`.
+  type (`PermissionDenied` → `denied`, `RateLimited` → `rate_limited`, other
+  exceptions → `error`, else `ok`). A tool that returns normally but answers
+  `{"status": "error", "error": ...}` is recorded as `error` with that text
+  (scrubbed, truncated to 500 chars); its return value is untouched. Increments
+  the `contextforge_mcp_tool_calls_total{tool,outcome}` counter from
+  `src/metrics.py`.
 
 `requires_permission` in `src/mcp/permissions.py` wraps the call with
 `audited(fn.__name__, permission)`. Tools without a permission

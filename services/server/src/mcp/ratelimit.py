@@ -8,8 +8,14 @@ import time
 from collections import defaultdict, deque
 
 from .context import get_current_principal
+from .permissions import ToolError
 
 WINDOW_SECONDS = 60.0
+
+
+class RateLimited(ToolError):
+    """La API key corrente ha superato il proprio limite al minuto."""
+
 
 _windows: dict[int, deque] = defaultdict(deque)
 
@@ -40,6 +46,4 @@ def enforce_rate_limit() -> None:
     if not limit or limit <= 0:
         return
     if not check(principal.id, limit):
-        from .permissions import ToolError
-
-        raise ToolError(f"Rate limit exceeded: {limit} calls per minute for this API key")
+        raise RateLimited(f"Rate limit exceeded: {limit} calls per minute for this API key")
