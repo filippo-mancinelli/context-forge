@@ -77,6 +77,10 @@ async def main() -> None:
     # Start scheduler
     await start_scheduler()
 
+    from .mcp.audit import start_audit_writer, stop_audit_writer
+
+    start_audit_writer()
+
     # Configure both ASGI apps
     mcp_app = mcp.http_app(path="/mcp")
     # Add authentication middleware if enabled
@@ -108,6 +112,7 @@ async def main() -> None:
             api_server.serve(),
         )
     finally:
+        await stop_audit_writer()
         await stop_scheduler()
         await close_db()
 
