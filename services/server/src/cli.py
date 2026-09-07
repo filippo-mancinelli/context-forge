@@ -130,7 +130,11 @@ def cmd_migrate(args: argparse.Namespace) -> None:
         finally:
             await close_db()
 
-    asyncio.run(_run())
+    try:
+        asyncio.run(_run())
+    except Exception as e:
+        print(f"[ERROR] Migration failed: {e}")
+        sys.exit(1)
 
 
 def main() -> None:
