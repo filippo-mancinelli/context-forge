@@ -29,6 +29,7 @@ from .routes import ci as ci_routes
 from .routes import telegram as telegram_routes
 from .routes import environments as environments_routes
 from .routes import projects as projects_routes
+from .routes import health as health_routes
 
 api = FastAPI(
     title="context-forge API",
@@ -95,6 +96,7 @@ api.include_router(ci_routes.router, prefix="/api")
 api.include_router(telegram_routes.router, prefix="/api")
 api.include_router(environments_routes.router, prefix="/api")
 api.include_router(projects_routes.router, prefix="/api")
+api.include_router(health_routes.router, prefix="/api")
 
 
 @api.middleware("http")
@@ -106,8 +108,11 @@ async def auth_guard(request, call_next):
     if not path.startswith("/api"):
         return await call_next(request)
 
+    # Exact match: /api/health/details is authenticated.
+    if path == "/api/health":
+        return await call_next(request)
+
     open_paths = (
-        "/api/health",
         "/api/setup",
         "/api/config",  # public, non-sensitive runtime config for the UI
         "/api/auth",
