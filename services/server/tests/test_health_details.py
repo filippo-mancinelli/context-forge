@@ -173,6 +173,25 @@ def test_database_failure_leaves_queues_and_schema_at_zero(monkeypatch):
     }
 
 
+def test_a_schema_version_failure_keeps_the_real_queue_numbers(monkeypatch):
+    """current_version raises after collect_queue_stats succeeded: the queue
+    depths already read are reported, with schema_version 0 and degraded."""
+
+    async def failing_version(pool):
+        raise RuntimeError("schema_migrations unreachable")
+
+    client = _wire(monkeypatch)
+    monkeypatch.setattr(health_routes, "current_version", failing_version)
+    body = client.get("/api/health/details").json()
+
+    assert body["status"] == "degraded"
+    assert body["database"]["ok"] is True
+    assert body["schema_version"] == 0
+    assert body["queues"]["jobs_pending"] == 2
+    assert body["queues"]["jobs_dead"] == 3
+    assert body["queues"]["web_pages_pending"] == 6
+
+
 def test_members_are_rejected(monkeypatch):
     client = _wire(monkeypatch)
     client.app.dependency_overrides[deps.get_active_org] = lambda: deps.ActiveOrg(

@@ -2,7 +2,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from src import config
+from src import config, metrics
 from src.api.app import api
 
 
@@ -44,10 +44,14 @@ def test_metrics_content_type_is_the_prometheus_text_format(client):
     assert "text/plain" in resp.headers["content-type"]
 
 
-def test_metrics_never_labels_by_organization(client):
-    body = client.get("/metrics").text
-    assert "org_id" not in body
-    assert "organization" not in body
+def test_metrics_never_labels_by_organization():
+    """Checked on the registry itself: a label with no children has no sample."""
+    declared = {
+        name
+        for collector in metrics.registry._collector_to_names
+        for name in getattr(collector, "_labelnames", ())
+    }
+    assert declared == {"status", "tool", "outcome"}
 
 
 def test_open_when_no_token_is_configured(client):
@@ -63,6 +67,16 @@ def test_token_is_required_when_configured(monkeypatch):
     ok = client.get("/metrics", headers={"Authorization": "Bearer s3cret"})
     assert ok.status_code == 200
     assert "contextforge_jobs" in ok.text
+
+
+def test_a_non_ascii_authorization_header_is_rejected_not_a_crash(monkeypatch):
+    """hmac.compare_digest refuses non-ASCII str, so the comparison is on bytes."""
+    settings = config.get_settings()
+    monkeypatch.setattr(settings, "metrics_token", "s3cret", raising=False)
+    client = TestClient(api, raise_server_exceptions=False)
+    header = "Bearer s3crét".encode("utf-8")  # str headers must be ASCII for httpx
+    resp = client.get("/metrics", headers={"Authorization": header})
+    assert resp.status_code == 401
 
 
 def test_metrics_is_not_behind_the_session_guard(monkeypatch):
