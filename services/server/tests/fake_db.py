@@ -40,6 +40,10 @@ class FakeConn:
 
     async def fetch(self, query, *args, **kwargs):
         self.executed.append((query, args))
+        # A list of lists scripts one result set per successive fetch() call
+        # (popped in order); a flat list of rows is returned as-is every call.
+        if self.fetch_rows and isinstance(self.fetch_rows[0], list):
+            return self.fetch_rows.pop(0)
         return self.fetch_rows
 
     async def fetchrow(self, query, *args, **kwargs):

@@ -97,3 +97,62 @@ def test_validate_key_returns_permissions(monkeypatch):
     _patch_pool(monkeypatch, conn)
     info = asyncio.run(security.validate_mcp_api_key("forge_abc"))
     assert info["permissions"] == "context-read"
+
+
+# ===== update_mcp_api_key_rate_limit: SQL shape and the UPDATE-tag-derived bool =====
+
+from tests.fake_db import FakeConn as FakeDbConn
+from tests.fake_db import FakePool as FakeDbPool
+
+
+def _patch_pool_db(monkeypatch, conn):
+    async def fake_pool():
+        return FakeDbPool(conn)
+
+    monkeypatch.setattr(security, "get_pool", fake_pool)
+
+
+def test_update_rate_limit_returns_true_on_success(monkeypatch):
+    conn = FakeDbConn(execute_result="UPDATE 1")
+    _patch_pool_db(monkeypatch, conn)
+    ok = asyncio.run(security.update_mcp_api_key_rate_limit(5, 1, 30))
+    assert ok is True
+    sql, args = conn.executed[0]
+    assert "UPDATE mcp_api_keys SET rate_limit_per_minute" in sql
+    assert args == (30, 5, 1)
+
+
+def test_update_rate_limit_accepts_null_to_clear(monkeypatch):
+    conn = FakeDbConn(execute_result="UPDATE 1")
+    _patch_pool_db(monkeypatch, conn)
+    asyncio.run(security.update_mcp_api_key_rate_limit(5, 1, None))
+    _sql, args = conn.executed[0]
+    assert args == (None, 5, 1)
+
+
+def test_update_rate_limit_returns_false_when_no_row_matched(monkeypatch):
+    conn = FakeDbConn(execute_result="UPDATE 0")
+    _patch_pool_db(monkeypatch, conn)
+    ok = asyncio.run(security.update_mcp_api_key_rate_limit(5, 1, None))
+    assert ok is False
+
+
+# ===== create/list also carry rate_limit_per_minute through the SQL =====
+
+def test_create_key_stores_the_rate_limit(monkeypatch):
+    conn = FakeConn()
+    _patch_pool(monkeypatch, conn)
+    asyncio.run(
+        security.create_mcp_api_key(name="ci-bot", org_id=1, permissions="db-query", rate_limit_per_minute=30)
+    )
+    insert = next(e for e in conn.executed if "INSERT INTO mcp_api_keys" in e[0])
+    assert "rate_limit_per_minute" in insert[0]
+    assert insert[1][-1] == 30
+
+
+def test_list_keys_selects_the_rate_limit(monkeypatch):
+    conn = FakeDbConn()
+    _patch_pool_db(monkeypatch, conn)
+    asyncio.run(security.list_mcp_api_keys(org_id=1))
+    sql, _args = conn.executed[0]
+    assert "k.rate_limit_per_minute" in sql
