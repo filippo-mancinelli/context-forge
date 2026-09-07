@@ -16,3 +16,4 @@ venv/
 .omc
 .omx
 .cursor
+services/ui/.vite/

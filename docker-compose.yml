@@ -44,15 +44,36 @@ services:
       - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       - GITLAB_TOKEN=${GITLAB_TOKEN:-}
+      - GITLAB_URL=${GITLAB_URL:-}
       - SETUP_BOOTSTRAP_TOKEN=${SETUP_BOOTSTRAP_TOKEN:-}
+      - SEARCH_HYBRID=${SEARCH_HYBRID:-true}
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET:-}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      # MCP endpoint auth: disabled | transition | enabled (see .env.example)
+      - MCP_AUTH_MODE=${MCP_AUTH_MODE:-disabled}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+      # OIDC login (optional; inert unless OIDC_ENABLED=true)
+      - OIDC_ENABLED=${OIDC_ENABLED:-false}
+      - OIDC_ISSUER=${OIDC_ISSUER:-}
+      - OIDC_CLIENT_ID=${OIDC_CLIENT_ID:-context-forge}
+      - OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET:-}
+      - OIDC_AUDIENCE=${OIDC_AUDIENCE:-}
+      - OIDC_JWKS_URL=${OIDC_JWKS_URL:-}
+      - OIDC_GROUP_PREFIX=${OIDC_GROUP_PREFIX:-/mcp-tools/}
+      - OIDC_ORG_CLAIM=${OIDC_ORG_CLAIM:-tenant_id}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
+      - PUBLIC_MCP_URL=${PUBLIC_MCP_URL:-}
+      - UI_BASE_URL=${UI_BASE_URL:-}
       - MCP_PORT=4000
       - API_PORT=8000
       - REPOS_CACHE_DIR=/data/repos-cache
       - KB_DATA_DIR=/data/kb
+      - AGENT_WORKSPACES_DIR=/data/agent-workspaces
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - repos_cache:/data/repos-cache
       - kb_data:/data/kb
+      - agent_workspaces:/data/agent-workspaces
       - ./context-forge.yml:/app/context-forge.yml:ro
     depends_on:
       postgres:
@@ -78,3 +99,4 @@ volumes:
   postgres_data:
   repos_cache:
   kb_data:
+  agent_workspaces:
