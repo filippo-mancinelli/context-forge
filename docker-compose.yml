@@ -70,6 +70,7 @@ services:
       - REPOS_CACHE_DIR=/data/repos-cache
       - KB_DATA_DIR=/data/kb
       - AGENT_WORKSPACES_DIR=/data/agent-workspaces
+      - METRICS_TOKEN=${METRICS_TOKEN:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - repos_cache:/data/repos-cache
