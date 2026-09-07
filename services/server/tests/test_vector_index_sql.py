@@ -1,12 +1,15 @@
 """Naming and DDL text of the per-organization HNSW indexes."""
 import pytest
 
+from src.config import Settings
 from src.vector_index import (
     HNSW_EF_CONSTRUCTION,
     HNSW_EF_SEARCH,
     HNSW_M,
     HNSW_TABLES,
     MAINTENANCE_WORK_MEM,
+    _like_pattern,
+    _STALE_INDEX_SQL,
     create_index_sql,
     drop_index_sql,
     index_name,
@@ -49,3 +52,16 @@ def test_constants():
     assert HNSW_TABLES == ("repo_chunks", "kb_chunks", "web_chunks")
     assert (HNSW_M, HNSW_EF_CONSTRUCTION, HNSW_EF_SEARCH) == (16, 64, 100)
     assert MAINTENANCE_WORK_MEM == "256MB"
+
+
+def test_the_index_lookup_is_restricted_to_the_search_path_schemas():
+    assert "schemaname = ANY(current_schemas(false))" in _STALE_INDEX_SQL
+    assert r"LIKE $2 ESCAPE '\'" in _STALE_INDEX_SQL
+
+
+def test_the_like_pattern_escapes_every_literal_underscore():
+    assert _like_pattern("repo_chunks", 42) == r"repo\_chunks\_emb\_hnsw\_org42\_d%"
+
+
+def test_maintenance_work_mem_is_configurable_and_defaults_to_the_constant():
+    assert Settings().hnsw_maintenance_work_mem == MAINTENANCE_WORK_MEM

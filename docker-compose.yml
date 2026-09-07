@@ -47,6 +47,7 @@ services:
       - GITLAB_URL=${GITLAB_URL:-}
       - SETUP_BOOTSTRAP_TOKEN=${SETUP_BOOTSTRAP_TOKEN:-}
       - SEARCH_HYBRID=${SEARCH_HYBRID:-true}
+      - HNSW_MAINTENANCE_WORK_MEM=${HNSW_MAINTENANCE_WORK_MEM:-256MB}
       - WEBHOOK_SECRET=${WEBHOOK_SECRET:-}
       - CORS_ORIGINS=${CORS_ORIGINS:-}
       # MCP endpoint auth: disabled | transition | enabled (see .env.example)

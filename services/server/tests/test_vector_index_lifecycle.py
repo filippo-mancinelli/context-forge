@@ -1,5 +1,6 @@
-"""ensure_org_indexes / ensure_all_indexes against a fake pool (no live DB)."""
+"""ensure_org_indexes / ensure_all_indexes against a fake connection (no live DB)."""
 import asyncio
+from types import SimpleNamespace
 
 from src import vector_index
 from src.org_settings import OrgSettings
@@ -12,6 +13,7 @@ class FakeConn:
         self.executed = []
         self.stale = stale or {}
         self.fail_on = fail_on
+        self.closed = False
 
     async def execute(self, sql, *args):
         self.executed.append(sql)
@@ -20,36 +22,25 @@ class FakeConn:
 
     async def fetch(self, sql, *args):
         table = args[0]
-        return [{"indexname": name} for name in self.stale.get(table, [])]
+        return [
+            {"schemaname": "public", "indexname": name}
+            for name in self.stale.get(table, [])
+        ]
+
+    async def close(self):
+        self.closed = True
 
 
-class FakePool:
-    def __init__(self, conn):
-        self.conn = conn
+def _patch_conn(monkeypatch, conn):
+    async def fake_connection():
+        return conn
 
-    def acquire(self):
-        conn = self.conn
-
-        class _Ctx:
-            async def __aenter__(self):
-                return conn
-
-            async def __aexit__(self, *exc):
-                return False
-
-        return _Ctx()
-
-
-def _patch_pool(monkeypatch, conn):
-    async def fake_pool():
-        return FakePool(conn)
-
-    monkeypatch.setattr(vector_index, "get_pool", fake_pool)
+    monkeypatch.setattr(vector_index, "_maintenance_connection", fake_connection)
 
 
 def test_creates_one_index_per_table_after_raising_work_mem(monkeypatch):
     conn = FakeConn()
-    _patch_pool(monkeypatch, conn)
+    _patch_conn(monkeypatch, conn)
 
     created = asyncio.run(vector_index.ensure_org_indexes(42, 1536))
 
@@ -65,24 +56,55 @@ def test_creates_one_index_per_table_after_raising_work_mem(monkeypatch):
     assert creates[0].endswith("WHERE org_id = 42")
 
 
+def test_maintenance_work_mem_is_read_from_the_settings(monkeypatch):
+    conn = FakeConn()
+    _patch_conn(monkeypatch, conn)
+    monkeypatch.setattr(
+        vector_index,
+        "get_settings",
+        lambda: SimpleNamespace(hnsw_maintenance_work_mem="1GB"),
+    )
+
+    asyncio.run(vector_index.ensure_org_indexes(42, 1536))
+
+    assert conn.executed[0] == "SET maintenance_work_mem = '1GB'"
+
+
+def test_the_maintenance_connection_is_closed_on_success(monkeypatch):
+    conn = FakeConn()
+    _patch_conn(monkeypatch, conn)
+
+    asyncio.run(vector_index.ensure_org_indexes(42, 1536))
+
+    assert conn.closed is True
+
+
+def test_the_maintenance_connection_is_closed_when_a_statement_explodes(monkeypatch):
+    conn = FakeConn(fail_on=("SET maintenance_work_mem",))
+    _patch_conn(monkeypatch, conn)
+
+    assert asyncio.run(vector_index.ensure_org_indexes(42, 1536)) == []
+    assert conn.closed is True
+
+
 def test_drops_only_the_stale_dimension_of_the_same_org(monkeypatch):
     conn = FakeConn(stale={"repo_chunks": [
         "repo_chunks_emb_hnsw_org42_d1536",
         "repo_chunks_emb_hnsw_org42_d768",
     ]})
-    _patch_pool(monkeypatch, conn)
+    _patch_conn(monkeypatch, conn)
 
     asyncio.run(vector_index.ensure_org_indexes(42, 1536))
 
     drops = [s for s in conn.executed if s.startswith("DROP INDEX CONCURRENTLY")]
     assert drops == [
-        "DROP INDEX CONCURRENTLY IF EXISTS repo_chunks_emb_hnsw_org42_d768"
+        'DROP INDEX CONCURRENTLY IF EXISTS "public"."repo_chunks_emb_hnsw_org42_d768"'
     ]
 
 
 def test_a_failing_build_is_swallowed_and_the_others_still_run(monkeypatch):
     conn = FakeConn(fail_on=("kb_chunks_emb_hnsw_org7_d1536",))
-    _patch_pool(monkeypatch, conn)
+    _patch_conn(monkeypatch, conn)
 
     created = asyncio.run(vector_index.ensure_org_indexes(7, 1536))
 
@@ -92,11 +114,11 @@ def test_a_failing_build_is_swallowed_and_the_others_still_run(monkeypatch):
     ]
 
 
-def test_a_broken_pool_never_reaches_the_caller(monkeypatch):
+def test_a_broken_connection_never_reaches_the_caller(monkeypatch):
     async def boom():
         raise RuntimeError("no database")
 
-    monkeypatch.setattr(vector_index, "get_pool", boom)
+    monkeypatch.setattr(vector_index, "_maintenance_connection", boom)
 
     assert asyncio.run(vector_index.ensure_org_indexes(1, 1536)) == []
 
