@@ -6,6 +6,7 @@ The agent then polls job_status() / job_result() until done.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -23,6 +24,8 @@ JOB_STATUSES = ("pending", "running", "done", "error", "dead")
 BASE_BACKOFF_SECONDS = 5
 MAX_BACKOFF_SECONDS = 300
 RETRYABLE_STATUS_CODES = frozenset({408, 429})
+# Wall-clock budget for one attempt, so 'running' is really bounded.
+JOB_ATTEMPT_TIMEOUT_SECONDS = 300
 
 
 def next_backoff_seconds(attempts: int) -> int:
@@ -42,7 +45,15 @@ def classify_http_status(status_code: int) -> str:
 
 def classify_exception(exc: BaseException) -> str:
     """Timeouts and connection failures are retryable; anything else is permanent."""
-    return "retry" if isinstance(exc, httpx.TransportError) else "error"
+    return "retry" if isinstance(exc, (httpx.TransportError, TimeoutError)) else "error"
+
+
+def _rows_updated(tag: Any) -> int:
+    """asyncpg command tag, e.g. 'UPDATE 1'; anything unparsable counts as applied."""
+    try:
+        return int(str(tag).rsplit(" ", 1)[-1])
+    except (TypeError, ValueError):
+        return 1
 
 
 async def finalize_job(
@@ -53,7 +64,7 @@ async def finalize_job(
     result: Any = None,
     error: Optional[str] = None,
 ) -> str:
-    """Write one attempt's outcome. Returns the resulting job status."""
+    """Write one attempt's outcome. Returns the job status, or 'stale' if superseded."""
     if outcome == "done":
         status, delay = "done", 0
     elif outcome == "retry" and attempts < max_attempts:
@@ -66,7 +77,9 @@ async def finalize_job(
     terminal_error = error if status in ("error", "dead") else None
     pool = await get_pool()
     async with pool.acquire() as conn:
-        await conn.execute(
+        # Fenced on the attempt: after a stuck reset another replica may already
+        # be running a newer one, and it owns the row.
+        tag = await conn.execute(
             """
             UPDATE jobs
             SET status = $1,
@@ -75,7 +88,7 @@ async def finalize_job(
                 error_message = COALESCE($4, error_message),
                 next_attempt_at = NOW() + make_interval(secs => $5),
                 updated_at = NOW()
-            WHERE id = $6
+            WHERE id = $6 AND attempts = $7
             """,
             status,
             json.dumps(result) if result is not None else None,
@@ -83,7 +96,11 @@ async def finalize_job(
             terminal_error,
             float(delay),
             job_id,
+            attempts,
         )
+    if not _rows_updated(tag):
+        logger.info("Job %s: stale attempt %s ignored", job_id, attempts)
+        return "stale"
     return status
 
 
@@ -101,11 +118,12 @@ async def run_claimed_job(job: dict) -> None:
     headers = params.get("headers") or {}
 
     try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            if method == "GET":
-                resp = await client.get(url, headers=headers)
-            else:
-                resp = await client.post(url, json=payload, headers=headers)
+        async with asyncio.timeout(JOB_ATTEMPT_TIMEOUT_SECONDS):
+            async with httpx.AsyncClient(timeout=JOB_ATTEMPT_TIMEOUT_SECONDS) as client:
+                if method == "GET":
+                    resp = await client.get(url, headers=headers)
+                else:
+                    resp = await client.post(url, json=payload, headers=headers)
         try:
             result_data = resp.json()
         except Exception:
