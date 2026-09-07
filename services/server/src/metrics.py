@@ -1,9 +1,14 @@
 """Prometheus metrics for context-forge. One registry, no per-organization labels."""
 from __future__ import annotations
 
+import time
+from typing import Optional
+
 from prometheus_client import CollectorRegistry, Counter, Gauge, generate_latest
 
+from .db import get_pool
 from .mcp.jobs import JOB_STATUSES
+from .migrations.runner import current_version
 
 registry = CollectorRegistry()
 
@@ -46,3 +51,56 @@ for _status in JOB_STATUSES:
 def render_metrics() -> bytes:
     """Render the registry in the Prometheus text exposition format."""
     return generate_latest(registry)
+
+
+_QUEUE_STATS_SQL = """
+SELECT
+    (SELECT COUNT(*) FROM jobs WHERE status = 'pending')  AS jobs_pending,
+    (SELECT COUNT(*) FROM jobs WHERE status = 'running')  AS jobs_running,
+    (SELECT COUNT(*) FROM jobs WHERE status = 'done')     AS jobs_done,
+    (SELECT COUNT(*) FROM jobs WHERE status = 'error')    AS jobs_error,
+    (SELECT COUNT(*) FROM jobs WHERE status = 'dead')     AS jobs_dead,
+    (SELECT COUNT(*) FROM index_requests WHERE processed_at IS NULL)
+        AS index_requests_pending,
+    (SELECT EXTRACT(EPOCH FROM (NOW() - MIN(requested_at)))
+       FROM index_requests WHERE processed_at IS NULL)
+        AS index_requests_oldest_age_seconds,
+    (SELECT COUNT(*) FROM kb_documents WHERE status = 'pending') AS kb_documents_pending,
+    (SELECT COUNT(*) FROM web_pages WHERE status = 'pending')    AS web_pages_pending
+"""
+
+_last_tick: Optional[float] = None
+
+
+async def collect_queue_stats() -> dict[str, float]:
+    """One round-trip snapshot of every processing queue. No per-org breakdown."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(_QUEUE_STATS_SQL)
+    return {key: float(value or 0) for key, value in dict(row).items()}
+
+
+def record_scheduler_tick(now: Optional[float] = None) -> None:
+    """Record a scheduler heartbeat, for the gauge and for /api/health/details."""
+    global _last_tick
+    _last_tick = time.time() if now is None else now
+    scheduler_tick_timestamp_seconds.set(_last_tick)
+
+
+def last_scheduler_tick() -> Optional[float]:
+    return _last_tick
+
+
+async def refresh_metrics() -> None:
+    """Repopulate every gauge from the database and beat the heartbeat."""
+    stats = await collect_queue_stats()
+    for status in JOB_STATUSES:
+        jobs_by_status.labels(status=status).set(stats.get(f"jobs_{status}", 0.0))
+    index_requests_pending.set(stats["index_requests_pending"])
+    index_requests_oldest_age_seconds.set(stats["index_requests_oldest_age_seconds"])
+    kb_documents_pending.set(stats["kb_documents_pending"])
+    web_pages_pending.set(stats["web_pages_pending"])
+
+    pool = await get_pool()
+    schema_version.set(await current_version(pool))
+    record_scheduler_tick()
