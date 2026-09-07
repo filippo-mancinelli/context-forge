@@ -5,13 +5,18 @@ from __future__ import annotations
 class FakeConn:
     """Records every statement; answers fetchval from a scripted queue."""
 
-    def __init__(self, fetchval_results=None, fetch_rows=None, fetchrow_results=None):
+    def __init__(
+        self, fetchval_results=None, fetch_rows=None, fetchrow_results=None, execute_error=None
+    ):
         self.executed: list[tuple[str, tuple]] = []
         self.fetchval_results = list(fetchval_results or [])
         self.fetch_rows = list(fetch_rows or [])
         self.fetchrow_results = list(fetchrow_results or [])
         self.transactions = 0
         self.open_transactions = 0
+        # Optional exception raised by execute() after recording the call, to
+        # exercise callers that must tolerate a failed write.
+        self.execute_error = execute_error
 
     @property
     def sql(self) -> list[str]:
@@ -19,6 +24,8 @@ class FakeConn:
 
     async def execute(self, query, *args, **kwargs):
         self.executed.append((query, args))
+        if self.execute_error is not None:
+            raise self.execute_error
         return "OK"
 
     async def fetchval(self, query, *args, **kwargs):

@@ -95,13 +95,30 @@ def requires_permission(permission: str):
     def decorator(fn):
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
-            perms = _current_permissions.get()
-            if perms is not None and "*" not in perms and permission not in perms:
-                raise ToolError(
-                    f"Access denied: tool requires permission '{permission}'. "
-                    f"Ask an organization admin to grant it in the dashboard's "
-                    f"Organization -> MCP permissions matrix."
-                )
-            return await fn(*args, **kwargs)
+            # Import differito: audit e ratelimit importano da questo modulo.
+            from .audit import audited, summarize_args
+            from .ratelimit import enforce_rate_limit
+
+            async with audited(fn.__name__, permission, summarize_args(kwargs)):
+                perms = _current_permissions.get()
+                if perms is not None and "*" not in perms and permission not in perms:
+                    raise ToolError(
+                        f"Access denied: tool requires permission '{permission}'. "
+                        f"Ask an organization admin to grant it in the dashboard's "
+                        f"Organization -> MCP permissions matrix."
+                    )
+                enforce_rate_limit()
+                return await fn(*args, **kwargs)
         return wrapper
     return decorator
+
+
+def audit_only(fn):
+    """Tool senza permesso dedicato: registrato comunque nell'audit."""
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        from .audit import audited, summarize_args
+
+        async with audited(fn.__name__, None, summarize_args(kwargs)):
+            return await fn(*args, **kwargs)
+    return wrapper
