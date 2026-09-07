@@ -285,10 +285,11 @@ async def ensure_tenant_storage() -> Optional[int]:
     default_org_id = await ensure_default_org()
     if default_org_id is None:
         return None
-    from .db import apply_project_migration, apply_tenant_repo_migration
+    from .db import apply_project_migration, apply_settings_overrides_migration, apply_tenant_repo_migration
 
     await apply_tenant_repo_migration(default_org_id)
     await apply_project_migration()
+    await apply_settings_overrides_migration()
     return default_org_id
 
 
