@@ -163,7 +163,7 @@ The REST API/UI is authenticated after setup (local admin login, or OIDC when `O
 
 Expose the MCP port only behind TLS with `MCP_AUTH_MODE=enabled`. Data-source and SSH credentials are encrypted at rest when `ENCRYPTION_KEY` is set; git and OIDC tokens are never echoed in error messages.
 
-Every MCP tool call is recorded: who called it (OIDC user, API key, or anonymous), the tool, the project, the outcome (`ok`, `denied`, `error`, `rate_limited`), the duration, and a redacted summary of the arguments — secrets, tokens and payloads never reach the log, while audited SQL is kept truncated. Org admins and owners read the trail under **Organization → Tool activity**, with a 24h/7d stats strip and filters by tool, outcome and principal. History is pruned daily according to `MCP_AUDIT_RETENTION_DAYS` (default 90).
+Every MCP tool call is recorded: who called it (OIDC user, API key, or anonymous), the tool, the project, the outcome (`ok`, `denied`, `error`, `rate_limited`), the duration, and a redacted summary of the arguments — credentials, tokens, secrets and payloads are redacted; URLs are stored without userinfo or query strings, while audited SQL is kept truncated. Org admins and owners read the trail under **Organization → Tool activity**, with a 24h/7d stats strip and filters by tool, outcome and principal. History is pruned daily according to `MCP_AUDIT_RETENTION_DAYS` (default 90).
 
 ### MCP permissions
 

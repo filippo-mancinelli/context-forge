@@ -324,3 +324,53 @@ def test_audit_only_records_ungated_tool():
     assert row["tool"] == "current_project"
     assert row["permission"] is None
     assert row["outcome"] == "ok"
+
+
+def test_scrub_url_drops_userinfo_query_and_fragment():
+    assert audit.scrub_url("https://user:pat@host/p?x=1#f") == "https://host/p"
+
+
+def test_scrub_url_keeps_the_port_and_the_path():
+    assert audit.scrub_url("http://git.local:8443/a/b.git?token=t") == "http://git.local:8443/a/b.git"
+
+
+def test_scrub_url_leaves_a_non_url_string_alone():
+    assert audit.scrub_url("just a sentence") == "just a sentence"
+
+
+def test_summarize_args_scrubs_url_keys():
+    out = audit.summarize_args(
+        {"repo_url": "https://x-token:ghp_secret@github.com/acme/app.git?a=1",
+         "endpoint": "https://u:p@api.local:9000/v1#frag"}
+    )
+    assert out == {
+        "repo_url": "https://github.com/acme/app.git",
+        "endpoint": "https://api.local:9000/v1",
+    }
+
+
+def test_summarize_args_scrubs_a_url_embedded_in_a_plain_string():
+    out = audit.summarize_args({"message": "cloning https://u:ghp_x@github.com/a/b.git?t=1 now"})
+    assert out["message"] == "cloning https://github.com/a/b.git now"
+
+
+def test_scrub_text_rewrites_every_url_in_a_message():
+    text = "fatal: could not read from https://tok:x@a.io/r.git and ssh://u:p@b.io/z"
+    assert audit.scrub_text(text) == (
+        "fatal: could not read from https://a.io/r.git and ssh://b.io/z"
+    )
+
+
+def test_record_call_scrubs_the_error_text():
+    _drain()
+
+    async def scenario():
+        await audit.record_call(
+            tool="repo_clone", permission="repo-write", outcome="error", duration_ms=3,
+            error="remote: Invalid credentials for https://x:ghp_secret@github.com/a/b.git?y=2",
+        )
+
+    asyncio.run(scenario())
+    row = _drain()[0]
+    assert "ghp_secret" not in row["error"]
+    assert row["error"].endswith("https://github.com/a/b.git")
