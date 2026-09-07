@@ -53,13 +53,15 @@ def render_metrics() -> bytes:
     return generate_latest(registry)
 
 
+# Job counts are scoped to tool = 'http' like the executor: 'org_reembed' rows
+# have their own producer and their own status vocabulary.
 _QUEUE_STATS_SQL = """
 SELECT
-    (SELECT COUNT(*) FROM jobs WHERE status = 'pending')  AS jobs_pending,
-    (SELECT COUNT(*) FROM jobs WHERE status = 'running')  AS jobs_running,
-    (SELECT COUNT(*) FROM jobs WHERE status = 'done')     AS jobs_done,
-    (SELECT COUNT(*) FROM jobs WHERE status = 'error')    AS jobs_error,
-    (SELECT COUNT(*) FROM jobs WHERE status = 'dead')     AS jobs_dead,
+    (SELECT COUNT(*) FROM jobs WHERE tool = 'http' AND status = 'pending')  AS jobs_pending,
+    (SELECT COUNT(*) FROM jobs WHERE tool = 'http' AND status = 'running')  AS jobs_running,
+    (SELECT COUNT(*) FROM jobs WHERE tool = 'http' AND status = 'done')     AS jobs_done,
+    (SELECT COUNT(*) FROM jobs WHERE tool = 'http' AND status = 'error')    AS jobs_error,
+    (SELECT COUNT(*) FROM jobs WHERE tool = 'http' AND status = 'dead')     AS jobs_dead,
     (SELECT COUNT(*) FROM index_requests WHERE processed_at IS NULL)
         AS index_requests_pending,
     (SELECT EXTRACT(EPOCH FROM (NOW() - MIN(requested_at)))

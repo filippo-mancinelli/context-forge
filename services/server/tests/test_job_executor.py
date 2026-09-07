@@ -2,6 +2,7 @@
 import asyncio
 import inspect
 import json
+import logging
 
 import httpx
 import pytest
@@ -227,21 +228,37 @@ def test_run_claimed_job_classifies_a_404_as_permanent_error(monkeypatch):
 
 # ── _check_jobs ───────────────────────────────────────────────────────────────
 
-def test_check_jobs_resets_stuck_running_rows_then_claims(monkeypatch):
+def test_check_jobs_claims_only_due_http_rows(monkeypatch):
     conn = FakeConn(fetch_rows=[])
     _wire_pool(monkeypatch, scheduler, conn)
 
     asyncio.run(scheduler._check_jobs())
 
-    reset_sql = conn.executed[0][0]
-    assert "status = 'running'" in reset_sql
-    assert "status = 'pending'" in reset_sql
-    assert "10 minutes" in reset_sql
     claim_sql = conn.fetched[0][0]
     assert "FOR UPDATE SKIP LOCKED" in claim_sql
     assert "attempts = attempts + 1" in claim_sql
     assert "next_attempt_at <= NOW()" in claim_sql
-    assert "LIMIT 5" in claim_sql
+    assert f"LIMIT {scheduler._JOB_CLAIM_BATCH}" in claim_sql
+    assert "tool = 'http'" in claim_sql
+
+
+def test_check_jobs_skips_rows_that_exhausted_their_attempts(monkeypatch):
+    conn = FakeConn(fetch_rows=[])
+    _wire_pool(monkeypatch, scheduler, conn)
+
+    asyncio.run(scheduler._check_jobs())
+
+    assert "attempts < max_attempts" in conn.fetched[0][0]
+
+
+def test_check_jobs_no_longer_resets_stuck_rows(monkeypatch):
+    """The reset moved to the maintenance tick, which a long job cannot block."""
+    conn = FakeConn(fetch_rows=[])
+    _wire_pool(monkeypatch, scheduler, conn)
+
+    asyncio.run(scheduler._check_jobs())
+
+    assert conn.executed == []
 
 
 def test_check_jobs_runs_every_claimed_row(monkeypatch):
@@ -280,8 +297,111 @@ def test_check_jobs_survives_one_failing_job(monkeypatch):
     assert ran == ["j2"]
 
 
-def test_scheduler_registers_the_jobs_tick_every_five_seconds():
+def test_check_jobs_logs_the_id_of_a_job_that_raised(monkeypatch, caplog):
+    rows = [{"id": "j1", "params": {}, "attempts": 1, "max_attempts": 3}]
+    _wire_pool(monkeypatch, scheduler, FakeConn(fetch_rows=rows))
+
+    async def fake_run(job):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(scheduler, "run_claimed_job", fake_run)
+    with caplog.at_level(logging.WARNING, logger="src.scheduler"):
+        asyncio.run(scheduler._check_jobs())
+
+    assert "j1" in caplog.text
+    assert "boom" in caplog.text
+
+
+# maintenance tick
+
+def test_maintain_jobs_resets_only_stuck_http_rows(monkeypatch):
+    conn = FakeConn()
+    _wire_pool(monkeypatch, scheduler, conn)
+
+    asyncio.run(scheduler._maintain_jobs())
+
+    reset_sql = conn.executed[0][0]
+    assert "status = 'running'" in reset_sql
+    assert "status = 'pending'" in reset_sql
+    assert f"{scheduler._JOB_STUCK_MINUTES} minutes" in reset_sql
+    assert "tool = 'http'" in reset_sql
+
+
+def test_maintain_jobs_dead_letters_rows_past_max_attempts(monkeypatch):
+    conn = FakeConn()
+    _wire_pool(monkeypatch, scheduler, conn)
+
+    asyncio.run(scheduler._maintain_jobs())
+
+    sweep_sql = conn.executed[1][0]
+    assert "status = 'dead'" in sweep_sql
+    assert "status = 'pending'" in sweep_sql
+    assert "attempts >= max_attempts" in sweep_sql
+    assert "COALESCE(error_message, last_error, 'exceeded max_attempts')" in sweep_sql
+    assert "tool = 'http'" in sweep_sql
+
+
+def test_a_stuck_org_reembed_row_is_neither_reset_nor_claimed(monkeypatch):
+    """`org_reembed` rows are driven by src/reembed.py and never refresh updated_at."""
+    conn = FakeConn(fetch_rows=[])
+    _wire_pool(monkeypatch, scheduler, conn)
+
+    asyncio.run(scheduler._maintain_jobs())
+    asyncio.run(scheduler._check_jobs())
+
+    statements = [sql for sql, _a in conn.executed] + [sql for sql, _a in conn.fetched]
+    assert len(statements) == 3
+    for sql in statements:
+        assert "tool = 'http'" in sql
+
+
+# a database outage degrades to one warning line
+
+def _wire_broken_pool(monkeypatch, module):
+    async def fake_pool():
+        raise RuntimeError("database is down")
+
+    monkeypatch.setattr(module, "get_pool", fake_pool)
+
+
+@pytest.mark.parametrize("tick", ["_check_jobs", "_maintain_jobs"])
+def test_a_job_tick_logs_one_warning_when_the_database_is_down(monkeypatch, caplog, tick):
+    _wire_broken_pool(monkeypatch, scheduler)
+
+    with caplog.at_level(logging.WARNING, logger="src.scheduler"):
+        asyncio.run(getattr(scheduler, tick)())
+
+    assert len(caplog.records) == 1
+    assert caplog.records[0].levelno == logging.WARNING
+    assert caplog.records[0].exc_info is None
+    assert "database is down" in caplog.text
+
+
+def test_the_metrics_tick_logs_one_warning_when_the_refresh_fails(monkeypatch, caplog):
+    async def broken_refresh():
+        raise RuntimeError("database is down")
+
+    monkeypatch.setattr(scheduler, "refresh_metrics", broken_refresh)
+    with caplog.at_level(logging.WARNING, logger="src.scheduler"):
+        asyncio.run(scheduler._refresh_metrics())
+
+    assert len(caplog.records) == 1
+    assert caplog.records[0].exc_info is None
+
+
+def test_scheduler_registers_the_executor_and_maintenance_ticks():
     source = inspect.getsource(scheduler.start_scheduler)
     assert "_check_jobs" in source
     assert 'id="jobs"' in source
     assert "seconds=5" in source
+    assert "_maintain_jobs" in source
+    assert 'id="jobs_maintenance"' in source
+    assert "seconds=60" in source
+
+
+@pytest.mark.parametrize(
+    "option", ["max_instances=1", "coalesce=True", "misfire_grace_time=None"]
+)
+def test_both_job_ticks_declare_their_back_pressure_options(option):
+    source = inspect.getsource(scheduler.start_scheduler)
+    assert source.count(option) >= 2, option
