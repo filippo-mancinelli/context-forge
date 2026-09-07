@@ -153,3 +153,38 @@ def test_settings_save_with_a_dimension_change_leaves_it_to_the_reembed(monkeypa
 
     asyncio.run(run())
     assert calls == []
+
+
+def test_scheduler_registers_the_hnsw_self_healing_job(monkeypatch):
+    """An interval job repairs indexes left invalid by an interrupted build."""
+    from src import scheduler as scheduler_module
+    from src.vector_index import ensure_all_indexes
+
+    jobs = []
+
+    class FakeScheduler:
+        def add_job(self, func, trigger=None, **kwargs):
+            jobs.append((func, trigger, kwargs))
+
+        def start(self):
+            pass
+
+        def get_jobs(self):
+            return []
+
+    async def no_sync():
+        pass
+
+    monkeypatch.setattr(scheduler_module, "_scheduler", None)
+    monkeypatch.setattr(scheduler_module, "AsyncIOScheduler", FakeScheduler)
+    monkeypatch.setattr(scheduler_module, "sync_scheduler_jobs", no_sync)
+
+    asyncio.run(scheduler_module.start_scheduler())
+
+    registered = [j for j in jobs if j[2].get("id") == "hnsw_indexes"]
+    assert len(registered) == 1
+    func, trigger, kwargs = registered[0]
+    assert func is ensure_all_indexes
+    assert trigger == "interval"
+    assert kwargs["hours"] == 6
+    assert kwargs["replace_existing"] is True

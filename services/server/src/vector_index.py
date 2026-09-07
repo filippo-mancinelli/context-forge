@@ -68,6 +68,22 @@ _STALE_INDEX_SQL = (
 )
 
 
+# An interrupted CONCURRENTLY build leaves an INVALID index that CREATE INDEX
+# IF NOT EXISTS would then skip forever: indisvalid is the only success signal.
+_INDEX_VALID_SQL = (
+    "SELECT i.indisvalid FROM pg_index i "
+    "JOIN pg_class c ON c.oid = i.indexrelid "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+    "WHERE c.relname = $1 AND n.nspname = ANY(current_schemas(false))"
+)
+
+
+async def _index_validity(conn, name: str) -> bool | None:
+    """``indisvalid`` of the index, or None when it does not exist."""
+    rows = await conn.fetch(_INDEX_VALID_SQL, name)
+    return bool(rows[0]["indisvalid"]) if rows else None
+
+
 def _like_pattern(table: str, org_id: int) -> str:
     """Index-name pattern for one organization, with every literal '_' escaped."""
     return f"{table}_emb_hnsw_org{int(org_id)}_d".replace("_", r"\_") + "%"
@@ -104,8 +120,35 @@ async def _drop_stale_indexes(conn, table: str, org_id: int, keep: str) -> None:
             logger.exception("HNSW stale index drop failed: %s", target)
 
 
+async def _close(conn, org_id: int) -> None:
+    try:
+        await conn.close()
+    except Exception:
+        logger.exception("HNSW maintenance connection close failed (org=%s)", org_id)
+
+
+async def _build_index(conn, table: str, org_id: int, dims: int) -> bool:
+    """Rebuild an invalid leftover, create the index, report whether it is valid."""
+    name = index_name(table, org_id, dims)
+    try:
+        if await _index_validity(conn, name) is False:
+            logger.warning("Dropping INVALID HNSW index before rebuild: %s", name)
+            await conn.execute(drop_index_sql(name))
+        await conn.execute(create_index_sql(table, org_id, dims))
+        if await _index_validity(conn, name):
+            return True
+        logger.warning("HNSW index is not valid after the build: %s", name)
+    except Exception:
+        logger.exception("HNSW index build failed: %s", name)
+    return False
+
+
 async def ensure_org_indexes(org_id: int, dims: int) -> list[str]:
-    """Create the org's HNSW indexes and drop those of another dimension."""
+    """Create the org's HNSW indexes and drop those of another dimension.
+
+    Returns the names that are valid after the run: a build that was cancelled
+    or left the index INVALID is reported as missing, not as created.
+    """
     created: list[str] = []
     try:
         conn = await _maintenance_connection()
@@ -117,20 +160,33 @@ async def ensure_org_indexes(org_id: int, dims: int) -> list[str]:
         await conn.execute(f"SET maintenance_work_mem = '{_maintenance_work_mem()}'")
         for table in HNSW_TABLES:
             name = index_name(table, org_id, dims)
-            try:
-                await conn.execute(create_index_sql(table, org_id, dims))
+            if await _build_index(conn, table, org_id, dims):
                 created.append(name)
-            except Exception:
-                logger.exception("HNSW index build failed: %s", name)
             await _drop_stale_indexes(conn, table, org_id, name)
     except Exception:
         logger.exception("HNSW index maintenance failed (org=%s)", org_id)
     finally:
-        try:
-            await conn.close()
-        except Exception:
-            logger.exception("HNSW maintenance connection close failed (org=%s)", org_id)
+        await _close(conn, org_id)
     return created
+
+
+async def hnsw_indexes_valid(org_id: int, dims: int) -> dict[str, bool]:
+    """Per-table validity of the org's HNSW indexes; a missing one counts false."""
+    result: dict[str, bool] = {}
+    try:
+        conn = await _maintenance_connection()
+    except Exception:
+        logger.exception("HNSW index check: no connection (org=%s)", org_id)
+        return result
+    try:
+        for table in HNSW_TABLES:
+            name = index_name(table, org_id, dims)
+            result[name] = bool(await _index_validity(conn, name))
+    except Exception:
+        logger.exception("HNSW index check failed (org=%s)", org_id)
+    finally:
+        await _close(conn, org_id)
+    return result
 
 
 async def ensure_all_indexes() -> None:
