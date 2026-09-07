@@ -1,24 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Plus, Trash2, X } from 'lucide-react'
 import { api, type Memory as MemoryItem } from '../lib/api'
-import { Badge, Button, Input, Select, Textarea, useConfirm, useToast } from '../components/ui'
+import { Badge, Banner, Button, Card, Input, Select, Textarea, useConfirm, useToast } from '../components/ui'
 
 const FETCH_LIMIT = 500
 const UNTYPED = 'untyped'
 
-function parseMetadataInput(value: string): Record<string, unknown> | undefined {
-  const trimmed = value.trim()
-  if (!trimmed) return undefined
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(trimmed)
-  } catch {
-    throw new Error('Metadata must be valid JSON.')
-  }
-  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
-    throw new Error('Metadata JSON must be an object.')
-  }
-  return parsed as Record<string, unknown>
+function parseTagsInput(value: string): string[] {
+  return [...new Set(value.split(',').map(t => t.trim()).filter(Boolean))]
 }
 
 function formatDate(iso?: string) {
@@ -63,7 +52,7 @@ function MemoryRow({ memory, onDelete }: { memory: MemoryItem; onDelete: (id: st
   }
 
   return (
-    <tr style={{ borderBottom: '1px solid var(--border)' }} className="last:border-b-0 group">
+    <tr className="border-b border-border last:border-b-0 group">
       <td className="py-3 px-4 align-top min-w-0">
         <p className="text-sm break-words">{memory.memory}</p>
         {(type !== UNTYPED || tags.length > 0 || extra.length > 0) && (
@@ -111,7 +100,8 @@ export default function Memory() {
   const [pageError, setPageError] = useState<string | null>(null)
   const [showAddForm, setShowAddForm] = useState(false)
   const [content, setContent] = useState('')
-  const [metadataInput, setMetadataInput] = useState('')
+  const [typeInput, setTypeInput] = useState('')
+  const [tagsInput, setTagsInput] = useState('')
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const [createSuccess, setCreateSuccess] = useState(false)
@@ -178,20 +168,23 @@ export default function Memory() {
       setCreateError('Write the memory content before saving.')
       return
     }
-    let metadata: Record<string, unknown> | undefined
-    try {
-      metadata = parseMetadataInput(metadataInput)
-    } catch (e) {
-      setCreateError(e instanceof Error ? e.message : String(e))
-      return
-    }
+    const metadata: Record<string, unknown> = {}
+    const type = typeInput.trim()
+    if (type) metadata.type = type
+    const tags = parseTagsInput(tagsInput)
+    if (tags.length > 0) metadata.tags = tags
     setCreating(true)
     setCreateError(null)
     setCreateSuccess(false)
     try {
-      await api.memory.create({ content: trimmedContent, metadata, infer: false })
+      await api.memory.create({
+        content: trimmedContent,
+        metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+        infer: false,
+      })
       setContent('')
-      setMetadataInput('')
+      setTypeInput('')
+      setTagsInput('')
       setQuery('')
       setIsSearchMode(false)
       setCreateSuccess(true)
@@ -219,6 +212,15 @@ export default function Memory() {
     ]
   }, [memories])
 
+  const knownTypes = useMemo(() => {
+    const types = new Set<string>()
+    for (const m of memories) {
+      const type = getType(m)
+      if (type !== UNTYPED) types.add(type)
+    }
+    return [...types].sort()
+  }, [memories])
+
   const allTags = useMemo(() => {
     const counts = new Map<string, number>()
     for (const m of memories) {
@@ -228,6 +230,12 @@ export default function Memory() {
     }
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([tag]) => tag)
   }, [memories])
+
+  const toggleFormTag = (tag: string) => {
+    const tags = parseTagsInput(tagsInput)
+    const next = tags.includes(tag) ? tags.filter(t => t !== tag) : [...tags, tag]
+    setTagsInput(next.join(', '))
+  }
 
   const toggleTag = (tag: string) => {
     setTagFilter(prev => {
@@ -275,18 +283,11 @@ export default function Memory() {
           </Button>
         </div>
 
-        {pageError && (
-          <div
-            style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
-            className="text-sm p-3 mb-4 bg-[#fef2f2]"
-          >
-            {pageError}
-          </div>
-        )}
+        {pageError && <Banner variant="danger" className="mb-4">{pageError}</Banner>}
 
         {/* Add memory form */}
         {showAddForm && (
-          <section style={{ border: '1px solid var(--border)' }} className="mb-6 p-4">
+          <section className="border border-border mb-6 p-4">
             <h2 className="text-base font-semibold mb-4">Add memory</h2>
             <form onSubmit={handleCreate} className="space-y-3">
               <Textarea
@@ -296,16 +297,44 @@ export default function Memory() {
                 rows={4}
                 placeholder="The billing service now reads provider tokens from runtime settings."
               />
-              <Textarea
-                label="Metadata JSON (optional)"
-                value={metadataInput}
-                onChange={e => setMetadataInput(e.target.value)}
-                rows={2}
-                placeholder='{"type":"decision","tags":["billing"]}'
-                className="font-mono text-xs"
-              />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <Input
+                    label="Type (optional)"
+                    value={typeInput}
+                    onChange={e => setTypeInput(e.target.value)}
+                    placeholder="decision"
+                    list="memory-type-suggestions"
+                  />
+                  <datalist id="memory-type-suggestions">
+                    {knownTypes.map(type => (
+                      <option key={type} value={type} />
+                    ))}
+                  </datalist>
+                </div>
+                <Input
+                  label="Tags (optional, comma-separated)"
+                  value={tagsInput}
+                  onChange={e => setTagsInput(e.target.value)}
+                  placeholder="billing, backend"
+                />
+              </div>
+              {allTags.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {allTags.map(tag => {
+                    const selected = parseTagsInput(tagsInput).includes(tag)
+                    return (
+                      <button key={tag} type="button" onClick={() => toggleFormTag(tag)}>
+                        <Badge variant={selected ? 'accent' : 'muted'} className={selected ? 'ring-1 ring-accent' : ''}>
+                          {tag}
+                        </Badge>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
               {createError && (
-                <p style={{ color: 'var(--danger)' }} className="text-sm">{createError}</p>
+                <p className="text-sm text-danger">{createError}</p>
               )}
               {createSuccess && (
                 <p style={{ color: 'var(--success)' }} className="text-sm">Memory saved.</p>
@@ -400,7 +429,7 @@ export default function Memory() {
             {isSearchMode ? 'No memories match your query.' : filtersActive ? 'No memories match these filters.' : 'No memories stored yet.'}
           </p>
         ) : (
-          <div style={{ border: '1px solid var(--border)' }} className="overflow-x-auto max-w-5xl">
+          <Card className="overflow-x-auto max-w-5xl">
             <table className="w-full">
               <tbody>
                 {visibleMemories.map(memory => (
@@ -408,7 +437,7 @@ export default function Memory() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </Card>
         )}
       </div>
     </div>

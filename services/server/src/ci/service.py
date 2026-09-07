@@ -10,12 +10,11 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any, Optional
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 
 import httpx
 
-from ..config import get_settings
-from ..org_config import get_org_config
+from ..git_providers import GitProviderError, provider_headers, resolve_repo
 
 logger = logging.getLogger(__name__)
 
@@ -35,40 +34,13 @@ def _tail(text: str, max_chars: int = LOG_TAIL_CHARS) -> str:
 
 
 async def _resolve_repo(org_id: int, repo_name: str) -> dict[str, Any]:
-    cfg = await get_org_config(org_id)
-    repo = next((r for r in cfg.repos if r.name == repo_name), None)
-    if repo is None:
-        raise CiError(f"Repository '{repo_name}' not found")
-    if repo.type not in ("github", "gitlab") or not repo.url:
-        raise CiError(
-            f"Repository '{repo_name}' has no CI provider (type '{repo.type}'); "
-            "only github/gitlab repos with a URL are supported"
-        )
-    settings = get_settings()
-    token = repo.token or (settings.github_token if repo.type == "github" else settings.gitlab_token)
-    parsed = urlparse(repo.url)
-    project_path = parsed.path.strip("/").removesuffix(".git")
-    if not project_path:
-        raise CiError(f"Cannot derive project path from URL '{repo.url}'")
-    return {
-        "provider": repo.type,
-        "project_path": project_path,
-        # Self-hosted GitLab instances live on their own host; GitHub is fixed.
-        "api_base": "https://api.github.com" if repo.type == "github"
-        else f"{parsed.scheme}://{parsed.netloc}/api/v4",
-        "token": token,
-    }
+    try:
+        return await resolve_repo(org_id, repo_name)
+    except GitProviderError as e:
+        raise CiError(str(e)) from e
 
 
-def _headers(target: dict[str, Any]) -> dict[str, str]:
-    headers = {"Accept": "application/json"}
-    if target["token"]:
-        if target["provider"] == "github":
-            headers["Authorization"] = f"Bearer {target['token']}"
-            headers["Accept"] = "application/vnd.github+json"
-        else:
-            headers["PRIVATE-TOKEN"] = target["token"]
-    return headers
+_headers = provider_headers
 
 
 # --------------------------------------------------------------------------- #

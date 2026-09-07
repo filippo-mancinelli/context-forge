@@ -14,20 +14,21 @@ from .routes import chat as chat_routes
 from .routes import chat_sessions as chat_sessions_routes
 from .routes import jobs as jobs_routes
 from .routes import setup as setup_routes
+from .routes import config as config_routes
 from .routes import auth as auth_routes
 from .routes import settings as settings_routes
 from .routes import github as github_routes
 from .routes import gitlab as gitlab_routes
 from .routes import mcp_keys as mcp_keys_routes
-from .routes import oauth as oauth_routes
 from .routes import organizations as organizations_routes
-from .routes import invitations as invitations_routes
 from .routes import webhooks as webhooks_routes
 from .routes import datasources as datasources_routes
+from .routes import ssh_sources as ssh_sources_routes
 from .routes import contracts as contracts_routes
 from .routes import ci as ci_routes
 from .routes import telegram as telegram_routes
 from .routes import environments as environments_routes
+from .routes import projects as projects_routes
 
 api = FastAPI(
     title="context-forge API",
@@ -79,20 +80,21 @@ api.include_router(chat_sessions_routes.public_router, prefix="/api")
 api.include_router(chat_routes.router, prefix="/api")
 api.include_router(jobs_routes.router, prefix="/api")
 api.include_router(setup_routes.router, prefix="/api")
+api.include_router(config_routes.router, prefix="/api")
 api.include_router(auth_routes.router, prefix="/api")
 api.include_router(settings_routes.router, prefix="/api")
 api.include_router(github_routes.router, prefix="/api")
 api.include_router(gitlab_routes.router, prefix="/api")
 api.include_router(mcp_keys_routes.router, prefix="/api")
-api.include_router(oauth_routes.router, prefix="/api")
 api.include_router(organizations_routes.router, prefix="/api")
-api.include_router(invitations_routes.router, prefix="/api")
 api.include_router(webhooks_routes.router, prefix="/api")
 api.include_router(datasources_routes.router, prefix="/api")
+api.include_router(ssh_sources_routes.router, prefix="/api")
 api.include_router(contracts_routes.router, prefix="/api")
 api.include_router(ci_routes.router, prefix="/api")
 api.include_router(telegram_routes.router, prefix="/api")
 api.include_router(environments_routes.router, prefix="/api")
+api.include_router(projects_routes.router, prefix="/api")
 
 
 @api.middleware("http")
@@ -107,10 +109,9 @@ async def auth_guard(request, call_next):
     open_paths = (
         "/api/health",
         "/api/setup",
+        "/api/config",  # public, non-sensitive runtime config for the UI
         "/api/auth",
         "/api/mcp/keys/validate",
-        "/api/oauth",
-        "/api/invitations",  # public invite preview/accept
         "/api/webhooks",     # external git hooks; authenticated by shared secret
         "/api/chat/shared",  # public chat snapshots; authorized by share token
         "/api/telegram/webhook",  # Telegram webhook only; authenticated by Telegram's own secret token.

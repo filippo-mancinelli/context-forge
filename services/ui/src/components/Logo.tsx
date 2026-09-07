@@ -21,7 +21,7 @@ export function LogoMark({ size = 20 }: { size?: number }) {
 // Full lockup: mark + "ContextForge" wordmark in Space Grotesk (Context 500 / Forge 700).
 export function Logo({ size = 20 }: { size?: number }) {
   return (
-    <span className="inline-flex items-center gap-2 text-text">
+    <span className="inline-flex items-center gap-2">
       <LogoMark size={size} />
       <span
         style={{

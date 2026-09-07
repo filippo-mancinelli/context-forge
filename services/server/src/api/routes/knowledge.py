@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from ...db import get_pool
 from ...kb import store
 from ...kb.extract import SUPPORTED_EXTENSIONS, is_supported
-from ..deps import ActiveOrg, get_active_org, require_role
+from ..deps import ActiveProject, get_active_project, require_project_role
 
 router = APIRouter(prefix="/kb", tags=["knowledge-base"])
 
@@ -68,32 +68,35 @@ _DOC_COLUMNS = (
 
 
 @router.get("/formats")
-async def supported_formats(_: ActiveOrg = Depends(get_active_org)):
+async def supported_formats(_: ActiveProject = Depends(get_active_project)):
     """List the file extensions the knowledge base can ingest."""
     return {"extensions": sorted(SUPPORTED_EXTENSIONS)}
 
 
 @router.get("/documents", response_model=list[KbDocumentOut])
-async def list_documents(org: ActiveOrg = Depends(get_active_org)):
-    """List all knowledge-base documents for the active organization."""
+async def list_documents(org: ActiveProject = Depends(get_active_project)):
+    """List all knowledge-base documents for the active project."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            f"SELECT {_DOC_COLUMNS} FROM kb_documents WHERE org_id=$1 ORDER BY uploaded_at DESC",
+            f"SELECT {_DOC_COLUMNS} FROM kb_documents WHERE org_id=$1 AND project_id=$2 "
+            "ORDER BY uploaded_at DESC",
             org.org_id,
+            org.project_id,
         )
     return [_row_to_out(r) for r in rows]
 
 
 @router.get("/documents/{doc_id}", response_model=KbDocumentOut)
-async def get_document(doc_id: int, org: ActiveOrg = Depends(get_active_org)):
+async def get_document(doc_id: int, org: ActiveProject = Depends(get_active_project)):
     """Get a single knowledge-base document's metadata and status."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            f"SELECT {_DOC_COLUMNS} FROM kb_documents WHERE id=$1 AND org_id=$2",
+            f"SELECT {_DOC_COLUMNS} FROM kb_documents WHERE id=$1 AND org_id=$2 AND project_id=$3",
             doc_id,
             org.org_id,
+            org.project_id,
         )
     if row is None:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -102,13 +105,16 @@ async def get_document(doc_id: int, org: ActiveOrg = Depends(get_active_org)):
 
 @router.get("/documents/{doc_id}/chunks")
 async def get_document_chunks(
-    doc_id: int, limit: int = 50, org: ActiveOrg = Depends(get_active_org)
+    doc_id: int, limit: int = 50, org: ActiveProject = Depends(get_active_project)
 ):
     """Return a document's extracted text chunks (for previewing content)."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         exists = await conn.fetchval(
-            "SELECT 1 FROM kb_documents WHERE id=$1 AND org_id=$2", doc_id, org.org_id
+            "SELECT 1 FROM kb_documents WHERE id=$1 AND org_id=$2 AND project_id=$3",
+            doc_id,
+            org.org_id,
+            org.project_id,
         )
         if not exists:
             raise HTTPException(status_code=404, detail="Document not found")
@@ -126,14 +132,16 @@ async def get_document_chunks(
 
 
 @router.get("/documents/{doc_id}/download")
-async def download_document(doc_id: int, org: ActiveOrg = Depends(get_active_org)):
+async def download_document(doc_id: int, org: ActiveProject = Depends(get_active_project)):
     """Download the original uploaded file."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT filename, content_type, stored_path FROM kb_documents WHERE id=$1 AND org_id=$2",
+            "SELECT filename, content_type, stored_path FROM kb_documents "
+            "WHERE id=$1 AND org_id=$2 AND project_id=$3",
             doc_id,
             org.org_id,
+            org.project_id,
         )
     if row is None:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -151,7 +159,7 @@ async def download_document(doc_id: int, org: ActiveOrg = Depends(get_active_org
 async def upload_documents(
     background_tasks: BackgroundTasks,
     files: list[UploadFile] = File(...),
-    org: ActiveOrg = Depends(require_role("member")),
+    org: ActiveProject = Depends(require_project_role("member")),
 ):
     """Upload one or more documents to the knowledge base.
 
@@ -181,7 +189,7 @@ async def upload_documents(
             rejected.append({"filename": filename, "reason": "Unsupported file type"})
             continue
 
-        record = await store.save_upload(org.org_id, filename, data)
+        record = await store.save_upload(org.org_id, org.project_id, filename, data)
         created.append(record)
         # Kick off immediate processing; the scheduler is a safety-net for the rest.
         background_tasks.add_task(store.process_document, record["id"])
@@ -204,7 +212,7 @@ class KbTextRequest(BaseModel):
 async def add_text_document(
     req: KbTextRequest,
     background_tasks: BackgroundTasks,
-    org: ActiveOrg = Depends(require_role("member")),
+    org: ActiveProject = Depends(require_project_role("member")),
 ):
     """Add a knowledge-base document from typed/pasted text instead of a file upload.
 
@@ -223,7 +231,7 @@ async def add_text_document(
     title = req.title.strip() or "Untitled note"
     filename = f"{title}.md"
 
-    record = await store.save_upload(org.org_id, filename, data)
+    record = await store.save_upload(org.org_id, org.project_id, filename, data)
     background_tasks.add_task(store.process_document, record["id"])
     return {"status": "ok", "created": record}
 
@@ -232,16 +240,17 @@ async def add_text_document(
 async def reprocess_document(
     doc_id: int,
     background_tasks: BackgroundTasks,
-    org: ActiveOrg = Depends(require_role("member")),
+    org: ActiveProject = Depends(require_project_role("member")),
 ):
     """Re-run extraction and embedding for a document (e.g. after a failure)."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         updated = await conn.fetchval(
             "UPDATE kb_documents SET status='pending', error_message=NULL "
-            "WHERE id=$1 AND org_id=$2 RETURNING id",
+            "WHERE id=$1 AND org_id=$2 AND project_id=$3 RETURNING id",
             doc_id,
             org.org_id,
+            org.project_id,
         )
     if updated is None:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -250,9 +259,9 @@ async def reprocess_document(
 
 
 @router.delete("/documents/{doc_id}")
-async def delete_document(doc_id: int, org: ActiveOrg = Depends(require_role("member"))):
+async def delete_document(doc_id: int, org: ActiveProject = Depends(require_project_role("member"))):
     """Delete a document, its chunks, and its stored file."""
-    ok = await store.delete_document(org.org_id, doc_id)
+    ok = await store.delete_document(org.org_id, org.project_id, doc_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Document not found")
     return {"status": "ok", "deleted": doc_id}
@@ -265,13 +274,13 @@ class KbSearchRequest(BaseModel):
 
 
 @router.post("/search")
-async def search_kb(req: KbSearchRequest, org: ActiveOrg = Depends(get_active_org)):
-    """Semantic search across the active organization's knowledge base."""
+async def search_kb(req: KbSearchRequest, org: ActiveProject = Depends(get_active_project)):
+    """Semantic search across the active project's knowledge base."""
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query must not be empty")
     try:
         results = await store.search_documents(
-            org.org_id, req.query.strip(), limit=req.limit, document_ids=req.document_ids
+            org.org_id, org.project_id, req.query.strip(), limit=req.limit, document_ids=req.document_ids
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {e}")

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ChevronRight, ExternalLink, FileCode2, Folder } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { api, type CiFailureDetail, type CiRun, type RepoSearchResult, type RepoStats } from '../lib/api'
-import { Button, Input, Badge } from '../components/ui'
+import { Banner, Button, Card, Input, Badge } from '../components/ui'
 
 function formatBytes(bytes?: number) {
   if (!bytes) return '—'
@@ -55,11 +55,8 @@ function CiSection({ repoName }: { repoName: string }) {
   const hasFailure = runs.some((r) => r.conclusion === 'failure' || r.conclusion === 'failed')
 
   return (
-    <section style={{ border: '1px solid var(--border)' }} className="mt-6">
-      <div
-        style={{ borderBottom: '1px solid var(--border)' }}
-        className="px-4 py-2.5 flex items-center justify-between bg-surface"
-      >
+    <section className="border border-border mt-6">
+      <div className="border-b border-border px-4 py-2.5 flex items-center justify-between bg-surface">
         <span className="text-sm font-medium">CI / CD</span>
         {hasFailure && (
           <Button size="sm" variant="secondary" loading={inspecting} onClick={() => inspect()}>
@@ -104,7 +101,7 @@ function CiSection({ repoName }: { repoName: string }) {
           <p className="text-sm text-muted">{failure.message}</p>
         )}
         {failure?.found && failure.failed_jobs && (
-          <div style={{ borderTop: '1px solid var(--border)' }} className="pt-3 space-y-3">
+          <div className="border-t border-border pt-3 space-y-3">
             <p className="text-sm">
               Failure in <span className="font-medium">{failure.run?.name}</span>{' '}
               <code className="font-mono text-xs text-muted">
@@ -112,23 +109,17 @@ function CiSection({ repoName }: { repoName: string }) {
               </code>
             </p>
             {failure.failed_jobs.map((job, i) => (
-              <div key={i} style={{ border: '1px solid var(--border)' }}>
-                <div
-                  style={{ borderBottom: '1px solid var(--border)' }}
-                  className="px-3 py-2 bg-surface text-xs"
-                >
+              <Card key={i}>
+                <div className="border-b border-border px-3 py-2 bg-surface text-xs">
                   <span className="font-medium">{job.name}</span>
                   {job.failed_steps.length > 0 && (
                     <span className="text-danger"> — failed: {job.failed_steps.join(', ')}</span>
                   )}
                 </div>
-                <pre
-                  style={{ background: 'var(--code-bg)' }}
-                  className="text-xs font-mono p-3 overflow-x-auto max-h-72 overflow-y-auto whitespace-pre-wrap break-words"
-                >
+                <pre className="text-xs font-mono p-3 overflow-x-auto max-h-72 overflow-y-auto whitespace-pre-wrap break-words bg-code-bg">
                   {job.log_tail || '(no log available)'}
                 </pre>
-              </div>
+              </Card>
             ))}
           </div>
         )}
@@ -217,14 +208,7 @@ export default function RepoDetail() {
           <h1>{repoName}</h1>
         </div>
 
-        {error && (
-          <div
-            style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
-            className="text-sm p-3 mb-4 bg-[#fef2f2]"
-          >
-            {error}
-          </div>
-        )}
+        {error && <Banner variant="danger" className="mb-4">{error}</Banner>}
 
         {loading ? (
           <p className="text-muted text-sm">Loading repository...</p>
@@ -232,10 +216,7 @@ export default function RepoDetail() {
           <>
             {/* Stats strip */}
             {stats && (
-              <div
-                style={{ border: '1px solid var(--border)' }}
-                className="grid grid-cols-2 md:grid-cols-4 mb-6"
-              >
+              <Card className="grid grid-cols-2 md:grid-cols-4 mb-6">
                 {[
                   { label: 'Status', value: <Badge variant={stats.repo.status === 'indexed' ? 'success' : stats.repo.status === 'error' ? 'danger' : 'warning'}>{stats.repo.status}</Badge> },
                   { label: 'Language', value: stats.repo.language },
@@ -244,26 +225,19 @@ export default function RepoDetail() {
                 ].map(({ label, value }) => (
                   <div
                     key={label}
-                    style={{ borderRight: '1px solid var(--border)' }}
-                    className="p-4 last:border-r-0"
+                    className="border-r border-border p-4 last:border-r-0"
                   >
                     <p className="text-xs text-muted uppercase tracking-wide mb-1">{label}</p>
                     <div className="text-sm font-medium">{value}</div>
                   </div>
                 ))}
-              </div>
+              </Card>
             )}
 
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 mb-6">
               {/* File tree */}
-              <div
-                style={{ border: '1px solid var(--border)' }}
-                className="xl:col-span-2"
-              >
-                <div
-                  style={{ borderBottom: '1px solid var(--border)' }}
-                  className="px-4 py-2.5 flex items-center justify-between bg-surface"
-                >
+              <Card className="xl:col-span-2">
+                <div className="border-b border-border px-4 py-2.5 flex items-center justify-between bg-surface">
                   <span className="text-sm font-medium">Files</span>
                   <div className="text-xs text-muted font-mono flex items-center gap-1">
                     <button className="hover:text-accent" onClick={() => loadFiles('')}>root</button>
@@ -282,8 +256,7 @@ export default function RepoDetail() {
                     <button
                       key={entry.path}
                       onClick={() => entry.type === 'directory' && loadFiles(entry.path)}
-                      style={{ borderBottom: '1px solid var(--border)' }}
-                      className="w-full text-left flex items-center justify-between gap-2 px-4 py-2 hover:bg-surface transition-colors last:border-b-0"
+                      className="border-b border-border w-full text-left flex items-center justify-between gap-2 px-4 py-2 hover:bg-surface transition-colors last:border-b-0"
                     >
                       <span className="inline-flex items-center gap-2 text-sm min-w-0">
                         {entry.type === 'directory'
@@ -306,14 +279,11 @@ export default function RepoDetail() {
                     </p>
                   )}
                 </div>
-              </div>
+              </Card>
 
               {/* Chunk breakdown */}
-              <div style={{ border: '1px solid var(--border)' }}>
-                <div
-                  style={{ borderBottom: '1px solid var(--border)' }}
-                  className="px-4 py-2.5 bg-surface"
-                >
+              <Card>
+                <div className="border-b border-border px-4 py-2.5 bg-surface">
                   <span className="text-sm font-medium">Chunk breakdown</span>
                 </div>
                 <div className="p-4">
@@ -341,7 +311,7 @@ export default function RepoDetail() {
                         )
                       })}
                       {stats.by_extension.length > 0 && (
-                        <div style={{ borderTop: '1px solid var(--border)' }} className="pt-3">
+                        <div className="border-t border-border pt-3">
                           <p className="text-xs text-muted mb-2 uppercase tracking-wide">Top extensions</p>
                           {stats.by_extension.map(ext => (
                             <p key={ext.extension} className="text-xs text-muted">
@@ -353,15 +323,12 @@ export default function RepoDetail() {
                     </div>
                   )}
                 </div>
-              </div>
+              </Card>
             </div>
 
             {/* Scoped search */}
-            <section style={{ border: '1px solid var(--border)' }}>
-              <div
-                style={{ borderBottom: '1px solid var(--border)' }}
-                className="px-4 py-2.5 bg-surface"
-              >
+            <section className="border border-border">
+              <div className="border-b border-border px-4 py-2.5 bg-surface">
                 <span className="text-sm font-medium">Search this repository</span>
               </div>
               <div className="p-4">
@@ -388,16 +355,12 @@ export default function RepoDetail() {
                 ) : (
                   <div className="space-y-3">
                     {results.map((result, idx) => (
-                      <div
-                        key={`${result.file_path}-${idx}`}
-                        style={{ border: '1px solid var(--border)' }}
-                        className="p-3"
-                      >
+                      <Card key={`${result.file_path}-${idx}`} className="p-3">
                         <p className="text-xs text-muted font-mono mb-1 break-all">
                           {result.file_path} · {result.chunk_type} · score {result.score.toFixed(3)}
                         </p>
                         <p className="text-sm break-words">{snippet(result.content)}</p>
-                      </div>
+                      </Card>
                     ))}
                   </div>
                 )}

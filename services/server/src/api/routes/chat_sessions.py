@@ -1,9 +1,9 @@
 """Saved agent-chat conversations and public share links.
 
-Sessions are scoped to (organization, user): each member keeps a private chat
-history. Sharing freezes a snapshot of the conversation under an unguessable
-token; the public endpoint serves only that snapshot, so later messages stay
-private until the owner re-shares.
+Sessions are scoped to (organization, project, user): each member keeps a
+private chat history per project. Sharing freezes a snapshot of the
+conversation under an unguessable token; the public endpoint serves only that
+snapshot, so later messages stay private until the owner re-shares.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ...db import get_pool
-from ..deps import ActiveOrg, get_active_org, get_current_user_id
+from ..deps import ActiveProject, get_active_project, get_current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ def _summary(row: Any) -> dict[str, Any]:
 
 @router.get("")
 async def list_sessions(
-    org: ActiveOrg = Depends(get_active_org),
+    org: ActiveProject = Depends(get_active_project),
     user_id: int = Depends(get_current_user_id),
 ):
     pool = await get_pool()
@@ -73,11 +73,12 @@ async def list_sessions(
         SELECT id, title, share_token, created_at, updated_at,
                jsonb_array_length(turns) AS turn_count
         FROM chat_sessions
-        WHERE org_id = $1 AND user_id = $2
+        WHERE org_id = $1 AND project_id = $2 AND user_id = $3
         ORDER BY updated_at DESC
-        LIMIT $3
+        LIMIT $4
         """,
         org.org_id,
+        org.project_id,
         user_id,
         MAX_SESSIONS_LISTED,
     )
@@ -87,18 +88,19 @@ async def list_sessions(
 @router.post("")
 async def create_session(
     req: SessionSaveRequest,
-    org: ActiveOrg = Depends(get_active_org),
+    org: ActiveProject = Depends(get_active_project),
     user_id: int = Depends(get_current_user_id),
 ):
     pool = await get_pool()
     row = await pool.fetchrow(
         """
-        INSERT INTO chat_sessions (org_id, user_id, title, turns)
-        VALUES ($1, $2, $3, $4::jsonb)
+        INSERT INTO chat_sessions (org_id, project_id, user_id, title, turns)
+        VALUES ($1, $2, $3, $4, $5::jsonb)
         RETURNING id, title, share_token, created_at, updated_at,
                   jsonb_array_length(turns) AS turn_count
         """,
         org.org_id,
+        org.project_id,
         user_id,
         _title_from(req),
         _turns_json(req),
@@ -109,7 +111,7 @@ async def create_session(
 @router.get("/{session_id}")
 async def get_session(
     session_id: int,
-    org: ActiveOrg = Depends(get_active_org),
+    org: ActiveProject = Depends(get_active_project),
     user_id: int = Depends(get_current_user_id),
 ):
     pool = await get_pool()
@@ -118,10 +120,11 @@ async def get_session(
         SELECT id, title, turns, share_token, created_at, updated_at,
                jsonb_array_length(turns) AS turn_count
         FROM chat_sessions
-        WHERE id = $1 AND org_id = $2 AND user_id = $3
+        WHERE id = $1 AND org_id = $2 AND project_id = $3 AND user_id = $4
         """,
         session_id,
         org.org_id,
+        org.project_id,
         user_id,
     )
     if row is None:
@@ -133,7 +136,7 @@ async def get_session(
 async def update_session(
     session_id: int,
     req: SessionSaveRequest,
-    org: ActiveOrg = Depends(get_active_org),
+    org: ActiveProject = Depends(get_active_project),
     user_id: int = Depends(get_current_user_id),
 ):
     pool = await get_pool()
@@ -141,7 +144,7 @@ async def update_session(
         """
         UPDATE chat_sessions
         SET turns = $1::jsonb, title = COALESCE(NULLIF($2, ''), title), updated_at = NOW()
-        WHERE id = $3 AND org_id = $4 AND user_id = $5
+        WHERE id = $3 AND org_id = $4 AND project_id = $5 AND user_id = $6
         RETURNING id, title, share_token, created_at, updated_at,
                   jsonb_array_length(turns) AS turn_count
         """,
@@ -149,6 +152,7 @@ async def update_session(
         (req.title or "").strip()[:MAX_TITLE_LEN],
         session_id,
         org.org_id,
+        org.project_id,
         user_id,
     )
     if row is None:
@@ -159,14 +163,15 @@ async def update_session(
 @router.delete("/{session_id}")
 async def delete_session(
     session_id: int,
-    org: ActiveOrg = Depends(get_active_org),
+    org: ActiveProject = Depends(get_active_project),
     user_id: int = Depends(get_current_user_id),
 ):
     pool = await get_pool()
     deleted = await pool.execute(
-        "DELETE FROM chat_sessions WHERE id = $1 AND org_id = $2 AND user_id = $3",
+        "DELETE FROM chat_sessions WHERE id = $1 AND org_id = $2 AND project_id = $3 AND user_id = $4",
         session_id,
         org.org_id,
+        org.project_id,
         user_id,
     )
     if deleted == "DELETE 0":
@@ -177,7 +182,7 @@ async def delete_session(
 @router.post("/{session_id}/share")
 async def share_session(
     session_id: int,
-    org: ActiveOrg = Depends(get_active_org),
+    org: ActiveProject = Depends(get_active_project),
     user_id: int = Depends(get_current_user_id),
 ):
     """Create (or refresh) the public snapshot of this conversation.
@@ -193,12 +198,13 @@ async def share_session(
         SET share_token = COALESCE(share_token, $1),
             shared_snapshot = turns,
             shared_at = NOW()
-        WHERE id = $2 AND org_id = $3 AND user_id = $4
+        WHERE id = $2 AND org_id = $3 AND project_id = $4 AND user_id = $5
         RETURNING share_token, shared_at
         """,
         token,
         session_id,
         org.org_id,
+        org.project_id,
         user_id,
     )
     if row is None:
@@ -209,7 +215,7 @@ async def share_session(
 @router.delete("/{session_id}/share")
 async def unshare_session(
     session_id: int,
-    org: ActiveOrg = Depends(get_active_org),
+    org: ActiveProject = Depends(get_active_project),
     user_id: int = Depends(get_current_user_id),
 ):
     pool = await get_pool()
@@ -217,11 +223,12 @@ async def unshare_session(
         """
         UPDATE chat_sessions
         SET share_token = NULL, shared_snapshot = NULL, shared_at = NULL
-        WHERE id = $1 AND org_id = $2 AND user_id = $3
+        WHERE id = $1 AND org_id = $2 AND project_id = $3 AND user_id = $4
         RETURNING id
         """,
         session_id,
         org.org_id,
+        org.project_id,
         user_id,
     )
     if row is None:

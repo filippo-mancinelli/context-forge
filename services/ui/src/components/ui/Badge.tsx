@@ -8,10 +8,10 @@ interface BadgeProps {
 
 const variantStyles: Record<BadgeVariant, string> = {
   default: 'bg-surface text-text border-border',
-  success: 'bg-[#eafaf1] text-[#1a7a45] border-[#a9dfbf]',
-  warning: 'bg-[#fef9e7] text-[#9a6108] border-[#f9e4b7]',
-  danger: 'bg-[#fef2f2] text-danger border-[#fca5a5]',
-  accent: 'bg-[#eaf4fb] text-accent border-[#aed6f1]',
+  success: 'bg-[var(--success-bg)] text-success border-[var(--success-border)]',
+  warning: 'bg-[var(--warning-bg)] text-warning border-[var(--warning-border)]',
+  danger: 'bg-[var(--danger-bg)] text-danger border-[var(--danger-border)]',
+  accent: 'bg-primary-light text-text border-primary',
   muted: 'bg-surface text-muted border-border',
 }
 

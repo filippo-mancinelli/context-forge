@@ -70,9 +70,20 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"
     github_token: str = ""
     gitlab_token: str = ""
+    # GitLab API base. Empty defaults to gitlab.com; set to a self-hosted
+    # instance root (e.g. https://git.example.com) or a full /api/v4 URL.
+    gitlab_url: str = ""
     mcp_port: int = 4000
     api_port: int = 8000
+    # Tetto di default per ssh_list_files (voci elencate per chiamata). Il tool
+    # accetta un `limit` per-chiamata che lo scavalca, sempre sotto il tetto di
+    # sicurezza assoluto SSH_LIST_HARD_CAP. Override via env SSH_LIST_MAX_ENTRIES.
+    ssh_list_max_entries: int = 4000
     repos_cache_dir: str = "/data/repos-cache"
+    # Scratch workspaces for agent-driven git writes (clone/commit/push). Kept
+    # separate from repos_cache_dir: that directory is the read-only indexer
+    # cache and must never be mutated by write operations.
+    agent_workspaces_dir: str = "/data/agent-workspaces"
     kb_data_dir: str = "/data/kb"
     log_level: str = "INFO"
     config_path: str = "/app/context-forge.yml"
@@ -81,6 +92,22 @@ class Settings(BaseSettings):
     cors_origins: str = ""
     # MCP authentication mode: "disabled", "enabled", "transition"
     mcp_auth_mode: str = "disabled"
+    # OIDC (e.g. Keycloak) - inert unless oidc_enabled
+    oidc_enabled: bool = False
+    oidc_issuer: str = ""
+    oidc_client_id: str = "context-forge"
+    oidc_client_secret: str = ""
+    oidc_audience: str = ""
+    oidc_jwks_url: str = ""
+    oidc_group_prefix: str = "/mcp-tools/"
+    oidc_org_claim: str = "tenant_id"
+    public_base_url: str = ""
+    # Base URL of the UI, as seen from the browser (for OIDC callback redirects).
+    ui_base_url: str = ""
+    # Base pubblica dell'endpoint MCP (es. http://localhost:4000), usata come
+    # `resource`/`issuer` nei metadata OAuth discovery e nell'header
+    # WWW-Authenticate. Vuota = derivata dalla base_url della richiesta.
+    public_mcp_url: str = ""
     # Hybrid retrieval: fuse dense vector similarity with lexical full-text
     # ranking (RRF). Set SEARCH_HYBRID=false to fall back to vector-only search.
     search_hybrid: bool = True
@@ -99,7 +126,6 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_webhook_secret: str = ""
     telegram_allowed_chat_ids: str = ""
-    telegram_org_id: int = 0
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
@@ -124,7 +150,6 @@ RUNTIME_OVERRIDE_FIELDS = (
     "telegram_bot_token",
     "telegram_webhook_secret",
     "telegram_allowed_chat_ids",
-    "telegram_org_id",
 )
 DEFAULT_RUNTIME_OVERRIDE_VALUES = {
     "openai_api_key": "",
@@ -142,7 +167,6 @@ DEFAULT_RUNTIME_OVERRIDE_VALUES = {
     "telegram_bot_token": "",
     "telegram_webhook_secret": "",
     "telegram_allowed_chat_ids": "",
-    "telegram_org_id": 0,
 }
 
 

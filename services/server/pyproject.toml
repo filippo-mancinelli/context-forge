@@ -29,6 +29,9 @@ dependencies = [
     # External data sources (schema context + read-only queries)
     "pymysql>=1.1.0",           # MySQL / MariaDB driver
     "cryptography>=42.0.0",     # credential encryption at rest (Fernet)
+    "pyjwt[crypto]>=2.9.0",     # OIDC token validation (JWKS/RS256)
+    "sshtunnel>=0.4.0",         # SSH tunnels to data sources behind a bastion
+    "paramiko>=3.4,<4",         # sshtunnel 0.4 uses paramiko.DSSKey, removed in paramiko 4+
 
     # Memory
     "mem0ai>=1.0.11,<2.0.0",

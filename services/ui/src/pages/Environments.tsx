@@ -11,7 +11,7 @@ import {
   Server,
 } from 'lucide-react'
 import { api, type DbConnection, type Environment, type EnvironmentKind, type EnvironmentRequest } from '../lib/api'
-import { Badge, Button, Dialog, DialogFooter, Input, Select, Textarea, useConfirm, useToast } from '../components/ui'
+import { Badge, Banner, Button, Card, Dialog, DialogFooter, Input, Select, Textarea, useConfirm, useToast } from '../components/ui'
 
 const KIND_ORDER: EnvironmentKind[] = ['production', 'staging', 'development', 'other']
 
@@ -206,7 +206,7 @@ function EnvironmentDialog({
           placeholder="Anything else worth remembering about this environment..."
         />
 
-        {error && <p style={{ color: 'var(--danger)' }} className="text-sm">{error}</p>}
+        {error && <p className="text-sm text-danger">{error}</p>}
 
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
@@ -231,7 +231,7 @@ function EnvironmentCard({
   onDelete: (env: Environment) => void
 }) {
   return (
-    <div style={{ border: '1px solid var(--border)' }} className="p-4">
+    <Card className="p-4">
       <div className="flex items-start justify-between gap-3 mb-2">
         <div className="flex items-center gap-2 min-w-0">
           <Server className="w-4 h-4 text-muted flex-shrink-0" />
@@ -306,7 +306,7 @@ function EnvironmentCard({
       {env.notes && (
         <p className="text-xs text-muted whitespace-pre-wrap">{env.notes}</p>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -386,14 +386,7 @@ export default function Environments() {
           </Button>
         </div>
 
-        {pageError && (
-          <div
-            style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
-            className="text-sm p-3 mb-4 bg-[#fef2f2]"
-          >
-            {pageError}
-          </div>
-        )}
+        {pageError && <Banner variant="danger" className="mb-4">{pageError}</Banner>}
 
         {loading ? (
           <p className="text-muted text-sm">Loading...</p>

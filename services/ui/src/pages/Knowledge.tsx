@@ -13,7 +13,7 @@ import {
   PenLine,
 } from 'lucide-react'
 import { api, type KbDocument, type KbSearchResult } from '../lib/api'
-import { Button, Input, Badge, Dialog, DialogFooter, Textarea, useConfirm, useToast } from '../components/ui'
+import { Button, Card, Input, Badge, Banner, Dialog, DialogFooter, Textarea, useConfirm, useToast } from '../components/ui'
 
 const STATUS_VARIANT: Record<KbDocument['status'], 'success' | 'accent' | 'warning' | 'danger'> = {
   ready: 'success',
@@ -32,7 +32,7 @@ const STATUS_LABEL: Record<KbDocument['status'], string> = {
 function DocIcon({ ext }: { ext?: string }) {
   const e = (ext || '').toLowerCase()
   if (['.xlsx', '.xls', '.xlsm', '.csv', '.tsv'].includes(e))
-    return <FileSpreadsheet className="w-4 h-4 text-[#1a7a45]" />
+    return <FileSpreadsheet className="w-4 h-4 text-success" />
   if (['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tif', '.tiff', '.webp'].includes(e))
     return <FileImage className="w-4 h-4 text-accent" />
   if (['.pdf', '.docx', '.doc', '.pptx', '.rtf', '.txt', '.md'].includes(e))
@@ -96,7 +96,7 @@ function DropZone({
       className={[
         'flex flex-col items-center justify-center gap-2 p-8 text-center cursor-pointer rounded transition-colors',
         'border-2 border-dashed',
-        dragging ? 'border-accent bg-[#eaf4fb]' : 'border-border bg-surface hover:border-accent',
+        dragging ? 'border-accent bg-primary-light' : 'border-border bg-surface hover:border-accent',
       ].join(' ')}
       style={{ outline: 'none' }}
     >
@@ -191,7 +191,7 @@ function TextNoteDialog({
           rows={12}
           placeholder="Write or paste the text you want your agents to be able to search..."
         />
-        {error && <p style={{ color: 'var(--danger)' }} className="text-sm">{error}</p>}
+        {error && <p className="text-sm text-danger">{error}</p>}
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel
@@ -229,7 +229,7 @@ function SearchPanel() {
   }
 
   return (
-    <section style={{ border: '1px solid var(--border)' }} className="mb-6 p-4">
+    <section className="border border-border mb-6 p-4">
       <h2 className="text-base font-semibold mb-3 flex items-center gap-2">
         <SearchIcon className="w-4 h-4" /> Search knowledge base
       </h2>
@@ -257,7 +257,7 @@ function SearchPanel() {
         </Button>
       </div>
 
-      {error && <p style={{ color: 'var(--danger)' }} className="text-sm mt-3">{error}</p>}
+      {error && <p className="text-sm mt-3 text-danger">{error}</p>}
 
       {results !== null && (
         <div className="mt-4 space-y-2">
@@ -265,7 +265,7 @@ function SearchPanel() {
             <p className="text-muted text-sm">No matching passages found.</p>
           ) : (
             results.map((r, i) => (
-              <div key={`${r.document_id}-${r.chunk_index}-${i}`} style={{ border: '1px solid var(--border)' }} className="p-3">
+              <Card key={`${r.document_id}-${r.chunk_index}-${i}`} className="p-3">
                 <div className="flex items-center justify-between gap-2 mb-1">
                   <span className="text-xs font-medium text-text flex items-center gap-1.5 min-w-0">
                     <DocIcon ext={r.extension} />
@@ -274,7 +274,7 @@ function SearchPanel() {
                   <span className="font-mono text-xs text-accent flex-shrink-0">{r.score.toFixed(3)}</span>
                 </div>
                 <p className="text-sm text-text whitespace-pre-wrap line-clamp-4">{r.content}</p>
-              </div>
+              </Card>
             ))
           )}
         </div>
@@ -306,7 +306,7 @@ function DocumentRow({
   }
 
   return (
-    <tr style={{ borderBottom: '1px solid var(--border)' }} className="last:border-b-0 group">
+    <tr className="border-b border-border last:border-b-0 group">
       <td className="py-3 px-4 align-top">
         <div className="flex items-start gap-2">
           <div className="mt-0.5">
@@ -395,7 +395,7 @@ function DocumentCard({
   }
 
   return (
-    <div style={{ border: '1px solid var(--border)' }} className="p-3">
+    <Card className="p-3">
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-start gap-2 min-w-0">
           <div className="mt-0.5 flex-shrink-0">
@@ -421,10 +421,7 @@ function DocumentCard({
         <span>{formatBytes(doc.size_bytes)}</span>
         <span>{formatDate(doc.uploaded_at)}</span>
       </div>
-      <div
-        style={{ borderTop: '1px solid var(--border)' }}
-        className="flex items-center gap-4 mt-3 pt-3"
-      >
+      <div className="border-t border-border flex items-center gap-4 mt-3 pt-3">
         <button
           onClick={wrap(() => onDownload(doc))}
           disabled={busy}
@@ -449,7 +446,7 @@ function DocumentCard({
           <Trash2 className="w-3.5 h-3.5" /> Delete
         </button>
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -572,21 +569,11 @@ export default function Knowledge() {
           </p>
         </div>
 
-        {pageError && (
-          <div
-            style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
-            className="text-sm p-3 mb-4 bg-[#fef2f2]"
-          >
-            {pageError}
-          </div>
-        )}
+        {pageError && <Banner variant="danger" className="mb-4">{pageError}</Banner>}
         {notice && (
-          <div
-            style={{ border: '1px solid var(--border)' }}
-            className="text-sm p-3 mb-4 text-muted bg-surface"
-          >
+          <Card className="text-sm p-3 mb-4 text-muted">
             {notice}
-          </div>
+          </Card>
         )}
 
         <div className="mb-6">
@@ -629,10 +616,10 @@ export default function Knowledge() {
           </div>
 
           {/* Desktop: table */}
-          <div style={{ border: '1px solid var(--border)' }} className="hidden md:block overflow-x-auto max-w-5xl">
+          <Card className="hidden md:block overflow-x-auto max-w-5xl">
             <table className="w-full min-w-[640px]">
               <thead>
-                <tr style={{ borderBottom: '1px solid var(--border)' }} className="text-left">
+                <tr className="border-b border-border text-left">
                   <th className="py-2 px-4 text-xs font-medium text-muted">Document</th>
                   <th className="py-2 px-4 text-xs font-medium text-muted">Status</th>
                   <th className="py-2 px-4 text-xs font-medium text-muted">Chunks</th>
@@ -653,7 +640,7 @@ export default function Knowledge() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </Card>
           </>
         )}
       </div>

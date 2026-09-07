@@ -15,8 +15,9 @@ import json
 import logging
 from typing import Any, Optional
 
-from ..config import get_settings
+from ..mcp.context import set_current_namespace
 from ..mcp.memory import memory_add, memory_search
+from ..org_settings import OrgSettings, get_org_settings
 from ..tenancy import get_namespace_for_org
 
 logger = logging.getLogger(__name__)
@@ -88,35 +89,34 @@ _TOOLS = [
 ]
 
 
-def _resolve_llm() -> dict[str, Any]:
-    """Resolve the configured default LLM provider/model/key.
+def _llm_family(s: OrgSettings) -> dict[str, Any]:
+    """Resolve the org's configured default LLM provider/model/key.
 
     Simplified single-provider version of ``chat.py``'s ``_resolve_llm``: the
     capture agent always uses the org-configured default — there is no
     per-request override coming from a Telegram message.
     """
-    settings = get_settings()
-    provider = (settings.llm_provider or "openai").lower()
-    model = settings.llm_model or "gpt-4o-mini"
+    provider = (s.llm_provider or "openai").lower()
+    model = s.llm_model or "gpt-4o-mini"
 
     if provider == "anthropic":
-        if not settings.anthropic_api_key:
+        if not s.anthropic_api_key:
             raise RuntimeError("No Anthropic API key configured (Settings -> LLM).")
-        return {"family": "anthropic", "model": model, "api_key": settings.anthropic_api_key}
+        return {"family": "anthropic", "model": model, "api_key": s.anthropic_api_key}
 
     if provider == "deepseek":
-        if not settings.deepseek_api_key:
+        if not s.deepseek_api_key:
             raise RuntimeError("No DeepSeek API key configured (Settings -> LLM).")
         return {
             "family": "openai",
             "model": model,
-            "api_key": settings.deepseek_api_key,
+            "api_key": s.deepseek_api_key,
             "base_url": "https://api.deepseek.com",
         }
 
-    if not settings.openai_api_key:
+    if not s.openai_api_key:
         raise RuntimeError("No OpenAI API key configured (Settings -> LLM).")
-    return {"family": "openai", "model": model, "api_key": settings.openai_api_key}
+    return {"family": "openai", "model": model, "api_key": s.openai_api_key}
 
 
 async def _resolve_namespace(org_id: int) -> str:
@@ -148,10 +148,17 @@ def _extract_memory_id(add_result: dict[str, Any]) -> Optional[str]:
 async def _execute_tool(
     name: str, args: dict[str, Any], namespace: str, source_meta: dict[str, Any]
 ) -> tuple[dict[str, Any], Optional[dict[str, Any]]]:
-    """Run one tool call. Returns (content fed back to the model, captured result)."""
+    """Run one tool call. Returns (content fed back to the model, captured result).
+
+    ``namespace`` is applied to the request-scoped context (see ``run_capture``)
+    rather than passed as a parameter here — ``memory_search``/``memory_add``
+    resolve their mem0 user_id solely from that context, matching the MCP
+    request path and closing off a caller-supplied user_id as a way to read or
+    write another org's/project's memories.
+    """
     if name == "memory_search":
         return await memory_search(
-            args.get("query", ""), limit=int(args.get("limit") or 5), user_id=namespace
+            args.get("query", ""), limit=int(args.get("limit") or 5)
         ), None
 
     if name == "memory_add":
@@ -161,7 +168,7 @@ async def _execute_tool(
             "type": args.get("type"),
             **source_meta,
         }
-        result = await memory_add(args.get("content", ""), metadata=metadata, user_id=namespace)
+        result = await memory_add(args.get("content", ""), metadata=metadata)
         captured = {
             "client": args.get("client"),
             "type": args.get("type"),
@@ -268,8 +275,12 @@ async def run_capture(text: str, org_id: int, source_meta: dict[str, Any]) -> di
     Returns a dict with ``client``, ``type``, ``summary``, and ``memory_id`` —
     used by the webhook route to compose the Telegram confirmation reply.
     """
-    llm = _resolve_llm()
+    s = await get_org_settings(org_id)
+    llm = _llm_family(s)
     namespace = await _resolve_namespace(org_id)
+    # memory_add/memory_search read their namespace from this request-scoped
+    # context, not from a parameter — set it before running the tool loop.
+    set_current_namespace(namespace)
 
     if llm["family"] == "anthropic":
         return await _run_anthropic(llm, text, namespace, source_meta)

@@ -44,6 +44,12 @@ if (Test-Path ".env") {
     (Get-Content ".env") -replace "changeme_strong_password", $pgPass | Set-Content ".env"
     Write-Ok "Generated random Postgres password"
 
+    # Generate random first-run bootstrap token (the web onboarding wizard asks for it once)
+    $bootstrapToken = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([System.Guid]::NewGuid().ToString("N") + [System.Guid]::NewGuid().ToString("N"))).Substring(0, 32)
+    (Get-Content ".env") -replace "change_this_bootstrap_token", $bootstrapToken | Set-Content ".env"
+    Write-Ok "Generated SETUP_BOOTSTRAP_TOKEN: $bootstrapToken"
+    Write-Warn "The web UI setup wizard will ask for this token (it stays in .env)"
+
     Write-Host ""
     Write-Host "  Please edit .env and set:" -ForegroundColor Yellow
     Write-Host "    OPENAI_API_KEY   (required for OpenAI embeddings)" -ForegroundColor Yellow

@@ -10,7 +10,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 from ..config import IndexingConfig, RepoConfig
 from ..db import get_pool
@@ -203,6 +203,167 @@ def _chunk_file(
     return chunks
 
 
+def collect_symbols_sync(
+    local_path: str,
+    indexing_cfg: "IndexingConfig",
+    language: str | None,
+    only_paths: list[str] | None = None,
+) -> list[dict]:
+    """Definizioni e riferimenti dei file di un repository (per il grafo).
+
+    Una riga per (file, nome, kind): le occorrenze ripetute di un nome nello
+    stesso file diventano ``occurrences``, cioè il peso dell'arco, invece di
+    moltiplicare le righe. Gira nel thread pool come il chunking.
+    """
+    from . import symbols as symbols_mod
+
+    wanted = set(only_paths) if only_paths is not None else None
+    parsers: dict[str, Any] = {}
+    rows: list[dict] = []
+
+    for file_path, rel_path in _iter_repo_files(local_path, indexing_cfg):
+        if wanted is not None and rel_path not in wanted:
+            continue
+        lang = language or _detect_language(file_path)
+        if lang not in symbols_mod.DEF_NODES:
+            continue
+        if lang not in parsers:
+            parsers[lang] = _get_parser(lang)
+        parser = parsers[lang]
+        if parser is None:
+            continue
+        try:
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+        except Exception:  # noqa: BLE001 - un file illeggibile non ferma il resto
+            continue
+
+        extracted = symbols_mod.extract_symbols(content, lang, parser)
+        counted: dict[tuple[str, str], dict] = {}
+        for d in extracted["defs"]:
+            key = (d["name"], "def")
+            entry = counted.setdefault(
+                key,
+                {
+                    "file_path": rel_path,
+                    "name": d["name"],
+                    "kind": "def",
+                    "node_type": d.get("kind"),
+                    "line": d.get("line"),
+                    "occurrences": 0,
+                },
+            )
+            entry["occurrences"] += 1
+        for r in extracted["refs"]:
+            key = (r["name"], "ref")
+            entry = counted.setdefault(
+                key,
+                {
+                    "file_path": rel_path,
+                    "name": r["name"],
+                    "kind": "ref",
+                    "node_type": None,
+                    "line": r.get("line"),
+                    "occurrences": 0,
+                },
+            )
+            entry["occurrences"] += 1
+        rows.extend(counted.values())
+
+    return rows
+
+
+async def _store_symbols(
+    pool,
+    org_id: int,
+    project_id: int,
+    repo_name: str,
+    rows: list[dict],
+    replace_paths: list[str] | None = None,
+) -> None:
+    """Sostituisce le righe del grafo per il repository (o per i soli file dati)."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            if replace_paths is None:
+                await conn.execute(
+                    "DELETE FROM repo_symbols WHERE project_id=$1 AND repo_name=$2",
+                    project_id, repo_name,
+                )
+            elif replace_paths:
+                await conn.execute(
+                    "DELETE FROM repo_symbols WHERE project_id=$1 AND repo_name=$2 "
+                    "AND file_path = ANY($3)",
+                    project_id, repo_name, replace_paths,
+                )
+            if not rows:
+                return
+            batch = 1000
+            for start in range(0, len(rows), batch):
+                await conn.executemany(
+                    """
+                    INSERT INTO repo_symbols
+                        (org_id, project_id, repo_name, file_path, name, kind,
+                         node_type, line, occurrences)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                    ON CONFLICT (project_id, repo_name, file_path, name, kind)
+                    DO UPDATE SET occurrences = EXCLUDED.occurrences,
+                                  node_type   = EXCLUDED.node_type,
+                                  line        = EXCLUDED.line
+                    """,
+                    [
+                        (
+                            org_id, project_id, repo_name, r["file_path"], r["name"],
+                            r["kind"], r.get("node_type"), r.get("line"),
+                            r.get("occurrences", 1),
+                        )
+                        for r in rows[start : start + batch]
+                    ],
+                )
+
+
+async def _index_symbols(
+    pool,
+    org_id: int,
+    project_id: int,
+    repo_name: str,
+    local_path: str,
+    indexing_cfg: "IndexingConfig",
+    language: str | None,
+    changed_paths: list[str] | None = None,
+    stale_paths: list[str] | None = None,
+    only_if_missing: bool = False,
+) -> None:
+    """Aggiorna il grafo dei simboli dopo l'indicizzazione dei chunk.
+
+    Con ``only_if_missing`` il grafo viene costruito solo se per quel
+    repository non ne esiste ancora uno: serve ai repository indicizzati prima
+    che il grafo esistesse, che altrimenti resterebbero senza finche' non
+    cambia un commit.
+
+    Non è critico per la ricerca: un errore qui viene registrato e basta, il
+    repository resta indicizzato.
+    """
+    try:
+        if only_if_missing:
+            async with pool.acquire() as conn:
+                existing = await conn.fetchval(
+                    "SELECT 1 FROM repo_symbols WHERE project_id=$1 AND repo_name=$2 LIMIT 1",
+                    project_id, repo_name,
+                )
+            if existing:
+                return
+        loop = asyncio.get_running_loop()
+        rows = await loop.run_in_executor(
+            None, collect_symbols_sync, local_path, indexing_cfg, language, changed_paths
+        )
+        await _store_symbols(
+            pool, org_id, project_id, repo_name, rows,
+            replace_paths=None if changed_paths is None else (stale_paths or changed_paths),
+        )
+        logger.info("Symbol graph for %s: %d rows", repo_name, len(rows))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Symbol graph build failed for %s: %s", repo_name, e)
+
+
 def _collect_chunks_sync(
     repo_name: str,
     local_path: str,
@@ -346,6 +507,9 @@ async def _fetch_reusable_embeddings(org_id: int, texts: list[str]) -> dict[str,
     Content alone determines the embedding (for a fixed model), so identical
     chunks — a second branch of the same repo, or unchanged files in a force
     re-index — can reuse the stored vector instead of calling the embedder.
+    This lookup stays scoped to the org (not the project): the same content
+    produces the same embedding regardless of project, so reuse across projects
+    within the same org is correct.
     """
     hashes = list({hashlib.md5(t.encode("utf-8")).hexdigest() for t in texts})
     reuse: dict[str, str] = {}
@@ -398,7 +562,7 @@ async def _embed_chunks(
             "Embedding progress for %s: batch=%d/%d size=%d",
             repo_name, (b // batch_size) + 1, total_batches, len(idxs),
         )
-        vectors = await embed_batch([texts[i] for i in idxs])
+        vectors = await embed_batch([texts[i] for i in idxs], org_id)
         for i, vec in zip(idxs, vectors):
             fresh[i] = _vector_to_pg(vec)
     logger.info(
@@ -412,11 +576,13 @@ async def _embed_chunks(
     ]
 
 
-def _chunk_rows(org_id: int, chunks: list[dict], embeddings: list[str]) -> list[tuple]:
+def _chunk_rows(
+    org_id: int, project_id: int, chunks: list[dict], embeddings: list[str]
+) -> list[tuple]:
     """Build asyncpg parameter tuples for a batch of chunks."""
     return [
         (
-            org_id, c["repo_name"], c["file_path"], c["chunk_index"],
+            org_id, project_id, c["repo_name"], c["file_path"], c["chunk_index"],
             c["chunk_type"], c["content"], c["metadata"], embeddings[idx],
         )
         for idx, c in enumerate(chunks)
@@ -424,11 +590,11 @@ def _chunk_rows(org_id: int, chunks: list[dict], embeddings: list[str]) -> list[
 
 
 _INSERT_CHUNK_SQL = """
-INSERT INTO repo_chunks (org_id, repo_name, file_path, chunk_index, chunk_type, content, metadata, embedding)
-VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::vector)
+INSERT INTO repo_chunks (org_id, project_id, repo_name, file_path, chunk_index, chunk_type, content, metadata, embedding)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::vector)
 ON CONFLICT (org_id, repo_name, file_path, chunk_index) DO UPDATE
 SET content=EXCLUDED.content, metadata=EXCLUDED.metadata,
-    embedding=EXCLUDED.embedding, indexed_at=NOW()
+    project_id=EXCLUDED.project_id, embedding=EXCLUDED.embedding, indexed_at=NOW()
 """
 
 # Registry of in-flight indexing tasks, keyed by (org_id, repo_name). Both API
@@ -523,13 +689,21 @@ async def index_repo(
 
     async with pool.acquire() as conn:
         prev = await conn.fetchrow(
-            "SELECT status, indexed_commit, total_chunks FROM repos WHERE org_id=$1 AND name=$2",
+            "SELECT status, indexed_commit, total_chunks, project_id FROM repos WHERE org_id=$1 AND name=$2",
             org_id, repo.name,
         )
         await conn.execute(
             "UPDATE repos SET status='indexing', error_message=NULL WHERE org_id=$1 AND name=$2",
             org_id, repo.name,
         )
+
+    # Chunks inherit the repo's project; pre-existing repos without an
+    # assignment fall back to the organization's default project.
+    project_id = prev["project_id"] if prev is not None else None
+    if project_id is None:
+        from ..projects import get_default_project_id
+
+        project_id = await get_default_project_id(org_id)
 
     try:
         # Ensure repo is available locally (this pulls remotes to the latest commit).
@@ -558,7 +732,7 @@ async def index_repo(
 
         if can_incremental:
             handled = await _index_repo_incremental(
-                pool, org_id, repo, indexing_cfg, language,
+                pool, org_id, project_id, repo, indexing_cfg, language,
                 local_path, prev["indexed_commit"], new_commit,
             )
             if handled:
@@ -566,7 +740,7 @@ async def index_repo(
             logger.info("Incremental indexing unavailable for %s; running full index", repo.name)
 
         await _index_repo_full(
-            pool, org_id, repo, indexing_cfg, language, local_path, new_commit,
+            pool, org_id, project_id, repo, indexing_cfg, language, local_path, new_commit,
             reuse_embeddings=not force_full,
         )
 
@@ -582,6 +756,7 @@ async def index_repo(
 async def _index_repo_full(
     pool,
     org_id: int,
+    project_id: int,
     repo: RepoConfig,
     indexing_cfg: IndexingConfig,
     language: str | None,
@@ -619,7 +794,7 @@ async def _index_repo_full(
             end = min(start + insert_batch_size, len(all_chunks))
             await conn.executemany(
                 _INSERT_CHUNK_SQL,
-                _chunk_rows(org_id, all_chunks[start:end], embeddings[start:end]),
+                _chunk_rows(org_id, project_id, all_chunks[start:end], embeddings[start:end]),
             )
             logger.info("DB write progress for %s: inserted=%d/%d", repo.name, end, len(all_chunks))
         await conn.execute(
@@ -632,11 +807,15 @@ async def _index_repo_full(
             org_id, repo.name, len(all_chunks), new_commit,
         )
     logger.info("Indexed %d chunks for %s (full)", len(all_chunks), repo.name)
+    await _index_symbols(
+        pool, org_id, project_id, repo.name, local_path, indexing_cfg, language
+    )
 
 
 async def _index_repo_incremental(
     pool,
     org_id: int,
+    project_id: int,
     repo: RepoConfig,
     indexing_cfg: IndexingConfig,
     language: str | None,
@@ -667,6 +846,12 @@ async def _index_repo_incremental(
                 "indexed_commit=$3, error_message=NULL WHERE org_id=$1 AND name=$2",
                 org_id, repo.name, new_commit,
             )
+        # Repository gia' allineato: l'unica cosa che puo' mancare e' il grafo
+        # dei simboli, se e' stato indicizzato prima che il grafo esistesse.
+        await _index_symbols(
+            pool, org_id, project_id, repo.name, local_path, indexing_cfg, language,
+            only_if_missing=True,
+        )
         logger.info("No changes for %s since %s; index up to date", repo.name, old_commit[:8])
         return True
 
@@ -689,7 +874,7 @@ async def _index_repo_incremental(
                 end = min(start + insert_batch_size, len(chunks))
                 await conn.executemany(
                     _INSERT_CHUNK_SQL,
-                    _chunk_rows(org_id, chunks[start:end], embeddings[start:end]),
+                    _chunk_rows(org_id, project_id, chunks[start:end], embeddings[start:end]),
                 )
             total = await conn.fetchval(
                 "SELECT count(*) FROM repo_chunks WHERE org_id=$1 AND repo_name=$2",
@@ -704,6 +889,10 @@ async def _index_repo_incremental(
                 """,
                 org_id, repo.name, total, new_commit,
             )
+    await _index_symbols(
+        pool, org_id, project_id, repo.name, local_path, indexing_cfg, language,
+        changed_paths=sorted(changed), stale_paths=stale_paths,
+    )
     logger.info(
         "Indexed %s (incremental): changed=%d deleted=%d reindexed_files=%d new_chunks=%d total=%d",
         repo.name, len(changed), len(deleted), len(indexed_paths), len(chunks), total,
@@ -714,10 +903,13 @@ async def _index_repo_incremental(
 async def sync_repos_config(org_id: int | None = None) -> None:
     """Sync repos from per-org config into the DB repos table.
 
-    When ``org_id`` is given only that organization is synced; otherwise every
-    organization is synced.
+    Config entries are org-level bootstrap: rows created here land in the
+    organization's default project, while an explicit project assignment
+    made afterward — regardless of its origin — is preserved on subsequent
+    syncs.
     """
     from ..org_config import get_org_config, iter_org_configs
+    from ..projects import get_default_project_id
 
     if org_id is not None:
         configs = [(org_id, await get_org_config(org_id))]
@@ -727,16 +919,19 @@ async def sync_repos_config(org_id: int | None = None) -> None:
     pool = await get_pool()
     async with pool.acquire() as conn:
         for oid, cfg in configs:
+            default_project_id = await get_default_project_id(oid)
             for repo in cfg.repos:
                 await conn.execute(
                     """
-                    INSERT INTO repos (org_id, name, type, url, path, branch, language, status)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+                    INSERT INTO repos (org_id, project_id, name, type, url, path, branch, language, status)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')
                     ON CONFLICT (org_id, name) DO UPDATE
                     SET type=EXCLUDED.type, url=EXCLUDED.url, path=EXCLUDED.path,
-                        branch=EXCLUDED.branch, language=EXCLUDED.language
+                        branch=EXCLUDED.branch, language=EXCLUDED.language,
+                        project_id=COALESCE(repos.project_id, EXCLUDED.project_id)
                     """,
                     oid,
+                    default_project_id,
                     repo.name,
                     repo.type,
                     repo.url,

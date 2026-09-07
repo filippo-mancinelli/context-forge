@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
-import { Button, Input, Textarea } from '../components/ui'
+import { Banner, Button, Card, Input, Textarea } from '../components/ui'
 
 export type SetupMode = 'full' | 'admin'
 
@@ -21,7 +21,7 @@ type RepoDraft = {
 
 function Section({ title, description, children }: { title: string; description: string; children: React.ReactNode }) {
   return (
-    <section style={{ border: '1px solid var(--border)' }} className="p-6">
+    <section className="border border-border p-6">
       <h2 className="text-base font-semibold mb-1">{title}</h2>
       <p className="text-sm text-muted mb-4">{description}</p>
       {children}
@@ -135,11 +135,7 @@ export default function Setup({ mode, onCompleted }: SetupProps) {
           </p>
         </div>
 
-        {error && (
-          <div style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }} className="text-sm p-3 mb-6 bg-[#fef2f2]">
-            {error}
-          </div>
-        )}
+        {error && <Banner variant="danger" className="mb-6">{error}</Banner>}
 
         <div className="space-y-6">
           <Section
@@ -217,9 +213,8 @@ export default function Setup({ mode, onCompleted }: SetupProps) {
                 ) : (
                   <div className="space-y-2">
                     {repos.map((repo, i) => (
-                      <div
+                      <Card
                         key={i}
-                        style={{ border: '1px solid var(--border)' }}
                         className="grid gap-2 p-3 md:grid-cols-7"
                       >
                         <Input value={repo.name} onChange={e => updateRepo(i, 'name', e.target.value)} placeholder="name" />
@@ -244,7 +239,7 @@ export default function Setup({ mode, onCompleted }: SetupProps) {
                         <Button variant="danger" size="sm" onClick={() => removeRepo(i)} className="justify-center">
                           <Trash2 className="w-3.5 h-3.5" />
                         </Button>
-                      </div>
+                      </Card>
                     ))}
                   </div>
                 )}
