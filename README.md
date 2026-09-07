@@ -61,6 +61,42 @@ The schema migrates itself at startup. Coming from a version without projects an
 - global LLM/provider overrides move into the per-organization settings;
 - embedding columns lose their fixed dimension so each organization can pick its own model. The ivfflat indexes are dropped in the process and are not recreated yet, so vector search runs as a sequential scan on large tables (tracked as a follow-up).
 
+## Development
+
+### Schema migrations
+
+The schema is versioned. Every change is a new module under `services/server/src/migrations/versions/`, named `NNNN_<name>.py`:
+
+```python
+"""Add the retry bookkeeping columns to jobs."""
+from __future__ import annotations
+
+VERSION = 2
+NAME = "jobs_retry"
+TRANSACTIONAL = True
+
+
+async def upgrade(conn) -> None:
+    await conn.execute(
+        "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0"
+    )
+```
+
+- `VERSION` is the file number and `NAME` the file suffix; both are recorded in the `schema_migrations` table.
+- Modules run once, in `VERSION` order, at server startup, on a single connection holding a Postgres advisory lock, so concurrent replicas cannot race. A module that raises aborts the boot; nothing after it runs.
+- `TRANSACTIONAL = True` wraps the module in a transaction. Set it to `False` only when the statement cannot run inside one (`CREATE INDEX CONCURRENTLY`); such a module must be idempotent, because a failure leaves it half-applied and unrecorded.
+- **Never edit `services/server/src/db.py:DDL`.** It is frozen as `versions/0001_baseline.py`, and every existing installation has already applied it.
+
+From `services/server`:
+
+```bash
+.venv/Scripts/python.exe -m src.cli migrate --status   # current version and pending modules
+.venv/Scripts/python.exe -m src.cli migrate            # apply pending modules
+.venv/Scripts/python.exe -m pytest -q -p no:cacheprovider
+```
+
+Both `migrate` forms connect with `DATABASE_URL`, the same setting the server uses.
+
 ## Projects and the MCP endpoint
 
 An organization can hold several projects. Connect to the organization-level endpoint `/mcp/<org-slug>` and pick a project in-session with `list_projects` / `use_project` (memory, search, and every scoped tool follow that choice), or point a client straight at `/mcp/<org-slug>/<project-slug>`. API keys can be restricted to a set of projects, and org admins choose which projects each user can see.
