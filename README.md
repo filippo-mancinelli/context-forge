@@ -59,7 +59,8 @@ The schema migrates itself at startup. Coming from a version without projects an
 - the former local OAuth server for MCP is gone: tokens it issued stop working, and MCP clients should use an API key or the OIDC bridge instead;
 - API keys keep working; their legacy scope is mapped to the new permissions (`read` → `context-read`, `write` → `context-read` + `context-write`, `admin` → `*`);
 - global LLM/provider overrides move into the per-organization settings;
-- embedding columns lose their fixed dimension so each organization can pick its own model. The ivfflat indexes are dropped in the process and are not recreated yet, so vector search runs as a sequential scan on large tables (tracked as a follow-up).
+- embedding columns lose their fixed dimension so each organization can pick its own model. The ivfflat indexes are dropped in the process and are not recreated yet, so vector search runs as a sequential scan on large tables (tracked as a follow-up);
+- on the first start after this upgrade the server records the existing schema as migration version 1 (the frozen baseline is replayed once; it is idempotent), and later changes apply as numbered migrations; `python -m src.cli migrate --status` shows the current version.
 
 ## Development
 

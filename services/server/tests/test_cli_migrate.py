@@ -1,6 +1,8 @@
 """forge-cli migrate applies pending versions; --status only reports."""
 import argparse
 
+import pytest
+
 from src import cli, db
 from src.migrations import runner
 
@@ -71,6 +73,31 @@ def test_status_reports_an_up_to_date_database(monkeypatch, capsys):
     _patch(monkeypatch, version=1, modules=[FakeModule(1, "baseline")])
     cli.cmd_migrate(argparse.Namespace(status=True))
     assert "no pending migrations" in capsys.readouterr().out
+
+
+def test_migrate_reports_error_and_exits_when_run_migrations_raises(monkeypatch, capsys):
+    calls = {"closed": 0}
+    pool = object()
+
+    async def fake_get_pool():
+        return pool
+
+    async def fake_close_db():
+        calls["closed"] += 1
+
+    async def fake_run_migrations(arg):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(db, "get_pool", fake_get_pool)
+    monkeypatch.setattr(db, "close_db", fake_close_db)
+    monkeypatch.setattr(runner, "run_migrations", fake_run_migrations)
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.cmd_migrate(argparse.Namespace(status=False))
+
+    assert exc_info.value.code == 1
+    assert "[ERROR] Migration failed: boom" in capsys.readouterr().out
+    assert calls["closed"] == 1
 
 
 def test_parser_exposes_migrate_and_its_status_flag(monkeypatch):
