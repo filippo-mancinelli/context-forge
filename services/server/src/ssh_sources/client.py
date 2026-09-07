@@ -86,6 +86,17 @@ def _confine(root: str, rel: str) -> str:
     return candidate
 
 
+def confined_path(conn: dict[str, Any], path: str) -> str:
+    """Public confinement check: same guard and error as write_file/read_file,
+    for callers that must validate a path before touching SFTP at all (e.g.
+    proposing a write for approval)."""
+    root = posixpath.normpath(conn["root_path"])
+    try:
+        return _confine(root, path)
+    except SSHSourceError as e:
+        raise ValueError(str(e)) from e
+
+
 def _globs(csv: Optional[str]) -> list[str]:
     return [p.strip() for p in (csv or "").split(",") if p.strip()]
 

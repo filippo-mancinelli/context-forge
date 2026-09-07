@@ -264,6 +264,30 @@ def test_ssh_write_file_with_neither_permission_is_denied():
             source="web1", path="app.yml", content="x"))
 
 
+def test_ssh_write_file_propose_rejects_an_escaping_path(monkeypatch):
+    """Un path fuori dalla radice va rifiutato come il percorso diretto, prima
+    del preview: altrimenti l'approvazione (Task 4) fallirebbe sulla stessa
+    guardia dopo aver già creato la richiesta."""
+    async def fake_resolve(source, include_secret=False):
+        return _source_record()
+
+    def no_preview(*a, **k):
+        raise AssertionError("must not preview an escaping path")
+
+    async def no_create(**kwargs):
+        raise AssertionError("must not create a request for an escaping path")
+
+    monkeypatch.setattr(mcp_ssh, "_resolve", fake_resolve)
+    monkeypatch.setattr(write_previews, "file_preview", no_preview)
+    monkeypatch.setattr(wr_service, "create", no_create)
+    set_current_permissions(frozenset({"context-write"}))
+
+    out = asyncio.run(_underlying(mcp_ssh.ssh_write_file)(
+        source="web1", path="../../etc/passwd", content="x"))
+
+    assert out == {"status": "error", "error": "Path escapes the source root"}
+
+
 def test_ssh_write_file_proposal_scrubs_the_read_error(monkeypatch):
     """Il preview non deve portare credenziali di connessione all'agente/UI."""
     async def fake_resolve(source, include_secret=False):

@@ -37,6 +37,19 @@ def test_confine_rejects_sibling_prefix():
         client._confine("/etc/askme", "../askme-other/x")
 
 
+# ── confined_path (guardia pubblica, usata prima di proporre una scrittura) ──
+
+def test_confined_path_returns_the_resolved_path_inside_root():
+    conn = {"root_path": "/etc/askme"}
+    assert client.confined_path(conn, "sub/app.yml") == "/etc/askme/sub/app.yml"
+
+
+def test_confined_path_rejects_an_escaping_path():
+    conn = {"root_path": "/etc/askme"}
+    with pytest.raises(ValueError, match="escapes the source root"):
+        client.confined_path(conn, "../../etc/passwd")
+
+
 # ── filtri glob ───────────────────────────────────────────────────────────────
 
 def test_matches_include_only():
