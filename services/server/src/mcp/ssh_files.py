@@ -228,12 +228,19 @@ async def ssh_write_file(source: str, path: str, content: str, reason: str = "")
 async def _propose_ssh_write(record: dict, path: str, content: str, reason: str) -> dict:
     """Store the content as a pending write request instead of writing it."""
     from .. import write_previews, write_requests
+    from ..ssh_sources import client
     from .approvals import current_requester, pending_response
     from .audit import scrub_text
 
+    conn_params = ssh_service.decrypted_conn(record)
+    try:
+        client.confined_path(conn_params, path)
+    except Exception as e:  # noqa: BLE001 - same rejection the direct path gives
+        return {"status": "error", "error": str(e)}
+
     try:
         preview = await asyncio.to_thread(
-            write_previews.file_preview, ssh_service.decrypted_conn(record), path, content
+            write_previews.file_preview, conn_params, path, content
         )
     except Exception as e:  # noqa: BLE001
         return {"status": "error", "error": str(e)}
