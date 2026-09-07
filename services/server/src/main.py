@@ -46,6 +46,11 @@ async def main() -> None:
     # migrate repo storage to tenant-aware composite identity.
     await ensure_tenant_storage()
 
+    # Rebuilt in the background: a large HNSW build must not delay boot.
+    from .vector_index import ensure_all_indexes
+
+    asyncio.create_task(ensure_all_indexes())
+
     # Requeue any knowledge-base documents / web pages / repos left mid-processing by a crash.
     from .kb.store import reset_stale_processing
     from .web.store import reset_stale_processing as reset_stale_web

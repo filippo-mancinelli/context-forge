@@ -11,6 +11,8 @@ import logging
 
 from .db import get_pool
 from .indexer.embedder import embed_batch
+from .org_settings import get_org_settings
+from .vector_index import ensure_org_indexes
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +72,8 @@ async def reembed_org(org_id: int, job_id: str) -> dict:
                 )
                 done += len(batch)
             counts[table] = done
+        dims = int((await get_org_settings(org_id)).embeddings_dims)
+        await ensure_org_indexes(org_id, dims)
         await _set_job_status(job_id, "completed", result=counts)
     except Exception as exc:
         logger.exception("org_reembed failed (org=%s)", org_id)

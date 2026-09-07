@@ -54,6 +54,11 @@ def _patch(monkeypatch, current=None):
     monkeypatch.setattr(settings_routes, "reset_embedder_clients", lambda: None)
     monkeypatch.setattr(settings_routes, "reset_memory_client", lambda: None)
 
+    async def mock_ensure_org_indexes(org_id: int, dims: int):
+        return []
+
+    monkeypatch.setattr(settings_routes, "ensure_org_indexes", mock_ensure_org_indexes)
+
     return current
 
 
