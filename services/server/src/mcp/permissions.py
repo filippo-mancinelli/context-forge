@@ -82,6 +82,12 @@ def get_current_permissions() -> Optional[frozenset]:
     return _current_permissions.get()
 
 
+def has_permission(permission: str) -> bool:
+    """True when the current caller holds it. None (auth off) allows everything."""
+    perms = _current_permissions.get()
+    return perms is None or "*" in perms or permission in perms
+
+
 def permissions_from_groups(groups: Optional[Iterable[str]], prefix: str = "/mcp-tools/") -> frozenset:
     perms = set()
     for group in groups or []:
@@ -95,8 +101,8 @@ def permissions_from_groups(groups: Optional[Iterable[str]], prefix: str = "/mcp
     return frozenset(perms)
 
 
-def requires_permission(permission: str):
-    """None (auth off / legacy caller) allows everything; otherwise the set must contain '*' or the permission."""
+def requires_permission(permission: str, *, alternatives: tuple[str, ...] = ()):
+    """None (auth off / legacy caller) allows everything; otherwise the set must contain '*', the permission, or one of `alternatives` (a weaker path, e.g. proposing instead of executing)."""
     def decorator(fn):
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
@@ -106,7 +112,10 @@ def requires_permission(permission: str):
 
             async with audited(fn.__name__, permission, summarize_args(kwargs)) as call:
                 perms = _current_permissions.get()
-                if perms is not None and "*" not in perms and permission not in perms:
+                allowed = perms is None or "*" in perms or permission in perms or any(
+                    alt in perms for alt in alternatives
+                )
+                if not allowed:
                     raise PermissionDenied(
                         f"Access denied: tool requires permission '{permission}'. "
                         f"Ask an organization admin to grant it in the dashboard's "
