@@ -15,6 +15,7 @@ from typing import Any, Optional
 import httpx
 
 from .server import mcp
+from .permissions import requires_permission
 from ..db import get_pool
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ async def _execute_http_job(job_id: str, url: str, method: str, payload: dict, h
 
 
 @mcp.tool()
+@requires_permission("jobs")
 async def job_submit(
     url: str,
     method: str = "POST",
@@ -85,22 +87,28 @@ async def job_submit(
         dict with job_id to use with job_status() and job_result()
 
     Example:
-        job = job_submit(url="http://askmechat:8005/api/v1/query",
+        job = job_submit(url="http://my-service:8005/api/v1/query",
                          payload={"question": "How many users today?"})
         # later:
         status = job_status(job["job_id"])
         result = job_result(job["job_id"])
     """
+    from .context import resolve_org_id, require_project_id
+
     job_id = str(uuid.uuid4())
+    org_id = await resolve_org_id()
+    project_id = await require_project_id()
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO jobs (id, tool, params, status)
-            VALUES ($1, 'http', $2, 'pending')
+            INSERT INTO jobs (id, tool, params, status, org_id, project_id)
+            VALUES ($1, 'http', $2, 'pending', $3, $4)
             """,
             job_id,
             json.dumps({"url": url, "method": method, "payload": payload or {}, "headers": headers or {}}),
+            org_id,
+            project_id,
         )
 
     asyncio.create_task(
@@ -115,6 +123,7 @@ async def job_submit(
 
 
 @mcp.tool()
+@requires_permission("jobs")
 async def job_status(job_id: str) -> dict:
     """Check the status of a submitted async job.
 
@@ -125,11 +134,15 @@ async def job_status(job_id: str) -> dict:
         dict with status: "pending" | "running" | "done" | "error"
         When done or error, also includes the result or error_message.
     """
+    from .context import require_project_id
+
+    project_id = await require_project_id()
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, status, error_message, created_at, updated_at FROM jobs WHERE id = $1",
-            job_id,
+            "SELECT id, status, error_message, created_at, updated_at "
+            "FROM jobs WHERE id = $1 AND project_id = $2",
+            job_id, project_id,
         )
 
     if not row:
@@ -147,6 +160,7 @@ async def job_status(job_id: str) -> dict:
 
 
 @mcp.tool()
+@requires_permission("jobs")
 async def job_result(job_id: str) -> dict:
     """Retrieve the result of a completed async job.
 
@@ -156,11 +170,14 @@ async def job_result(job_id: str) -> dict:
     Returns:
         dict with the job result, or an error if the job is not yet done or failed.
     """
+    from .context import require_project_id
+
+    project_id = await require_project_id()
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT id, status, result, error_message FROM jobs WHERE id = $1",
-            job_id,
+            "SELECT id, status, result, error_message FROM jobs WHERE id = $1 AND project_id = $2",
+            job_id, project_id,
         )
 
     if not row:

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from ...db import get_pool
 from ...web import crawler, store
 from ...web.store import FetchError, normalize_url
-from ..deps import ActiveOrg, get_active_org, require_role
+from ..deps import ActiveProject, get_active_project, require_project_role
 
 router = APIRouter(prefix="/web", tags=["web-pages"])
 
@@ -53,26 +53,29 @@ _PAGE_COLUMNS = (
 
 
 @router.get("/pages", response_model=list[WebPageOut])
-async def list_pages(org: ActiveOrg = Depends(get_active_org)):
-    """List all web pages for the active organization."""
+async def list_pages(org: ActiveProject = Depends(get_active_project)):
+    """List all web pages for the active project."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            f"SELECT {_PAGE_COLUMNS} FROM web_pages WHERE org_id=$1 ORDER BY created_at DESC",
+            f"SELECT {_PAGE_COLUMNS} FROM web_pages WHERE org_id=$1 AND project_id=$2 "
+            "ORDER BY created_at DESC",
             org.org_id,
+            org.project_id,
         )
     return [_row_to_out(r) for r in rows]
 
 
 @router.get("/pages/{page_id}/chunks")
 async def get_page_chunks(
-    page_id: int, limit: int = 50, org: ActiveOrg = Depends(get_active_org)
+    page_id: int, limit: int = 50, org: ActiveProject = Depends(get_active_project)
 ):
     """Return a page's extracted text chunks (for previewing content)."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         exists = await conn.fetchval(
-            "SELECT 1 FROM web_pages WHERE id=$1 AND org_id=$2", page_id, org.org_id
+            "SELECT 1 FROM web_pages WHERE id=$1 AND org_id=$2 AND project_id=$3",
+            page_id, org.org_id, org.project_id,
         )
         if not exists:
             raise HTTPException(status_code=404, detail="Page not found")
@@ -98,7 +101,7 @@ class WebAddRequest(BaseModel):
 async def add_pages(
     req: WebAddRequest,
     background_tasks: BackgroundTasks,
-    org: ActiveOrg = Depends(require_role("member")),
+    org: ActiveProject = Depends(require_project_role("member")),
 ):
     """Add one or more URLs. Each is fetched + embedded in the background."""
     if not req.urls:
@@ -119,7 +122,7 @@ async def add_pages(
         if norm in seen:
             continue
         seen.add(norm)
-        record = await store.add_url(org.org_id, norm)
+        record = await store.add_url(org.org_id, org.project_id, norm)
         created.append(record)
         background_tasks.add_task(store.process_page, record["id"])
 
@@ -135,16 +138,17 @@ async def add_pages(
 async def refetch_page(
     page_id: int,
     background_tasks: BackgroundTasks,
-    org: ActiveOrg = Depends(require_role("member")),
+    org: ActiveProject = Depends(require_project_role("member")),
 ):
     """Re-fetch and re-embed a page (e.g. after a change or a failure)."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         updated = await conn.fetchval(
             "UPDATE web_pages SET status='pending', error_message=NULL "
-            "WHERE id=$1 AND org_id=$2 RETURNING id",
+            "WHERE id=$1 AND org_id=$2 AND project_id=$3 RETURNING id",
             page_id,
             org.org_id,
+            org.project_id,
         )
     if updated is None:
         raise HTTPException(status_code=404, detail="Page not found")
@@ -153,9 +157,9 @@ async def refetch_page(
 
 
 @router.delete("/pages/{page_id}")
-async def delete_page(page_id: int, org: ActiveOrg = Depends(require_role("member"))):
+async def delete_page(page_id: int, org: ActiveProject = Depends(require_project_role("member"))):
     """Delete a page and its chunks."""
-    ok = await store.delete_page(org.org_id, page_id)
+    ok = await store.delete_page(org.org_id, org.project_id, page_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Page not found")
     return {"status": "ok", "deleted": page_id}
@@ -192,7 +196,7 @@ SELECT s.id, s.root_url, s.status, s.max_pages, s.exclude_patterns,
        COALESCE(SUM(p.total_chunks), 0)              AS total_chunks
 FROM web_sites s
 LEFT JOIN web_pages p ON p.site_id = s.id
-WHERE s.org_id = $1
+WHERE s.org_id = $1 AND s.project_id = $2
 GROUP BY s.id
 ORDER BY s.created_at DESC
 """
@@ -204,11 +208,11 @@ def _site_row_to_out(row) -> WebSiteOut:
 
 
 @router.get("/sites", response_model=list[WebSiteOut])
-async def list_sites(org: ActiveOrg = Depends(get_active_org)):
+async def list_sites(org: ActiveProject = Depends(get_active_project)):
     """List crawled sites with per-site page/chunk aggregates."""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch(_SITE_LIST_SQL, org.org_id)
+        rows = await conn.fetch(_SITE_LIST_SQL, org.org_id, org.project_id)
     return [_site_row_to_out(r) for r in rows]
 
 
@@ -222,7 +226,7 @@ class WebSiteCreateRequest(BaseModel):
 async def add_site(
     req: WebSiteCreateRequest,
     background_tasks: BackgroundTasks,
-    org: ActiveOrg = Depends(require_role("member")),
+    org: ActiveProject = Depends(require_project_role("member")),
 ):
     """Register a crawl root and start crawling it in the background.
 
@@ -231,7 +235,7 @@ async def add_site(
     """
     try:
         site = await crawler.add_site(
-            org.org_id, req.root_url, req.max_pages, req.exclude_patterns
+            org.org_id, org.project_id, req.root_url, req.max_pages, req.exclude_patterns
         )
     except FetchError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -248,11 +252,12 @@ class WebSiteUpdateRequest(BaseModel):
 async def update_site(
     site_id: int,
     req: WebSiteUpdateRequest,
-    org: ActiveOrg = Depends(require_role("member")),
+    org: ActiveProject = Depends(require_project_role("member")),
 ):
     """Update a site's crawl settings (applied on the next crawl)."""
     site = await crawler.update_site(
-        org.org_id, site_id, max_pages=req.max_pages, exclude_patterns=req.exclude_patterns
+        org.org_id, org.project_id, site_id,
+        max_pages=req.max_pages, exclude_patterns=req.exclude_patterns,
     )
     if site is None:
         raise HTTPException(status_code=404, detail="Site not found")
@@ -263,16 +268,17 @@ async def update_site(
 async def recrawl_site(
     site_id: int,
     background_tasks: BackgroundTasks,
-    org: ActiveOrg = Depends(require_role("member")),
+    org: ActiveProject = Depends(require_project_role("member")),
 ):
     """Re-crawl a site: refresh existing pages, discover new ones, drop excluded ones."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         updated = await conn.fetchval(
             "UPDATE web_sites SET status='pending', error_message=NULL "
-            "WHERE id=$1 AND org_id=$2 AND status <> 'crawling' RETURNING id",
+            "WHERE id=$1 AND org_id=$2 AND project_id=$3 AND status <> 'crawling' RETURNING id",
             site_id,
             org.org_id,
+            org.project_id,
         )
     if updated is None:
         raise HTTPException(status_code=404, detail="Site not found or already crawling")
@@ -281,28 +287,30 @@ async def recrawl_site(
 
 
 @router.get("/sites/{site_id}/pages", response_model=list[WebPageOut])
-async def list_site_pages(site_id: int, org: ActiveOrg = Depends(get_active_org)):
+async def list_site_pages(site_id: int, org: ActiveProject = Depends(get_active_project)):
     """List the pages discovered by a site crawl."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         exists = await conn.fetchval(
-            "SELECT 1 FROM web_sites WHERE id=$1 AND org_id=$2", site_id, org.org_id
+            "SELECT 1 FROM web_sites WHERE id=$1 AND org_id=$2 AND project_id=$3",
+            site_id, org.org_id, org.project_id,
         )
         if not exists:
             raise HTTPException(status_code=404, detail="Site not found")
         rows = await conn.fetch(
             f"SELECT {_PAGE_COLUMNS} FROM web_pages WHERE site_id=$1 AND org_id=$2 "
-            "ORDER BY url",
+            "AND project_id=$3 ORDER BY url",
             site_id,
             org.org_id,
+            org.project_id,
         )
     return [_row_to_out(r) for r in rows]
 
 
 @router.delete("/sites/{site_id}")
-async def delete_site(site_id: int, org: ActiveOrg = Depends(require_role("member"))):
+async def delete_site(site_id: int, org: ActiveProject = Depends(require_project_role("member"))):
     """Delete a site and all of its pages and chunks."""
-    ok = await crawler.delete_site(org.org_id, site_id)
+    ok = await crawler.delete_site(org.org_id, org.project_id, site_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Site not found")
     return {"status": "ok", "deleted": site_id}
@@ -315,13 +323,13 @@ class WebSearchRequest(BaseModel):
 
 
 @router.post("/search")
-async def search_web(req: WebSearchRequest, org: ActiveOrg = Depends(get_active_org)):
-    """Semantic search across the active organization's scraped web pages."""
+async def search_web(req: WebSearchRequest, org: ActiveProject = Depends(get_active_project)):
+    """Semantic search across the active project's scraped web pages."""
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query must not be empty")
     try:
         results = await store.search_pages(
-            org.org_id, req.query.strip(), limit=req.limit, page_ids=req.page_ids
+            org.org_id, org.project_id, req.query.strip(), limit=req.limit, page_ids=req.page_ids
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {e}")

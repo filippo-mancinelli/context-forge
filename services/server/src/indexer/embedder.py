@@ -5,6 +5,12 @@ Supported providers (via EMBEDDINGS_PROVIDER):
   - jina            : Jina AI embeddings (1M tokens/month free)
   - openai-compatible: Any OpenAI-compatible endpoint (set EMBEDDINGS_BASE_URL)
   - local           : sentence-transformers (requires EMBEDDINGS_PROVIDER=local at build time)
+
+Each organization can override its embeddings provider/model/key/base URL
+(see ``org_settings``). API clients are cached per resolved configuration
+signature ``(provider, base_url, api_key, model)`` so organizations sharing
+the same configuration share a client, while distinct configurations get
+their own.
 """
 from __future__ import annotations
 
@@ -12,10 +18,15 @@ import asyncio
 import logging
 from typing import Sequence
 
+from ..org_settings import OrgSettings, get_org_settings
+
 logger = logging.getLogger(__name__)
 
-_openai_client = None
-_local_model = None
+# Client per firma di configurazione (provider, base_url, api_key, model):
+# org diverse con la stessa config condividono il client.
+_api_clients: dict[tuple, object] = {}
+_org_client_keys: dict[int, tuple] = {}
+_local_models: dict[str, object] = {}
 
 # Known provider defaults
 _PROVIDER_DEFAULTS = {
@@ -32,76 +43,79 @@ _PROVIDER_DEFAULTS = {
 }
 
 
-def _get_api_client():
-    """Get (or create) the AsyncOpenAI client for the configured embeddings provider."""
-    global _openai_client
-    if _openai_client is None:
-        from openai import AsyncOpenAI
-        from ..config import get_settings
-        s = get_settings()
+def _make_client(api_key, base_url):
+    from openai import AsyncOpenAI
 
-        provider = s.embeddings_provider
-        defaults = _PROVIDER_DEFAULTS.get(provider, {})
+    kwargs = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+    return AsyncOpenAI(**kwargs)
 
-        # Resolve API key: EMBEDDINGS_API_KEY > provider-specific key > OPENAI_API_KEY
-        api_key = (
-            s.embeddings_api_key
-            or (s.openai_api_key if provider == "openai" else "")
-            or s.openai_api_key  # final fallback
-        )
 
-        # Resolve base URL: EMBEDDINGS_BASE_URL > provider default
-        base_url = s.embeddings_base_url or defaults.get("base_url")
+def _resolve_client_config(s: OrgSettings) -> tuple:
+    defaults = _PROVIDER_DEFAULTS.get(s.embeddings_provider, {})
+    api_key = s.embeddings_api_key or s.openai_api_key
+    base_url = s.embeddings_base_url or defaults.get("base_url")
+    return (s.embeddings_provider, base_url, api_key, s.embeddings_model)
 
-        kwargs = {"api_key": api_key}
-        if base_url:
-            kwargs["base_url"] = base_url
 
-        _openai_client = AsyncOpenAI(**kwargs)
+async def _get_api_client(org_id: int):
+    """Get (or create) the AsyncOpenAI client for an organization's embeddings config."""
+    s = await get_org_settings(org_id)
+    key = _resolve_client_config(s)
+    client = _api_clients.get(key)
+    if client is None:
+        client = _make_client(key[2], key[1])
+        _api_clients[key] = client
         logger.info(
-            "Embeddings client: provider=%s base_url=%s model=%s",
-            provider, base_url or "openai-default", s.embeddings_model,
+            "Embeddings client: provider=%s base_url=%s model=%s (org=%s)",
+            key[0], key[1] or "openai-default", key[3], org_id,
         )
-    return _openai_client
+    _org_client_keys[org_id] = key
+    return client
 
 
-def reset_embedder_clients() -> None:
-    """Reset provider clients so runtime settings changes are applied."""
-    global _openai_client, _local_model
-    _openai_client = None
-    _local_model = None
+def reset_embedder_clients(org_id: int | None = None) -> None:
+    """Reset provider clients so settings changes are applied."""
+    global _local_models
+    if org_id is None:
+        _api_clients.clear()
+        _org_client_keys.clear()
+        _local_models = {}
+        return
+    key = _org_client_keys.pop(org_id, None)
+    if key is not None:
+        _api_clients.pop(key, None)
 
 
-def _get_local_model():
-    global _local_model
-    if _local_model is None:
+def _get_local_model(model_name: str):
+    model = _local_models.get(model_name)
+    if model is None:
         from sentence_transformers import SentenceTransformer
-        from ..config import get_settings
-        model_name = get_settings().embeddings_model or "all-MiniLM-L6-v2"
+
         logger.info("Loading local embedding model: %s", model_name)
-        _local_model = SentenceTransformer(model_name)
-    return _local_model
+        model = SentenceTransformer(model_name)
+        _local_models[model_name] = model
+    return model
 
 
-async def embed_text(text: str) -> list[float]:
-    """Embed a single text string."""
-    results = await embed_batch([text])
+async def embed_text(text: str, org_id: int) -> list[float]:
+    """Embed a single text string with the organization's embedder."""
+    results = await embed_batch([text], org_id)
     return results[0]
 
 
-async def embed_batch(texts: Sequence[str]) -> list[list[float]]:
-    """Embed a batch of texts. Returns list of embedding vectors."""
-    from ..config import get_settings
-    settings = get_settings()
+async def embed_batch(texts: Sequence[str], org_id: int) -> list[list[float]]:
+    """Embed a batch of texts with the organization's embedder."""
+    s = await get_org_settings(org_id)
+    if s.embeddings_provider == "local":
+        return await _embed_local(texts, s.embeddings_model or "all-MiniLM-L6-v2")
+    client = await _get_api_client(org_id)
+    return await _embed_api(client, texts, s.embeddings_model)
 
-    if settings.embeddings_provider == "local":
-        return await _embed_local(texts)
-    return await _embed_api(texts, settings.embeddings_model)
 
-
-async def _embed_api(texts: Sequence[str], model: str) -> list[list[float]]:
+async def _embed_api(client, texts: Sequence[str], model: str) -> list[list[float]]:
     """Call any OpenAI-compatible embeddings API."""
-    client = _get_api_client()
     batch_size = 20
     all_embeddings = []
     for i in range(0, len(texts), batch_size):
@@ -151,9 +165,9 @@ async def _embed_api_batch_with_retry(client, model: str, batch: list[str]) -> l
     raise RuntimeError("Embeddings retry loop exhausted unexpectedly")
 
 
-async def _embed_local(texts: Sequence[str]) -> list[list[float]]:
+async def _embed_local(texts: Sequence[str], model_name: str) -> list[list[float]]:
     loop = asyncio.get_event_loop()
-    model = _get_local_model()
+    model = _get_local_model(model_name)
     embeddings = await loop.run_in_executor(
         None, lambda: model.encode(list(texts), batch_size=32, show_progress_bar=False)
     )

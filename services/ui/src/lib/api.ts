@@ -1,4 +1,4 @@
-const BASE = import.meta.env.VITE_API_URL || ''
+export const BASE = import.meta.env.VITE_API_URL || ''
 const AUTH_TOKEN_KEY = 'cf_admin_token'
 const ACTIVE_ORG_KEY = 'cf_active_org'
 
@@ -24,12 +24,26 @@ export function setActiveOrgId(orgId: number | null) {
   else localStorage.setItem(ACTIVE_ORG_KEY, String(orgId))
 }
 
+import { tenancyHeaders } from './tenancy'
+
+const ACTIVE_PROJECT_KEY = 'cf_active_project'
+
+export function getActiveProjectId(): number | null {
+  const raw = localStorage.getItem(ACTIVE_PROJECT_KEY)
+  return raw ? Number(raw) : null
+}
+
+export function setActiveProjectId(projectId: number | null) {
+  if (projectId === null) localStorage.removeItem(ACTIVE_PROJECT_KEY)
+  else localStorage.setItem(ACTIVE_PROJECT_KEY, String(projectId))
+}
+
 async function request<T>(path: string, options?: RequestInit, includeAuth = true): Promise<T> {
   const token = includeAuth ? getAuthToken() : null
   const activeOrg = includeAuth ? getActiveOrgId() : null
+  const activeProject = includeAuth ? getActiveProjectId() : null
   const headers: Record<string, string> = {
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(activeOrg ? { 'X-Org-Id': String(activeOrg) } : {}),
+    ...tenancyHeaders(token, activeOrg, activeProject),
     ...((options?.headers as Record<string, string> | undefined) || {}),
   }
 
@@ -49,12 +63,7 @@ async function request<T>(path: string, options?: RequestInit, includeAuth = tru
 }
 
 function authHeaders(): Record<string, string> {
-  const token = getAuthToken()
-  const activeOrg = getActiveOrgId()
-  return {
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(activeOrg ? { 'X-Org-Id': String(activeOrg) } : {}),
-  }
+  return tenancyHeaders(getAuthToken(), getActiveOrgId(), getActiveProjectId())
 }
 
 async function uploadRequest<T>(path: string, formData: FormData): Promise<T> {
@@ -359,16 +368,33 @@ export interface MCPApiKey {
   id: number
   name: string
   scope: string
+  permissions?: string
   created_at: string
   last_used_at?: string
   expires_at?: string
   created_by: number
+  project_id?: number
+  project_slug?: string
 }
 
-export interface MCPApiKeyCreateRequest {
-  name: string
-  scope?: string
-  expires_days?: number
+export type McpPermission = 'context-read' | 'context-write' | 'db-query' | 'repo-write' | 'jobs'
+
+export const MCP_PERMISSION_VALUES: McpPermission[] = [
+  'context-read',
+  'context-write',
+  'db-query',
+  'repo-write',
+  'jobs',
+]
+
+export interface RolePermissionEntry {
+  permissions: string[]
+  customized: boolean
+}
+
+export interface McpPermissionsMatrix {
+  roles: Record<OrgRole, RolePermissionEntry>
+  available_permissions: McpPermission[]
 }
 
 export type OrgRole = 'viewer' | 'member' | 'admin' | 'owner'
@@ -382,21 +408,70 @@ export interface Organization {
   role?: OrgRole
 }
 
+export interface Project {
+  id: number
+  org_id: number
+  name: string
+  slug: string
+  memory_namespace: string
+  created_at?: string
+  // Ruolo effettivo dell'utente su questo progetto (owner/admin org: quello org).
+  role?: string
+}
+
+export interface ProjectMember {
+  user_id: number
+  // Server omits this field for non-owner callers.
+  role?: string
+  username?: string
+  email?: string
+  created_at?: string
+}
+
+export interface SshSource {
+  id: number
+  name: string
+  host: string
+  port: number
+  username: string
+  auth_method: 'key' | 'password'
+  has_secret: boolean
+  root_path: string
+  include_globs?: string
+  exclude_globs?: string
+  description?: string
+  status: 'unknown' | 'ok' | 'error'
+  error_message?: string
+  last_checked_at?: string
+}
+
+export interface SshSourceRequest {
+  name: string
+  host: string
+  port?: number
+  username: string
+  auth_method?: 'key' | 'password'
+  password?: string
+  private_key?: string
+  root_path: string
+  include_globs?: string
+  exclude_globs?: string
+  description?: string
+}
+
+export interface SshFile {
+  path: string
+  name: string
+  size?: number
+  modified?: number
+}
+
 export interface OrgMember {
   user_id: number
   username: string
   email?: string
-  role: OrgRole
-  created_at?: string
-}
-
-export interface OrgInvitation {
-  id: number
-  org_id: number
-  email: string
-  role: OrgRole
-  expires_at?: string
-  accepted_at?: string
+  // Server omits this field for non-owner callers.
+  role?: OrgRole
   created_at?: string
 }
 
@@ -430,6 +505,13 @@ export interface DbConnection {
   created_at?: string
   updated_at?: string
   annotation_count?: number
+  // Accesso via bastion SSH
+  ssh_enabled?: boolean
+  ssh_host?: string
+  ssh_port?: number
+  ssh_username?: string
+  ssh_auth_method?: 'key' | 'password'
+  has_ssh_secret?: boolean
 }
 
 export interface DbConnectionRequest {
@@ -442,6 +524,14 @@ export interface DbConnectionRequest {
   password?: string
   options?: Record<string, unknown>
   description?: string
+  // Accesso via bastion SSH. host/port sopra sono il DB visto dal bastion.
+  ssh_enabled?: boolean
+  ssh_host?: string
+  ssh_port?: number
+  ssh_username?: string
+  ssh_auth_method?: 'key' | 'password'
+  ssh_password?: string
+  ssh_private_key?: string
 }
 
 export type EnvironmentKind = 'production' | 'staging' | 'development' | 'other'
@@ -643,6 +733,9 @@ export interface SettingsUpdateResponse {
 }
 
 export const api = {
+  config: {
+    get: () => request<{ public_mcp_url: string }>('/api/config', undefined, false),
+  },
   setup: {
     status: () => request<SetupStatus>('/api/setup/status', undefined, false),
     init: (payload: {
@@ -666,7 +759,8 @@ export const api = {
       ),
     session: () => request<{ status: string }>('/api/auth/session'),
     me: () => request<MeResponse>('/api/auth/me'),
-    logout: () => request('/api/auth/logout', { method: 'POST' }),
+    logout: () =>
+      request<{ status: string; logout_url?: string }>('/api/auth/logout', { method: 'POST' }),
   },
   organizations: {
     list: () => request<{ organizations: Organization[] }>('/api/organizations'),
@@ -693,30 +787,89 @@ export const api = {
       request<{ status: string }>(`/api/organizations/${orgId}/members/${userId}`, {
         method: 'DELETE',
       }),
-    invitations: (orgId: number) =>
-      request<{ invitations: OrgInvitation[] }>(`/api/organizations/${orgId}/invitations`),
-    invite: (orgId: number, email: string, role: OrgRole) =>
-      request<{ status: string; invitation?: OrgInvitation; invite_token?: string; added_existing_user?: boolean }>(
-        `/api/organizations/${orgId}/invitations`,
-        { method: 'POST', body: JSON.stringify({ email, role }) }
-      ),
-    revokeInvite: (orgId: number, invitationId: number) =>
-      request<{ status: string }>(`/api/organizations/${orgId}/invitations/${invitationId}`, {
+    mcpPermissions: (orgId: number) =>
+      request<McpPermissionsMatrix>(`/api/organizations/${orgId}/mcp-permissions`),
+    updateMcpPermissions: (orgId: number, roles: Record<OrgRole, string[]>) =>
+      request<{ status: string }>(`/api/organizations/${orgId}/mcp-permissions`, {
+        method: 'PUT',
+        body: JSON.stringify({ roles }),
+      }),
+    resetMcpPermissions: (orgId: number) =>
+      request<{ status: string }>(`/api/organizations/${orgId}/mcp-permissions`, {
         method: 'DELETE',
       }),
+    createUser: (
+      orgId: number,
+      user: {
+        username: string
+        password: string
+        email: string
+        role: OrgRole
+        projects: { project_id: number; role: string }[]
+      }
+    ) =>
+      request<{
+        status: string
+        user: { user_id: number; username: string; email: string; role: OrgRole }
+        projects: { project_id: number; role: string }[]
+      }>(`/api/organizations/${orgId}/users`, {
+        method: 'POST',
+        body: JSON.stringify(user),
+      }),
   },
-  invitations: {
-    preview: (token: string) =>
-      request<{ email: string; role: OrgRole; org_name: string; expires_at?: string }>(
-        `/api/invitations/${encodeURIComponent(token)}`,
-        undefined,
-        false
-      ),
-    accept: (token: string, username: string, password: string) =>
-      request<{ status: string; token: string; token_type: string }>(
-        '/api/invitations/accept',
-        { method: 'POST', body: JSON.stringify({ token, username, password }) },
-        false
+  projects: {
+    list: () => request<{ projects: Project[] }>('/api/projects'),
+    create: (name: string) =>
+      request<{ status: string; project: Project }>('/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      }),
+    update: (id: number, name: string) =>
+      request<{ status: string; project: Project }>(`/api/projects/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name }),
+      }),
+    delete: (id: number) =>
+      request<{ status: string }>(`/api/projects/${id}`, { method: 'DELETE' }),
+    members: (id: number) =>
+      request<{ members: ProjectMember[] }>(`/api/projects/${id}/members`),
+    addMember: (id: number, member: { user_id?: number; email?: string; role: string }) =>
+      request<{ status: string; member: ProjectMember }>(`/api/projects/${id}/members`, {
+        method: 'POST',
+        body: JSON.stringify(member),
+      }),
+    removeMember: (id: number, userId: number) =>
+      request<{ status: string }>(`/api/projects/${id}/members/${userId}`, { method: 'DELETE' }),
+  },
+  sshSources: {
+    list: () => request<{ sources: SshSource[] }>('/api/ssh-sources'),
+    create: (req: SshSourceRequest) =>
+      request<{ status: string; source: SshSource }>('/api/ssh-sources', {
+        method: 'POST',
+        body: JSON.stringify(req),
+      }),
+    update: (id: number, req: SshSourceRequest) =>
+      request<{ status: string; source: SshSource }>(`/api/ssh-sources/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(req),
+      }),
+    delete: (id: number) =>
+      request<{ status: string }>(`/api/ssh-sources/${id}`, { method: 'DELETE' }),
+    test: (id: number) =>
+      request<{ status: 'ok' | 'error'; error?: string }>(`/api/ssh-sources/${id}/test`, {
+        method: 'POST',
+      }),
+    files: (id: number, opts?: { subpath?: string; recursive?: boolean }) => {
+      const params = new URLSearchParams()
+      if (opts?.subpath) params.set('subpath', opts.subpath)
+      if (opts?.recursive) params.set('recursive', 'true')
+      const qs = params.toString()
+      return request<{ files: SshFile[] }>(`/api/ssh-sources/${id}/files${qs ? `?${qs}` : ''}`)
+    },
+    writeFile: (id: number, path: string, content: string) =>
+      request<{ status: string; path: string; bytes_written: number }>(
+        `/api/ssh-sources/${id}/files`,
+        { method: 'PUT', body: JSON.stringify({ path, content }) }
       ),
   },
   repos: {
@@ -957,6 +1110,8 @@ export const api = {
     get: () => request<{ forge_config: Record<string, unknown>; settings_overrides: Record<string, unknown>; settings_overrides_editable?: boolean }>('/api/settings'),
     update: (payload: { forge_config: Record<string, unknown>; settings_overrides: Record<string, unknown> }) =>
       request<SettingsUpdateResponse>('/api/settings', { method: 'PUT', body: JSON.stringify(payload) }),
+    reembed: () =>
+      request<{ status: string; job_id: string }>('/api/settings/reembed', { method: 'POST' }),
   },
   datasources: {
     list: () => request<{ connections: DbConnection[]; engines: DbEngine[] }>('/api/datasources'),
@@ -1055,10 +1210,10 @@ export const api = {
   },
   mcpKeys: {
     list: () => request<{ keys: MCPApiKey[] }>('/api/mcp/keys'),
-    create: (req: MCPApiKeyCreateRequest) =>
-      request<{ key: string; id: number; name: string; scope: string; expires_at: string | null }>('/api/mcp/keys', {
+    create: (body: { name: string; permissions?: string[]; scope?: string; expires_days?: number; project_id?: number }) =>
+      request<{ key: string; id: number; name: string; scope: string; permissions: string; expires_at: string | null }>('/api/mcp/keys', {
         method: 'POST',
-        body: JSON.stringify(req),
+        body: JSON.stringify(body),
       }),
     revoke: (keyId: number) => request<{ status: string }>(`/api/mcp/keys/${keyId}`, { method: 'DELETE' }),
   },

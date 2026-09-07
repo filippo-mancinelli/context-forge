@@ -4,32 +4,33 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 
 from ...db import get_pool
-from ..deps import ActiveOrg, get_active_org
+from ..deps import ActiveProject, get_active_project
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
 @router.get("")
-async def list_jobs(limit: int = 50, status: str = None, org: ActiveOrg = Depends(get_active_org)):
-    """List recent async jobs for the active organization.
+async def list_jobs(limit: int = 50, status: str = None, org: ActiveProject = Depends(get_active_project)):
+    """List recent async jobs for the active project.
 
-    Jobs without an organization (e.g. created by unauthenticated MCP calls)
-    are included so existing behaviour is preserved."""
+    Every job is created with an org and a project (the startup backfill
+    attributes pre-existing jobs to their organization's default project),
+    so listing is scoped to the active project only."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         if status:
             rows = await conn.fetch(
                 "SELECT id, tool, status, error_message, created_at, updated_at "
-                "FROM jobs WHERE status=$1 AND (org_id=$2 OR org_id IS NULL) "
+                "FROM jobs WHERE status=$1 AND project_id=$2 "
                 "ORDER BY created_at DESC LIMIT $3",
-                status, org.org_id, limit,
+                status, org.project_id, limit,
             )
         else:
             rows = await conn.fetch(
                 "SELECT id, tool, status, error_message, created_at, updated_at "
-                "FROM jobs WHERE (org_id=$1 OR org_id IS NULL) "
+                "FROM jobs WHERE project_id=$1 "
                 "ORDER BY created_at DESC LIMIT $2",
-                org.org_id, limit,
+                org.project_id, limit,
             )
     jobs = []
     for r in rows:
@@ -42,15 +43,15 @@ async def list_jobs(limit: int = 50, status: str = None, org: ActiveOrg = Depend
 
 
 @router.get("/{job_id}")
-async def get_job(job_id: str, org: ActiveOrg = Depends(get_active_org)):
-    """Get a specific job's status and result (scoped to the active org)."""
+async def get_job(job_id: str, org: ActiveProject = Depends(get_active_project)):
+    """Get a specific job's status and result (scoped to the active project)."""
     import json
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT id, tool, params, status, result, error_message, created_at, updated_at "
-            "FROM jobs WHERE id=$1 AND (org_id=$2 OR org_id IS NULL)",
-            job_id, org.org_id,
+            "FROM jobs WHERE id=$1 AND project_id=$2",
+            job_id, org.project_id,
         )
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")

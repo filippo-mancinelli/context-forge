@@ -50,6 +50,12 @@ else
         PG_PASS=$(openssl rand -base64 24 | tr -d '/+=')
         sed -i.bak "s/changeme_strong_password/$PG_PASS/" .env && rm -f .env.bak
         ok "Generated random Postgres password"
+
+        # Generate the first-run bootstrap token (the web onboarding wizard asks for it once)
+        BOOTSTRAP_TOKEN=$(openssl rand -base64 32 | tr -d '/+=')
+        sed -i.bak "s/change_this_bootstrap_token/$BOOTSTRAP_TOKEN/" .env && rm -f .env.bak
+        ok "Generated SETUP_BOOTSTRAP_TOKEN: $BOOTSTRAP_TOKEN"
+        warn "The web UI setup wizard will ask for this token (it stays in .env)"
     fi
 
     echo ""

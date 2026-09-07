@@ -6,6 +6,7 @@ import logging
 from typing import Optional
 
 from .server import mcp
+from .permissions import requires_permission
 from ..db import get_pool
 
 logger = logging.getLogger(__name__)
@@ -33,12 +34,13 @@ def _kick_crawl(site_id: int) -> None:
 
 
 @mcp.tool()
+@requires_permission("context-read")
 async def web_search(
     query: str,
     limit: int = 10,
     page_ids: Optional[list[int]] = None,
 ) -> dict:
-    """Search scraped web pages using semantic similarity.
+    """Search scraped web pages of the current project using semantic similarity.
 
     Finds passages from URLs the user has added and indexed, relevant to the
     query.
@@ -53,11 +55,12 @@ async def web_search(
         and a relevance score
     """
     from ..web import store
-    from .context import resolve_org_id
+    from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
+    project_id = await require_project_id()
     try:
-        results = await store.search_pages(org_id, query, limit=limit, page_ids=page_ids)
+        results = await store.search_pages(org_id, project_id, query, limit=limit, page_ids=page_ids)
     except Exception as e:  # noqa: BLE001
         logger.error("web_search failed: %s", e)
         return {"status": "error", "error": str(e)}
@@ -65,8 +68,9 @@ async def web_search(
 
 
 @mcp.tool()
+@requires_permission("context-read")
 async def web_list(limit: int = 50) -> dict:
-    """List scraped web pages and their processing status.
+    """List scraped web pages of the current project and their processing status.
 
     Args:
         limit: Maximum number of pages to return (default 50)
@@ -74,9 +78,10 @@ async def web_list(limit: int = 50) -> dict:
     Returns:
         dict with a list of pages (id, url, title, status, total_chunks)
     """
-    from .context import resolve_org_id
+    from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
+    project_id = await require_project_id()
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -84,11 +89,12 @@ async def web_list(limit: int = 50) -> dict:
             SELECT id, url, title, status, total_chunks, char_count,
                    error_message, created_at
             FROM web_pages
-            WHERE org_id=$1
+            WHERE org_id=$1 AND project_id=$2
             ORDER BY created_at DESC
-            LIMIT $2
+            LIMIT $3
             """,
             org_id,
+            project_id,
             limit,
         )
     pages = []
@@ -101,8 +107,9 @@ async def web_list(limit: int = 50) -> dict:
 
 
 @mcp.tool()
+@requires_permission("context-read")
 async def web_get_page(page_id: int, max_chars: int = 20000) -> dict:
-    """Retrieve the full extracted text of a scraped web page.
+    """Retrieve the full extracted text of a scraped web page of the current project.
 
     Reassembles the page from its stored chunks. Use this after web_search or
     web_list to read a page's whole content instead of isolated passages.
@@ -114,16 +121,18 @@ async def web_get_page(page_id: int, max_chars: int = 20000) -> dict:
     Returns:
         dict with the page's title, url, and extracted text content
     """
-    from .context import resolve_org_id
+    from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
+    project_id = await require_project_id()
     pool = await get_pool()
     async with pool.acquire() as conn:
         page = await conn.fetchrow(
             "SELECT title, url, status, total_chunks FROM web_pages "
-            "WHERE id=$1 AND org_id=$2",
+            "WHERE id=$1 AND org_id=$2 AND project_id=$3",
             page_id,
             org_id,
+            project_id,
         )
         if page is None:
             return {"status": "error", "error": f"Page {page_id} not found"}
@@ -148,8 +157,10 @@ async def web_get_page(page_id: int, max_chars: int = 20000) -> dict:
 
 
 @mcp.tool()
+@requires_permission("context-write")
 async def web_add(urls: list[str]) -> dict:
-    """Add one or more single URLs to be scraped and indexed for semantic search.
+    """Add one or more single URLs to be scraped and indexed for semantic search
+    in the current project.
 
     Each URL is fetched, cleaned, and embedded in the background. Re-adding an
     existing URL re-fetches it. Use web_list to check processing status.
@@ -164,9 +175,10 @@ async def web_add(urls: list[str]) -> dict:
     """
     from ..web import store
     from ..web.store import FetchError, normalize_url
-    from .context import resolve_org_id
+    from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
+    project_id = await require_project_id()
 
     created: list[dict] = []
     rejected: list[dict] = []
@@ -183,7 +195,7 @@ async def web_add(urls: list[str]) -> dict:
         if norm in seen:
             continue
         seen.add(norm)
-        record = await store.add_url(org_id, norm)
+        record = await store.add_url(org_id, project_id, norm)
         created.append(record)
         _kick_processing(record["id"])
 
@@ -193,12 +205,14 @@ async def web_add(urls: list[str]) -> dict:
 
 
 @mcp.tool()
+@requires_permission("admin")
 async def web_crawl(
     url: str,
     max_pages: int = 200,
     exclude_patterns: Optional[list[str]] = None,
 ) -> dict:
-    """Crawl a whole site (or doc tree) and index every page under the URL.
+    """Crawl a whole site (or doc tree) and index every page under the URL
+    into the current project.
 
     Unlike web_add — which indexes a single page — this discovers and indexes
     all pages under the given root: it follows links on the same host whose
@@ -219,11 +233,12 @@ async def web_crawl(
     """
     from ..web import crawler
     from ..web.store import FetchError
-    from .context import resolve_org_id
+    from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
+    project_id = await require_project_id()
     try:
-        site = await crawler.add_site(org_id, url, max_pages, exclude_patterns)
+        site = await crawler.add_site(org_id, project_id, url, max_pages, exclude_patterns)
     except FetchError as e:
         return {"status": "error", "error": str(e)}
     _kick_crawl(site["id"])
@@ -231,8 +246,10 @@ async def web_crawl(
 
 
 @mcp.tool()
+@requires_permission("context-read")
 async def web_list_sites(limit: int = 50) -> dict:
-    """List crawled sites and their status (pages found, indexing progress).
+    """List crawled sites of the current project and their status (pages
+    found, indexing progress).
 
     Args:
         limit: Maximum number of sites to return (default 50)
@@ -241,9 +258,10 @@ async def web_list_sites(limit: int = 50) -> dict:
         dict with a list of sites (id, root_url, status, pages_found,
         exclude_patterns, page counts)
     """
-    from .context import resolve_org_id
+    from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
+    project_id = await require_project_id()
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
@@ -254,12 +272,13 @@ async def web_list_sites(limit: int = 50) -> dict:
                    COUNT(p.id) FILTER (WHERE p.status='ready') AS ready_pages
             FROM web_sites s
             LEFT JOIN web_pages p ON p.site_id = s.id
-            WHERE s.org_id=$1
+            WHERE s.org_id=$1 AND s.project_id=$2
             GROUP BY s.id
             ORDER BY s.created_at DESC
-            LIMIT $2
+            LIMIT $3
             """,
             org_id,
+            project_id,
             limit,
         )
     from ..web.crawler import site_row_to_dict
@@ -268,6 +287,7 @@ async def web_list_sites(limit: int = 50) -> dict:
 
 
 @mcp.tool()
+@requires_permission("admin")
 async def web_delete_site(site_id: int) -> dict:
     """Delete a crawled site along with all of its indexed pages.
 
@@ -278,18 +298,20 @@ async def web_delete_site(site_id: int) -> dict:
         dict confirming the deletion
     """
     from ..web import crawler
-    from .context import resolve_org_id
+    from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
-    ok = await crawler.delete_site(org_id, site_id)
+    project_id = await require_project_id()
+    ok = await crawler.delete_site(org_id, project_id, site_id)
     if not ok:
         return {"status": "error", "error": f"Site {site_id} not found"}
     return {"status": "ok", "deleted": site_id}
 
 
 @mcp.tool()
+@requires_permission("context-write")
 async def web_refetch(page_id: int) -> dict:
-    """Re-fetch and re-embed a scraped web page.
+    """Re-fetch and re-embed a scraped web page of the current project.
 
     Useful when the page content has changed or a previous fetch failed.
     Use web_list to check processing status.
@@ -300,16 +322,18 @@ async def web_refetch(page_id: int) -> dict:
     Returns:
         dict with the queued page id
     """
-    from .context import resolve_org_id
+    from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
+    project_id = await require_project_id()
     pool = await get_pool()
     async with pool.acquire() as conn:
         updated = await conn.fetchval(
             "UPDATE web_pages SET status='pending', error_message=NULL "
-            "WHERE id=$1 AND org_id=$2 RETURNING id",
+            "WHERE id=$1 AND org_id=$2 AND project_id=$3 RETURNING id",
             page_id,
             org_id,
+            project_id,
         )
     if updated is None:
         return {"status": "error", "error": f"Page {page_id} not found"}
@@ -318,6 +342,7 @@ async def web_refetch(page_id: int) -> dict:
 
 
 @mcp.tool()
+@requires_permission("admin")
 async def web_delete(page_id: int) -> dict:
     """Delete a scraped web page and its indexed content.
 
@@ -328,10 +353,11 @@ async def web_delete(page_id: int) -> dict:
         dict confirming the deletion
     """
     from ..web import store
-    from .context import resolve_org_id
+    from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
-    ok = await store.delete_page(org_id, page_id)
+    project_id = await require_project_id()
+    ok = await store.delete_page(org_id, project_id, page_id)
     if not ok:
         return {"status": "error", "error": f"Page {page_id} not found"}
     return {"status": "ok", "deleted": page_id}

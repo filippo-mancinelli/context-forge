@@ -12,7 +12,7 @@ import {
   Settings2,
 } from 'lucide-react'
 import { api, type WebPage, type WebSite, type WebSearchResult } from '../lib/api'
-import { Button, Input, Badge, useConfirm, useToast } from '../components/ui'
+import { Banner, Button, Card, Input, Badge, useConfirm, useToast } from '../components/ui'
 
 const STATUS_VARIANT: Record<WebPage['status'], 'success' | 'accent' | 'warning' | 'danger'> = {
   ready: 'success',
@@ -122,7 +122,7 @@ function AddUrls({ onAdded }: { onAdded: () => void }) {
   }
 
   return (
-    <section style={{ border: '1px solid var(--border)' }} className="mb-6 p-4">
+    <section className="border border-border mb-6 p-4">
       <h2 className="text-base font-semibold mb-3 flex items-center gap-2">
         <Plus className="w-4 h-4" /> Add web pages
       </h2>
@@ -176,8 +176,7 @@ function AddUrls({ onAdded }: { onAdded: () => void }) {
               onChange={(e) => setExclude(e.target.value)}
               rows={2}
               placeholder={'/blog/\n*/changelog*'}
-              style={{ border: '1px solid var(--border)' }}
-              className="w-full p-2 text-sm font-mono bg-transparent outline-none focus:border-[var(--accent)]"
+              className="border border-border w-full p-2 text-sm font-mono bg-transparent outline-none focus:border-[var(--accent)]"
             />
           </div>
         </div>
@@ -216,7 +215,7 @@ function SearchPanel() {
   }
 
   return (
-    <section style={{ border: '1px solid var(--border)' }} className="mb-6 p-4">
+    <section className="border border-border mb-6 p-4">
       <h2 className="text-base font-semibold mb-3 flex items-center gap-2">
         <SearchIcon className="w-4 h-4" /> Search web pages
       </h2>
@@ -244,7 +243,7 @@ function SearchPanel() {
         </Button>
       </div>
 
-      {error && <p style={{ color: 'var(--danger)' }} className="text-sm mt-3">{error}</p>}
+      {error && <p className="text-sm mt-3 text-danger">{error}</p>}
 
       {results !== null && (
         <div className="mt-4 space-y-2">
@@ -252,7 +251,7 @@ function SearchPanel() {
             <p className="text-muted text-sm">No matching passages found.</p>
           ) : (
             results.map((r, i) => (
-              <div key={`${r.page_id}-${r.chunk_index}-${i}`} style={{ border: '1px solid var(--border)' }} className="p-3">
+              <Card key={`${r.page_id}-${r.chunk_index}-${i}`} className="p-3">
                 <div className="flex items-center justify-between gap-2 mb-1">
                   <a
                     href={r.url}
@@ -266,7 +265,7 @@ function SearchPanel() {
                   <span className="font-mono text-xs text-accent flex-shrink-0">{r.score.toFixed(3)}</span>
                 </div>
                 <p className="text-sm text-text whitespace-pre-wrap line-clamp-4">{r.content}</p>
-              </div>
+              </Card>
             ))
           )}
         </div>
@@ -295,7 +294,7 @@ function PageRow({
   }
 
   return (
-    <tr style={{ borderBottom: '1px solid var(--border)' }} className="last:border-b-0 group">
+    <tr className="border-b border-border last:border-b-0 group">
       <td className="py-3 px-4 align-top">
         <div className="flex items-start gap-2 min-w-0">
           <Globe className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: '#c026d3' }} />
@@ -374,7 +373,7 @@ function PageCard({
   }
 
   return (
-    <div style={{ border: '1px solid var(--border)' }} className="p-3">
+    <Card className="p-3">
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-start gap-2 min-w-0">
           <Globe className="w-4 h-4 mt-0.5 flex-shrink-0" style={{ color: '#c026d3' }} />
@@ -397,7 +396,7 @@ function PageCard({
         <span>{page.status === 'ready' ? `${page.total_chunks} chunks` : '—'}</span>
         <span>{formatDate(page.fetched_at || page.created_at)}</span>
       </div>
-      <div style={{ borderTop: '1px solid var(--border)' }} className="flex items-center gap-4 mt-3 pt-3">
+      <div className="border-t border-border flex items-center gap-4 mt-3 pt-3">
         <button
           onClick={wrap(() => onRefetch(page.id))}
           disabled={busy || page.status === 'processing'}
@@ -413,7 +412,7 @@ function PageCard({
           <Trash2 className="w-3.5 h-3.5" /> Delete
         </button>
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -508,7 +507,7 @@ function SiteCard({
     : `${site.ready_pages}/${site.total_pages} pages indexed · ${site.total_chunks} chunks`
 
   return (
-    <div style={{ border: '1px solid var(--border)' }} className="mb-3">
+    <Card className="mb-3">
       <div className="p-3 flex items-start justify-between gap-2 flex-wrap">
         <button
           onClick={() => setExpanded((v) => !v)}
@@ -567,7 +566,7 @@ function SiteCard({
       </div>
 
       {editing && (
-        <div style={{ borderTop: '1px solid var(--border)' }} className="p-3">
+        <div className="border-t border-border p-3">
           <div className="flex flex-col sm:flex-row gap-3">
             <div className="sm:w-36">
               <label className="text-xs text-muted block mb-1">Max pages</label>
@@ -588,8 +587,7 @@ function SiteCard({
                 onChange={(e) => setPatterns(e.target.value)}
                 rows={3}
                 placeholder={'/blog/\n*/changelog*'}
-                style={{ border: '1px solid var(--border)' }}
-                className="w-full p-2 text-sm font-mono bg-transparent outline-none focus:border-[var(--accent)]"
+                className="border border-border w-full p-2 text-sm font-mono bg-transparent outline-none focus:border-[var(--accent)]"
               />
             </div>
           </div>
@@ -611,7 +609,7 @@ function SiteCard({
       )}
 
       {expanded && (
-        <div style={{ borderTop: '1px solid var(--border)' }}>
+        <div className="border-t border-border">
           {pages === null ? (
             <p className="text-muted text-sm p-3">Loading pages…</p>
           ) : pages.length === 0 ? (
@@ -638,7 +636,7 @@ function SiteCard({
           )}
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 
@@ -720,14 +718,7 @@ export default function WebPages() {
           </p>
         </div>
 
-        {pageError && (
-          <div
-            style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
-            className="text-sm p-3 mb-4 bg-[#fef2f2]"
-          >
-            {pageError}
-          </div>
-        )}
+        {pageError && <Banner variant="danger" className="mb-4">{pageError}</Banner>}
         <AddUrls onAdded={() => void load()} />
 
         <SearchPanel />
@@ -765,10 +756,10 @@ export default function WebPages() {
                 </div>
 
                 {/* Desktop: table */}
-                <div style={{ border: '1px solid var(--border)' }} className="hidden md:block overflow-x-auto max-w-5xl">
+                <Card className="hidden md:block overflow-x-auto max-w-5xl">
                   <table className="w-full min-w-[640px]">
                     <thead>
-                      <tr style={{ borderBottom: '1px solid var(--border)' }} className="text-left">
+                      <tr className="border-b border-border text-left">
                         <th className="py-2 px-4 text-xs font-medium text-muted">Page</th>
                         <th className="py-2 px-4 text-xs font-medium text-muted">Status</th>
                         <th className="py-2 px-4 text-xs font-medium text-muted">Chunks</th>
@@ -782,7 +773,7 @@ export default function WebPages() {
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </Card>
               </section>
             ) : null}
           </>

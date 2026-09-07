@@ -4,14 +4,15 @@ from __future__ import annotations
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ...config import RepoConfig, get_settings
+from ...config import RepoConfig
 from ...indexer.indexer import sync_repos_config
 from ...org_config import get_org_config, persist_org_config
-from ..deps import ActiveOrg, require_role
-from ..security import require_valid_token_or_raise
+from ...org_settings import get_org_settings
+from ...projects import bind_repo_to_project, get_repo_project_name
+from ..deps import ActiveOrg, ActiveProject, get_active_org, require_project_role
 
 router = APIRouter(prefix="/github", tags=["github"])
 
@@ -39,17 +40,15 @@ class AddGitHubRepoRequest(BaseModel):
 async def list_github_repos(
     page: int = 1,
     per_page: int = 100,
-    authorization: str | None = Header(default=None),
+    org: ActiveOrg = Depends(get_active_org),
 ):
     """List GitHub repositories accessible to the configured token."""
-    await require_valid_token_or_raise(authorization)
-    
-    settings = get_settings()
-    if not settings.github_token:
+    s = await get_org_settings(org.org_id)
+    if not s.github_token:
         raise HTTPException(status_code=400, detail="GitHub token not configured")
-    
+
     headers = {
-        "Authorization": f"token {settings.github_token}",
+        "Authorization": f"token {s.github_token}",
         "Accept": "application/vnd.github.v3+json",
     }
     
@@ -97,22 +96,29 @@ async def list_github_repos(
 @router.post("/repos/add")
 async def add_github_repo(
     req: AddGitHubRepoRequest,
-    org: ActiveOrg = Depends(require_role("member")),
+    org: ActiveProject = Depends(require_project_role("member")),
 ):
-    """Add a GitHub repository to the active organization's config."""
+    """Add a GitHub repository to the active project."""
     cfg = await get_org_config(org.org_id)
 
-    # Check if repo already exists in this organization
-    existing = next((r for r in cfg.repos if r.name == req.full_name.replace("/", "-")), None)
+    repo_name = req.full_name.replace("/", "-")
+    # Repo names are unique within an organization, across all its projects
+    existing = next((r for r in cfg.repos if r.name == repo_name), None)
     if existing:
-        raise HTTPException(status_code=400, detail="Repository already configured")
+        holder = await get_repo_project_name(org.org_id, repo_name)
+        detail = (
+            f"Repository already configured in project '{holder}'"
+            if holder
+            else "Repository already configured"
+        )
+        raise HTTPException(status_code=400, detail=detail)
 
     # Add new repo
     branch = req.branch or "main"
     repo_url = f"https://github.com/{req.full_name}"
 
     cfg.repos.append(RepoConfig(
-        name=req.full_name.replace("/", "-"),
+        name=repo_name,
         type="github",
         url=repo_url,
         branch=branch,
@@ -120,12 +126,13 @@ async def add_github_repo(
 
     await persist_org_config(org.org_id, cfg)
     await sync_repos_config(org.org_id)
+    await bind_repo_to_project(org.org_id, org.project_id, repo_name)
 
     return {
         "status": "ok",
         "message": f"Repository {req.full_name} added",
         "repo": {
-            "name": req.full_name.replace("/", "-"),
+            "name": repo_name,
             "type": "github",
             "url": repo_url,
             "branch": branch,
@@ -137,17 +144,15 @@ async def add_github_repo(
 async def list_github_branches(
     owner: str,
     repo: str,
-    authorization: str | None = Header(default=None),
+    org: ActiveOrg = Depends(get_active_org),
 ):
     """List branches for a GitHub repository."""
-    await require_valid_token_or_raise(authorization)
-
-    settings = get_settings()
-    if not settings.github_token:
+    s = await get_org_settings(org.org_id)
+    if not s.github_token:
         raise HTTPException(status_code=400, detail="GitHub token not configured")
 
     headers = {
-        "Authorization": f"token {settings.github_token}",
+        "Authorization": f"token {s.github_token}",
         "Accept": "application/vnd.github.v3+json",
     }
 
@@ -174,17 +179,15 @@ async def list_github_branches(
 @router.get("/search")
 async def search_github_repos(
     q: str,
-    authorization: str | None = Header(default=None),
+    org: ActiveOrg = Depends(get_active_org),
 ):
     """Search GitHub repositories."""
-    await require_valid_token_or_raise(authorization)
-    
-    settings = get_settings()
-    if not settings.github_token:
+    s = await get_org_settings(org.org_id)
+    if not s.github_token:
         raise HTTPException(status_code=400, detail="GitHub token not configured")
-    
+
     headers = {
-        "Authorization": f"token {settings.github_token}",
+        "Authorization": f"token {s.github_token}",
         "Accept": "application/vnd.github.v3+json",
     }
     

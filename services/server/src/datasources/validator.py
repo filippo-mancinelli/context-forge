@@ -1,6 +1,6 @@
 """SQL safety validator for read-only execution against external databases.
 
-Ported and generalized from the askmechat-sql-agent validator: allows a single
+Ported and generalized from an internal SQL-agent validator: allows a single
 SELECT / WITH / SHOW / DESCRIBE / EXPLAIN statement, blocks every mutating or
 session-altering keyword, and injects a LIMIT when missing. Validation is
 deliberately conservative: a blocked keyword inside a string literal rejects
@@ -114,3 +114,73 @@ def is_safe_query(sql: str) -> bool:
         return True
     except QueryValidationError:
         return False
+
+
+_WRITE_STATEMENT_PATTERN = re.compile(r"^\s*(INSERT|UPDATE|DELETE)\b", re.IGNORECASE)
+_WHERE_PATTERN = re.compile(r"\bWHERE\b", re.IGNORECASE)
+_SINGLE_QUOTED_STRING_PATTERN = re.compile(r"'(?:[^'\\]|\\.|'')*'", re.DOTALL)
+_DOUBLE_QUOTED_IDENTIFIER_PATTERN = re.compile(r'"(?:[^"]|"")*"')
+_BACKTICK_QUOTED_IDENTIFIER_PATTERN = re.compile(r"`(?:[^`]|``)*`")
+_DOLLAR_QUOTED_STRING_PATTERN = re.compile(r"\$(\w*)\$.*?\$\1\$", re.DOTALL)
+_PARENTHESIZED_GROUP_PATTERN = re.compile(r"\([^()]*\)")
+# Blocklist per il percorso write: tutto quello del read-only tranne i tre DML ammessi.
+_WRITE_BLOCKED_KEYWORDS = [k for k in _BLOCKED_KEYWORDS if k not in ("INSERT", "UPDATE", "DELETE")]
+_WRITE_BLOCKED_PATTERN = re.compile(
+    r"(?:^|[\s;(])(" + "|".join(re.escape(k) for k in _WRITE_BLOCKED_KEYWORDS) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_where_decoys(cleaned: str) -> str:
+    """Strip the parts of a statement that can carry a fake WHERE token.
+
+    Used only to build a skeleton for the WHERE-presence check; the returned
+    SQL and every other check in ``validate_write_query`` keep operating on
+    the original ``cleaned`` string.
+    """
+    skeleton = _SINGLE_QUOTED_STRING_PATTERN.sub(" ", cleaned)
+    skeleton = _DOUBLE_QUOTED_IDENTIFIER_PATTERN.sub(" ", skeleton)
+    skeleton = _BACKTICK_QUOTED_IDENTIFIER_PATTERN.sub(" ", skeleton)
+    skeleton = _DOLLAR_QUOTED_STRING_PATTERN.sub(" ", skeleton)
+    while True:
+        stripped = _PARENTHESIZED_GROUP_PATTERN.sub(" ", skeleton)
+        if stripped == skeleton:
+            break
+        skeleton = stripped
+    return skeleton
+
+
+def validate_write_query(sql: str) -> str:
+    """Validate a single INSERT/UPDATE/DELETE statement for guarded execution.
+
+    UPDATE and DELETE must carry a WHERE clause; DDL, GRANT, TRUNCATE, session
+    statements and multiple statements are rejected.
+    """
+    if not sql or not sql.strip():
+        raise QueryValidationError("Empty query.")
+
+    cleaned = _COMMENT_PATTERN.sub(" ", sql).strip().rstrip(";").strip()
+    if not cleaned:
+        raise QueryValidationError("Empty query.")
+    if ";" in cleaned:
+        raise QueryValidationError("Multiple statements are not allowed.")
+
+    match = _WRITE_BLOCKED_PATTERN.search(cleaned)
+    if match:
+        raise QueryValidationError(
+            f"Query contains blocked operation: {match.group(1).upper()}."
+        )
+    if _SET_PATTERN.search(cleaned):
+        raise QueryValidationError("SET statements are not allowed.")
+
+    stmt = _WRITE_STATEMENT_PATTERN.match(cleaned)
+    if not stmt:
+        raise QueryValidationError(
+            "Only single INSERT, UPDATE or DELETE statements are allowed."
+        )
+    verb = stmt.group(1).upper()
+    if verb in ("UPDATE", "DELETE") and not _WHERE_PATTERN.search(_strip_where_decoys(cleaned)):
+        raise QueryValidationError(
+            f"{verb} without a WHERE clause is not allowed."
+        )
+    return cleaned

@@ -1,4 +1,4 @@
-"""Multi-tenancy: organizations, memberships, roles and invitations.
+"""Multi-tenancy: organizations, memberships and roles.
 
 An organization is the unit of tenant isolation. Each organization owns a
 dedicated ``memory_namespace`` (used as the Mem0 ``user_id`` partition) plus
@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import re
 import secrets
-from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from .db import get_pool
@@ -22,7 +21,8 @@ ROLES = ("viewer", "member", "admin", "owner")
 ROLE_RANK = {role: rank for rank, role in enumerate(ROLES)}
 
 DEFAULT_ORG_SLUG = "default"
-INVITATION_TTL_DAYS = 7
+# Collidono con i path riservati dell'endpoint MCP (/oauth/, /health).
+RESERVED_ORG_SLUGS = frozenset({"oauth", "health"})
 
 
 def role_at_least(role: Optional[str], minimum: str) -> bool:
@@ -40,7 +40,9 @@ def _slugify(name: str) -> str:
 async def _unique_slug(conn, base: str) -> str:
     slug = base
     suffix = 1
-    while await conn.fetchval("SELECT 1 FROM organizations WHERE slug = $1", slug):
+    while slug in RESERVED_ORG_SLUGS or await conn.fetchval(
+        "SELECT 1 FROM organizations WHERE slug = $1", slug
+    ):
         suffix += 1
         slug = f"{base}-{suffix}"
     return slug
@@ -71,6 +73,12 @@ async def create_organization(name: str, owner_user_id: int, namespace: Optional
                 row["id"],
                 owner_user_id,
             )
+            await conn.execute(
+                """INSERT INTO projects (org_id, name, slug, memory_namespace)
+                   VALUES ($1, 'Default', 'default', $2)""",
+                row["id"],
+                ns,
+            )
     return dict(row)
 
 
@@ -80,6 +88,16 @@ async def get_organization(org_id: int) -> Optional[dict]:
         row = await conn.fetchrow(
             "SELECT id, name, slug, memory_namespace, created_at FROM organizations WHERE id = $1",
             org_id,
+        )
+    return dict(row) if row else None
+
+
+async def get_organization_by_slug(slug: str) -> Optional[dict]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, name, slug, memory_namespace FROM organizations WHERE slug=$1",
+            slug,
         )
     return dict(row) if row else None
 
@@ -197,91 +215,6 @@ async def remove_member(org_id: int, user_id: int) -> bool:
     return result == "DELETE 1"
 
 
-# ===== Invitations =====
-
-def _hash_invite_token(token: str) -> str:
-    import hashlib
-
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-async def create_invitation(org_id: int, email: str, role: str, invited_by: Optional[int]) -> tuple[str, dict]:
-    """Create an invitation and return (raw_token, invitation_record)."""
-    raw_token = secrets.token_urlsafe(32)
-    token_hash = _hash_invite_token(raw_token)
-    expires_at = datetime.now(timezone.utc) + timedelta(days=INVITATION_TTL_DAYS)
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """INSERT INTO organization_invitations (org_id, email, role, token_hash, invited_by, expires_at)
-               VALUES ($1, $2, $3, $4, $5, $6)
-               RETURNING id, org_id, email, role, expires_at, accepted_at, created_at""",
-            org_id,
-            email.lower().strip(),
-            role,
-            token_hash,
-            invited_by,
-            expires_at,
-        )
-    return raw_token, dict(row)
-
-
-async def list_invitations(org_id: int, include_accepted: bool = False) -> list[dict]:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        if include_accepted:
-            rows = await conn.fetch(
-                """SELECT id, org_id, email, role, expires_at, accepted_at, created_at
-                   FROM organization_invitations WHERE org_id = $1 ORDER BY created_at DESC""",
-                org_id,
-            )
-        else:
-            rows = await conn.fetch(
-                """SELECT id, org_id, email, role, expires_at, accepted_at, created_at
-                   FROM organization_invitations
-                   WHERE org_id = $1 AND accepted_at IS NULL
-                   ORDER BY created_at DESC""",
-                org_id,
-            )
-    return [dict(r) for r in rows]
-
-
-async def revoke_invitation(org_id: int, invitation_id: int) -> bool:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        result = await conn.execute(
-            "DELETE FROM organization_invitations WHERE id = $1 AND org_id = $2 AND accepted_at IS NULL",
-            invitation_id,
-            org_id,
-        )
-    return result == "DELETE 1"
-
-
-async def get_invitation_by_token(raw_token: str) -> Optional[dict]:
-    token_hash = _hash_invite_token(raw_token)
-    now = datetime.now(timezone.utc)
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """SELECT i.id, i.org_id, i.email, i.role, i.expires_at, i.accepted_at, o.name AS org_name
-               FROM organization_invitations i
-               JOIN organizations o ON o.id = i.org_id
-               WHERE i.token_hash = $1 AND i.accepted_at IS NULL AND i.expires_at > $2""",
-            token_hash,
-            now,
-        )
-    return dict(row) if row else None
-
-
-async def mark_invitation_accepted(invitation_id: int) -> None:
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE organization_invitations SET accepted_at = NOW() WHERE id = $1",
-            invitation_id,
-        )
-
-
 # ===== Default org bootstrap / migration =====
 
 async def ensure_default_org() -> Optional[int]:
@@ -352,9 +285,10 @@ async def ensure_tenant_storage() -> Optional[int]:
     default_org_id = await ensure_default_org()
     if default_org_id is None:
         return None
-    from .db import apply_tenant_repo_migration
+    from .db import apply_project_migration, apply_tenant_repo_migration
 
     await apply_tenant_repo_migration(default_org_id)
+    await apply_project_migration()
     return default_org_id
 
 
@@ -364,3 +298,68 @@ async def get_namespace_for_org(org_id: int) -> Optional[str]:
         return await conn.fetchval(
             "SELECT memory_namespace FROM organizations WHERE id = $1", org_id
         )
+
+
+# ===== Permessi MCP per ruolo =====
+
+async def get_org_role_permissions(org_id: int) -> dict[str, list[str]]:
+    """Righe personalizzate della matrice, raggruppate per ruolo. {} = default."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT role, permission FROM org_role_permissions "
+            "WHERE org_id=$1 ORDER BY role, permission",
+            org_id,
+        )
+    out: dict[str, list[str]] = {}
+    for row in rows:
+        out.setdefault(row["role"], []).append(row["permission"])
+    return out
+
+
+async def set_org_role_permissions(org_id: int, matrix: dict[str, list[str]]) -> None:
+    """Sostituisce l'intera matrice personalizzata dell'organizzazione."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("DELETE FROM org_role_permissions WHERE org_id=$1", org_id)
+            for role, perms in matrix.items():
+                for perm in perms:
+                    await conn.execute(
+                        "INSERT INTO org_role_permissions (org_id, role, permission) "
+                        "VALUES ($1, $2, $3)",
+                        org_id,
+                        role,
+                        perm,
+                    )
+
+
+async def clear_org_role_permissions(org_id: int) -> None:
+    """Ripristina i default cancellando le personalizzazioni dell'org."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM org_role_permissions WHERE org_id=$1", org_id)
+
+
+async def resolve_role_permissions(org_id: Optional[int], role: Optional[str]) -> frozenset:
+    """Permessi MCP effettivi per un ruolo in un'org.
+
+    An org with ANY customized rows is fully "in charge" of its matrix: a role that has
+    no rows in that case resolves to an explicit ``frozenset()`` (revoked), not the
+    hardcoded default. Only an org with zero rows at all falls back to
+    ``DEFAULT_ROLE_PERMISSIONS`` — this is what lets an admin actually revoke all
+    permissions for a role (see C2) instead of silently keeping the defaults.
+    """
+    from .mcp.permissions import DEFAULT_ROLE_PERMISSIONS
+
+    if org_id is None or role is None:
+        return frozenset()
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT role, permission FROM org_role_permissions WHERE org_id=$1",
+            org_id,
+        )
+    if rows:
+        return frozenset(r["permission"] for r in rows if r["role"] == role)
+    return DEFAULT_ROLE_PERMISSIONS.get(role, frozenset())

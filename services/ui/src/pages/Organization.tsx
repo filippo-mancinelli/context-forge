@@ -1,13 +1,170 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { Trash2, Copy, Check } from 'lucide-react'
+import { Trash2, Plus, Pencil, Users } from 'lucide-react'
 import {
   api,
+  MCP_PERMISSION_VALUES,
+  type McpPermissionsMatrix,
   type OrgMember,
-  type OrgInvitation,
   type OrgRole,
+  type ProjectMember,
 } from '../lib/api'
 import { useAppStore } from '../store'
-import { Button, Input, Select, Badge, Table, Thead, Tbody, Tr, Th, Td, useConfirm, useToast } from '../components/ui'
+import { Banner, Button, Input, Select, Badge, Dialog, DialogFooter, Table, Thead, Tbody, Tr, Th, Td, useConfirm, useToast } from '../components/ui'
+import NewProjectDialog from '../components/NewProjectDialog'
+
+const PROJECT_ROLE_OPTIONS = [
+  { value: 'viewer', label: 'Viewer' },
+  { value: 'member', label: 'Member' },
+  { value: 'admin', label: 'Admin' },
+]
+
+function ProjectMembersDialog({
+  projectId,
+  projectName,
+  isOwner,
+  onClose,
+}: {
+  projectId: number
+  projectName: string
+  isOwner: boolean
+  onClose: () => void
+}) {
+  const toast = useToast()
+  const [members, setMembers] = useState<ProjectMember[]>([])
+  const [loading, setLoading] = useState(true)
+  const [email, setEmail] = useState('')
+  const [role, setRole] = useState('member')
+  const [adding, setAdding] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await api.projects.members(projectId)
+      setMembers(res.members)
+    } catch (e) {
+      toast.error(String(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [projectId, toast])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const add = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!email.trim()) return
+    setAdding(true)
+    try {
+      // Non-owners can only add members at the 'member' role — the server
+      // forces this anyway, but keep the request explicit.
+      await api.projects.addMember(projectId, { email: email.trim(), role: isOwner ? role : 'member' })
+      setEmail('')
+      await load()
+      toast.success('Member enabled')
+    } catch (err) {
+      toast.error(String(err))
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  const remove = async (userId: number) => {
+    try {
+      await api.projects.removeMember(projectId, userId)
+      await load()
+    } catch (err) {
+      toast.error(String(err))
+    }
+  }
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={`Members — ${projectName}`}
+      description="Org owners and admins already access every project. Enable other users here."
+    >
+      <div className="space-y-4">
+        <form onSubmit={add} className="flex items-end gap-2">
+          <div className="flex-1">
+            <Input
+              label="User email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="user@company.com"
+            />
+          </div>
+          {isOwner ? (
+            <Select
+              label="Role"
+              value={role}
+              onValueChange={setRole}
+              options={PROJECT_ROLE_OPTIONS}
+            />
+          ) : (
+            <p className="text-xs text-muted pb-2.5">Joins as member</p>
+          )}
+          <Button type="submit" variant="primary" loading={adding}>
+            Add
+          </Button>
+        </form>
+        {loading ? (
+          <p className="text-sm text-muted">Loading…</p>
+        ) : members.length === 0 ? (
+          <p className="text-sm text-muted">No explicit members yet.</p>
+        ) : (
+          <Table>
+            <Thead>
+              <Tr>
+                <Th>User</Th>
+                {isOwner && <Th>Role</Th>}
+                <Th className="w-10" />
+              </Tr>
+            </Thead>
+            <Tbody>
+              {members.map((m) => (
+                <Tr key={m.user_id}>
+                  <Td>
+                    <span className="font-medium">{m.username ?? m.email ?? `#${m.user_id}`}</span>
+                    {m.email && m.username && (
+                      <span className="text-xs text-muted ml-2">{m.email}</span>
+                    )}
+                  </Td>
+                  {isOwner && (
+                    <Td>
+                      {m.role && <Badge>{m.role}</Badge>}
+                    </Td>
+                  )}
+                  <Td>
+                    {isOwner && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => remove(m.user_id)}
+                        title="Remove member"
+                        aria-label="Remove member"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+                  </Td>
+                </Tr>
+              ))}
+            </Tbody>
+          </Table>
+        )}
+      </div>
+      <DialogFooter>
+        <Button type="button" variant="ghost" onClick={onClose}>
+          Close
+        </Button>
+      </DialogFooter>
+    </Dialog>
+  )
+}
 
 const ROLE_OPTIONS: { value: OrgRole; label: string }[] = [
   { value: 'viewer', label: 'Viewer' },
@@ -23,6 +180,428 @@ function roleBadge(role: OrgRole) {
   return <Badge variant={variant}>{role}</Badge>
 }
 
+function McpPermissionsSection({ orgId, myRole }: { orgId: number; myRole: OrgRole }) {
+  const toast = useToast()
+  const confirm = useConfirm()
+  const [matrix, setMatrix] = useState<Record<OrgRole, string[]> | null>(null)
+  const [customized, setCustomized] = useState<Record<OrgRole, boolean>>({
+    viewer: false, member: false, admin: false, owner: false,
+  })
+  const [initial, setInitial] = useState<Record<OrgRole, string[]> | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  const load = useCallback(async () => {
+    try {
+      const res: McpPermissionsMatrix = await api.organizations.mcpPermissions(orgId)
+      const roles = {} as Record<OrgRole, string[]>
+      const custom = {} as Record<OrgRole, boolean>
+      for (const role of Object.keys(res.roles) as OrgRole[]) {
+        roles[role] = res.roles[role].permissions
+        custom[role] = res.roles[role].customized
+      }
+      setMatrix(roles)
+      setInitial(roles)
+      setCustomized(custom)
+    } catch (e) {
+      toast.error(String(e))
+    }
+  }, [orgId, toast])
+
+  useEffect(() => { load() }, [load])
+
+  if (!matrix) return null
+
+  const toggle = (role: OrgRole, perm: string) => {
+    setMatrix((m) => {
+      if (!m) return m
+      const current = m[role]
+      let next: string[]
+      if (perm === '*') {
+        next = current.includes('*') ? [] : ['*']
+      } else {
+        const without = current.filter((p) => p !== '*' && p !== perm)
+        next = current.includes(perm) ? without : [...without, perm]
+      }
+      return { ...m, [role]: next }
+    })
+  }
+
+  const reducingOwnRole =
+    initial !== null &&
+    initial[myRole].some((p) => !matrix[myRole].includes(p) && !matrix[myRole].includes('*'))
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      await api.organizations.updateMcpPermissions(orgId, matrix)
+      toast.success('MCP permissions saved')
+      await load()
+    } catch (e) {
+      toast.error(String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleReset = async () => {
+    const ok = await confirm({
+      title: 'Restore defaults',
+      message: 'Discard all customizations and restore the default MCP permissions?',
+      confirmLabel: 'Restore',
+      onConfirm: () => api.organizations.resetMcpPermissions(orgId),
+    })
+    if (!ok) return
+    toast.success('Defaults restored')
+    await load()
+  }
+
+  return (
+    <section className="mt-8">
+      <h2 className="text-base font-semibold mb-1">MCP permissions</h2>
+      <p className="text-sm text-muted mb-3">
+        Which MCP tools each role can use. Agents authenticating via Keycloak or OAuth get
+        the permissions of their role in this organization.
+      </p>
+      <Table>
+        <Thead>
+          <Tr>
+            <Th>Role</Th>
+            <Th>All (*)</Th>
+            {MCP_PERMISSION_VALUES.map((p) => (
+              <Th key={p}><code className="text-xs font-mono">{p}</code></Th>
+            ))}
+          </Tr>
+        </Thead>
+        <Tbody>
+          {ROLE_OPTIONS.map(({ value: role, label }) => (
+            <Tr key={role}>
+              <Td>
+                {label}
+                {customized[role] && <Badge variant="accent" className="ml-2">custom</Badge>}
+              </Td>
+              <Td>
+                <input
+                  type="checkbox"
+                  checked={matrix[role].includes('*')}
+                  onChange={() => toggle(role, '*')}
+                />
+              </Td>
+              {MCP_PERMISSION_VALUES.map((p) => (
+                <Td key={p}>
+                  <input
+                    type="checkbox"
+                    checked={matrix[role].includes('*') || matrix[role].includes(p)}
+                    disabled={matrix[role].includes('*')}
+                    onChange={() => toggle(role, p)}
+                  />
+                </Td>
+              ))}
+            </Tr>
+          ))}
+        </Tbody>
+      </Table>
+      {reducingOwnRole && (
+        <p className="text-sm mt-2 text-warning">
+          Warning: you are reducing the permissions of your own role ({myRole}).
+        </p>
+      )}
+      <div className="flex gap-2 mt-3">
+        <Button variant="primary" size="sm" onClick={handleSave} loading={saving}>
+          Save permissions
+        </Button>
+        <Button variant="ghost" size="sm" onClick={handleReset}>
+          Restore defaults
+        </Button>
+      </div>
+    </section>
+  )
+}
+
+function ProjectsSection({ canAddMembers, isOwner }: { canAddMembers: boolean; isOwner: boolean }) {
+  const projects = useAppStore((s) => s.projects)
+  const activeProjectId = useAppStore((s) => s.activeProjectId)
+  const loadProjects = useAppStore((s) => s.loadProjects)
+  const setActiveProject = useAppStore((s) => s.setActiveProject)
+  const confirm = useConfirm()
+  const toast = useToast()
+  const [showNew, setShowNew] = useState(false)
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editName, setEditName] = useState('')
+  const [membersProject, setMembersProject] = useState<{ id: number; name: string } | null>(null)
+
+  const startRename = (id: number, name: string) => {
+    setEditingId(id)
+    setEditName(name)
+  }
+
+  const saveRename = async (id: number) => {
+    if (!editName.trim()) return
+    try {
+      await api.projects.update(id, editName.trim())
+      setEditingId(null)
+      await loadProjects()
+      toast.success('Project renamed')
+    } catch (e) {
+      toast.error(String(e))
+    }
+  }
+
+  const handleDelete = async (id: number, name: string) => {
+    const ok = await confirm({
+      title: 'Delete project',
+      message: `Delete project «${name}»? All its resources (repos, knowledge, web, data sources, contracts, chats, memory) will be permanently removed.`,
+      confirmLabel: 'Delete',
+      danger: true,
+      onConfirm: () => api.projects.delete(id),
+    })
+    if (!ok) return
+    // loadProjects re-resolves the active project (falls back to the default
+    // when the active one was just deleted) and updates the store.
+    await loadProjects()
+    const active = useAppStore.getState().activeProjectId
+    if (active !== null) setActiveProject(active)
+    toast.success('Project deleted')
+  }
+
+  return (
+    <section className="border border-border mb-6 p-4">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-base font-semibold">Projects ({projects.length})</h2>
+        {canAddMembers && (
+          <Button variant="primary" size="sm" onClick={() => setShowNew(true)}>
+            <Plus className="w-3.5 h-3.5" />
+            New project
+          </Button>
+        )}
+      </div>
+      <Table>
+        <Thead>
+          <Tr>
+            <Th>Name</Th>
+            <Th>Slug</Th>
+            <Th className="w-24" />
+          </Tr>
+        </Thead>
+        <Tbody>
+          {projects.map((p) => (
+            <Tr key={p.id}>
+              <Td>
+                {editingId === p.id ? (
+                  <Input value={editName} onChange={(e) => setEditName(e.target.value)} className="max-w-xs" />
+                ) : (
+                  <span className="font-medium">{p.name}</span>
+                )}
+                {p.id === activeProjectId && <Badge variant="accent" className="ml-2">active</Badge>}
+              </Td>
+              <Td>
+                <code className="text-xs font-mono text-muted">{p.slug}</code>
+              </Td>
+              <Td>
+                {canAddMembers &&
+                  (editingId === p.id ? (
+                    <div className="flex gap-1">
+                      <Button size="sm" variant="primary" onClick={() => saveRename(p.id)}>Save</Button>
+                      <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>Cancel</Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setMembersProject({ id: p.id, name: p.name })}
+                        title="Manage members"
+                        aria-label="Manage members"
+                      >
+                        <Users className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => startRename(p.id, p.name)}
+                        title="Rename project"
+                        aria-label="Rename project"
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                      </Button>
+                      {projects.length > 1 && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleDelete(p.id, p.name)}
+                          title="Delete project"
+                          aria-label="Delete project"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+              </Td>
+            </Tr>
+          ))}
+        </Tbody>
+      </Table>
+      <NewProjectDialog open={showNew} onClose={() => setShowNew(false)} />
+      {membersProject && (
+        <ProjectMembersDialog
+          projectId={membersProject.id}
+          projectName={membersProject.name}
+          isOwner={isOwner}
+          onClose={() => setMembersProject(null)}
+        />
+      )}
+    </section>
+  )
+}
+
+function AddUserSection({
+  orgId,
+  isOwner,
+  onCreated,
+}: {
+  orgId: number
+  isOwner: boolean
+  onCreated: () => Promise<void>
+}) {
+  const toast = useToast()
+  const projects = useAppStore((s) => s.projects)
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [email, setEmail] = useState('')
+  const [role, setRole] = useState<OrgRole>('member')
+  const [grants, setGrants] = useState<Record<number, string>>({})
+  const [saving, setSaving] = useState(false)
+
+  const toggleProject = (projectId: number) => {
+    setGrants((g) => {
+      const next = { ...g }
+      if (projectId in next) delete next[projectId]
+      else next[projectId] = 'member'
+      return next
+    })
+  }
+
+  const setGrantRole = (projectId: number, grantRole: string) => {
+    setGrants((g) => ({ ...g, [projectId]: grantRole }))
+  }
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    setSaving(true)
+    try {
+      // Non-owners can only grant the 'member' role — the server forces
+      // this anyway, but keep the request explicit.
+      await api.organizations.createUser(orgId, {
+        username: username.trim(),
+        password,
+        email: email.trim(),
+        role: isOwner ? role : 'member',
+        projects: Object.entries(grants).map(([id, grantRole]) => ({
+          project_id: Number(id),
+          role: isOwner ? grantRole : 'member',
+        })),
+      })
+      toast.success('User created')
+      setUsername('')
+      setPassword('')
+      setEmail('')
+      setRole('member')
+      setGrants({})
+      await onCreated()
+    } catch (err) {
+      toast.error(String(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const orgRoleGrantsAll = role === 'admin' || role === 'owner'
+
+  return (
+    <section className="border border-border mb-6 p-4">
+      <h2 className="text-base font-semibold mb-1">Add user</h2>
+      <p className="text-sm text-muted mb-4">
+        Creates the account directly: share the credentials with the new user.
+      </p>
+      <form onSubmit={submit} className="space-y-4">
+        <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
+          <Input
+            label="Username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+            minLength={3}
+            className="sm:max-w-xs"
+          />
+          <Input
+            label="Email"
+            type="email"
+            placeholder="teammate@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
+            className="sm:max-w-xs"
+          />
+          <Input
+            label="Password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            minLength={8}
+            className="sm:max-w-xs"
+          />
+          {isOwner ? (
+            <Select
+              label="Role"
+              value={role}
+              onValueChange={(v) => setRole(v as OrgRole)}
+              options={ROLE_OPTIONS.filter((r) => r.value !== 'owner')}
+              className="max-w-[140px]"
+            />
+          ) : (
+            <p className="text-xs text-muted pb-2.5">Joins as member</p>
+          )}
+        </div>
+        <div>
+          <p className="text-sm font-medium mb-2">Project visibility</p>
+          {orgRoleGrantsAll ? (
+            <p className="text-xs text-muted">
+              Org admins and owners already access every project.
+            </p>
+          ) : projects.length === 0 ? (
+            <p className="text-xs text-muted">No projects in this organization.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {projects.map((p) => (
+                <label key={p.id} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={p.id in grants}
+                    onChange={() => toggleProject(p.id)}
+                  />
+                  <span className="flex-1">{p.name}</span>
+                  {isOwner && p.id in grants && (
+                    <Select
+                      value={grants[p.id]}
+                      onValueChange={(v) => setGrantRole(p.id, v)}
+                      options={PROJECT_ROLE_OPTIONS}
+                      className="max-w-[130px]"
+                    />
+                  )}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+        <Button type="submit" variant="primary" loading={saving}>
+          Create user
+        </Button>
+      </form>
+    </section>
+  )
+}
+
 export default function Organization() {
   const confirm = useConfirm()
   const toast = useToast()
@@ -33,16 +612,11 @@ export default function Organization() {
 
   const activeOrg = organizations.find((o) => o.id === activeOrgId) || null
   const myRole: OrgRole = activeOrg?.role ?? 'viewer'
-  const canManage = ROLE_RANK[myRole] >= ROLE_RANK.admin
+  const isOwner = myRole === 'owner'
+  const canAddMembers = ROLE_RANK[myRole] >= ROLE_RANK.admin
 
   const [members, setMembers] = useState<OrgMember[]>([])
-  const [invitations, setInvitations] = useState<OrgInvitation[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [inviteEmail, setInviteEmail] = useState('')
-  const [inviteRole, setInviteRole] = useState<OrgRole>('member')
-  const [inviting, setInviting] = useState(false)
-  const [inviteLink, setInviteLink] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
   const [orgName, setOrgName] = useState('')
 
   const refresh = useCallback(async () => {
@@ -51,47 +625,16 @@ export default function Organization() {
     try {
       const m = await api.organizations.members(activeOrgId)
       setMembers(m.members)
-      if (canManage) {
-        const inv = await api.organizations.invitations(activeOrgId)
-        setInvitations(inv.invitations)
-      } else {
-        setInvitations([])
-      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load organization')
     }
-  }, [activeOrgId, canManage])
+  }, [activeOrgId])
 
   useEffect(() => {
     refresh()
     setOrgName(activeOrg?.name ?? '')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeOrgId])
-
-  const handleInvite = async (e: FormEvent) => {
-    e.preventDefault()
-    if (!activeOrgId) return
-    setInviting(true)
-    setError(null)
-    setInviteLink(null)
-    try {
-      const res = await api.organizations.invite(activeOrgId, inviteEmail.trim(), inviteRole)
-      setInviteEmail('')
-      if (res.added_existing_user) {
-        toast.success('Member added')
-        await refresh()
-      } else if (res.invite_token) {
-        const link = `${window.location.origin}/invite/${res.invite_token}`
-        setInviteLink(link)
-        toast.success('Invitation created')
-        await refresh()
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to invite')
-    } finally {
-      setInviting(false)
-    }
-  }
 
   const handleRoleChange = async (userId: number, role: OrgRole) => {
     if (!activeOrgId) return
@@ -121,20 +664,6 @@ export default function Organization() {
     await refresh()
   }
 
-  const handleRevoke = async (invitationId: number) => {
-    if (!activeOrgId) return
-    const ok = await confirm({
-      title: 'Revoke invitation',
-      message: 'Revoke this invitation? The invite link will stop working.',
-      confirmLabel: 'Revoke',
-      danger: true,
-      onConfirm: () => api.organizations.revokeInvite(activeOrgId, invitationId),
-    })
-    if (!ok) return
-    toast.success('Invitation revoked')
-    await refresh()
-  }
-
   const handleRename = async (e: FormEvent) => {
     e.preventDefault()
     if (!activeOrgId || !orgName.trim()) return
@@ -145,13 +674,6 @@ export default function Organization() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to rename organization')
     }
-  }
-
-  const copyLink = async () => {
-    if (!inviteLink) return
-    await navigator.clipboard.writeText(inviteLink)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
   }
 
   if (!activeOrg) {
@@ -176,17 +698,12 @@ export default function Organization() {
           </p>
         </div>
 
-        {error && (
-          <div
-            style={{ border: '1px solid var(--danger)', color: 'var(--danger)' }}
-            className="text-sm p-3 mb-4 bg-[#fef2f2]"
-          >
-            {error}
-          </div>
-        )}
+        <ProjectsSection canAddMembers={canAddMembers} isOwner={isOwner} />
 
-        {canManage && (
-          <section style={{ border: '1px solid var(--border)' }} className="mb-6 p-4">
+        {error && <Banner variant="danger" className="mb-4">{error}</Banner>}
+
+        {isOwner && (
+          <section className="border border-border mb-6 p-4">
             <h2 className="text-base font-semibold mb-4">Settings</h2>
             <form onSubmit={handleRename} className="flex flex-col sm:flex-row gap-2 sm:items-end">
               <Input
@@ -203,13 +720,13 @@ export default function Organization() {
         )}
 
         {/* Members */}
-        <section style={{ border: '1px solid var(--border)' }} className="mb-6 p-4">
+        <section className="border border-border mb-6 p-4">
           <h2 className="text-base font-semibold mb-4">Members ({members.length})</h2>
           <Table>
             <Thead>
               <Tr>
                 <Th>User</Th>
-                <Th>Role</Th>
+                {isOwner && <Th>Role</Th>}
                 <Th className="w-10" />
               </Tr>
             </Thead>
@@ -223,27 +740,31 @@ export default function Organization() {
                       {isSelf && <span className="text-muted text-xs ml-1">(you)</span>}
                       {m.email && <div className="text-xs text-muted">{m.email}</div>}
                     </Td>
+                    {isOwner && (
+                      <Td>
+                        {!isSelf ? (
+                          <Select
+                            value={m.role}
+                            onValueChange={(v) => handleRoleChange(m.user_id, v as OrgRole)}
+                            options={ROLE_OPTIONS}
+                            className="max-w-[140px]"
+                          />
+                        ) : (
+                          m.role && roleBadge(m.role)
+                        )}
+                      </Td>
+                    )}
                     <Td>
-                      {canManage && !isSelf ? (
-                        <Select
-                          value={m.role}
-                          onValueChange={(v) => handleRoleChange(m.user_id, v as OrgRole)}
-                          options={ROLE_OPTIONS}
-                          className="max-w-[140px]"
-                        />
-                      ) : (
-                        roleBadge(m.role)
-                      )}
-                    </Td>
-                    <Td>
-                      {(canManage || isSelf) && (
-                        <button
+                      {(isOwner || isSelf) && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
                           onClick={() => handleRemove(m.user_id)}
-                          className="text-muted hover:text-danger transition-colors"
                           title={isSelf ? 'Leave organization' : 'Remove member'}
+                          aria-label={isSelf ? 'Leave organization' : 'Remove member'}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        </Button>
                       )}
                     </Td>
                   </Tr>
@@ -253,78 +774,12 @@ export default function Organization() {
           </Table>
         </section>
 
-        {/* Invitations */}
-        {canManage && (
-          <section style={{ border: '1px solid var(--border)' }} className="mb-6 p-4">
-            <h2 className="text-base font-semibold mb-4">Invite a member</h2>
-            <form onSubmit={handleInvite} className="flex flex-col sm:flex-row gap-2 sm:items-end">
-              <Input
-                label="Email"
-                type="email"
-                placeholder="teammate@example.com"
-                value={inviteEmail}
-                onChange={(e) => setInviteEmail(e.target.value)}
-                required
-                className="sm:max-w-xs"
-              />
-              <Select
-                label="Role"
-                value={inviteRole}
-                onValueChange={(v) => setInviteRole(v as OrgRole)}
-                options={ROLE_OPTIONS.filter((r) => r.value !== 'owner')}
-                className="max-w-[140px]"
-              />
-              <Button type="submit" variant="primary" loading={inviting}>
-                Invite
-              </Button>
-            </form>
+        {canAddMembers && activeOrgId && (
+          <AddUserSection orgId={activeOrgId} isOwner={isOwner} onCreated={refresh} />
+        )}
 
-            {inviteLink && (
-              <div className="mt-4 p-3 bg-surface border border-border rounded">
-                <p className="text-xs text-muted mb-1">
-                  Share this invite link (no email is sent in self-hosted mode):
-                </p>
-                <div className="flex items-center gap-2">
-                  <code className="text-xs font-mono break-all flex-1">{inviteLink}</code>
-                  <Button size="sm" variant="ghost" onClick={copyLink}>
-                    {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  </Button>
-                </div>
-              </div>
-            )}
-
-            {invitations.length > 0 && (
-              <div className="mt-4">
-                <h3 className="text-sm font-medium mb-2">Pending invitations</h3>
-                <Table>
-                  <Thead>
-                    <Tr>
-                      <Th>Email</Th>
-                      <Th>Role</Th>
-                      <Th className="w-10" />
-                    </Tr>
-                  </Thead>
-                  <Tbody>
-                    {invitations.map((inv) => (
-                      <Tr key={inv.id}>
-                        <Td>{inv.email}</Td>
-                        <Td>{roleBadge(inv.role)}</Td>
-                        <Td>
-                          <button
-                            onClick={() => handleRevoke(inv.id)}
-                            className="text-muted hover:text-danger transition-colors"
-                            title="Revoke invitation"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </Td>
-                      </Tr>
-                    ))}
-                  </Tbody>
-                </Table>
-              </div>
-            )}
-          </section>
+        {isOwner && activeOrgId && (
+          <McpPermissionsSection orgId={activeOrgId} myRole={myRole} />
         )}
       </div>
     </div>

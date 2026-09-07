@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { MessagesSquare } from 'lucide-react'
 import { api, type SharedChatResponse } from '../lib/api'
-import { Spinner } from '../components/ui'
+import { Card, Spinner } from '../components/ui'
 import { Transcript, type CitationSource } from '../components/ChatTranscript'
 import { SourcePanel } from '../components/SourcePanel'
 import { Logo } from '../components/Logo'
@@ -24,8 +24,7 @@ export default function SharedChat({ token }: { token: string }) {
   return (
     <div className="min-h-screen flex flex-col bg-bg">
       <header
-        style={{ borderBottom: '1px solid var(--border)' }}
-        className="px-4 sm:px-8 py-3 bg-surface"
+        className="border-b border-border px-4 sm:px-8 py-3 bg-surface"
       >
         <div className="page-content mx-auto flex items-center justify-between gap-4">
           <Logo />
@@ -39,12 +38,9 @@ export default function SharedChat({ token }: { token: string }) {
       <main className="flex-1 px-4 sm:px-8 py-6">
         <div className="page-content mx-auto">
           {error ? (
-            <div
-              style={{ border: '1px solid var(--border)' }}
-              className="rounded bg-surface p-6 text-center text-sm text-muted"
-            >
+            <Card className="p-6 text-center text-sm text-muted">
               {error}
-            </div>
+            </Card>
           ) : data === null ? (
             <div className="flex items-center justify-center gap-2 text-sm text-muted py-16">
               <Spinner size={14} />
@@ -62,8 +58,7 @@ export default function SharedChat({ token }: { token: string }) {
               </div>
               <Transcript turns={data.turns} onOpenSource={setActiveSource} />
               <p
-                style={{ borderTop: '1px solid var(--border)' }}
-                className="text-[11px] text-muted mt-8 pt-4"
+                className="border-t border-border text-[11px] text-muted mt-8 pt-4"
               >
                 Read-only snapshot of an agent-chat conversation from a self-hosted{' '}
                 <span className="font-mono">ContextForge</span> instance. Retrieval traces

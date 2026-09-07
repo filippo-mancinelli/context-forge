@@ -97,6 +97,84 @@ def dispose_engine(connection_id: int) -> None:
             cached[1].dispose()
         except Exception:  # noqa: BLE001
             pass
+    close_tunnel(connection_id)
+
+
+# --------------------------------------------------------------------------- #
+# SSH tunnels
+# --------------------------------------------------------------------------- #
+# Un datasource dietro bastion apre un forward SSH locale verso host:porta del
+# DB. Il tunnel vive quanto l'engine cache e viene chiuso da dispose_engine.
+_tunnels: dict[int, Any] = {}
+_tunnel_lock = threading.Lock()
+
+
+def ensure_tunnel(
+    connection_id: int, ssh_cfg: dict[str, Any], remote_host: str, remote_port: int
+) -> tuple[str, int]:
+    """Apre (o riusa) un tunnel SSH e ritorna l'endpoint locale (host, porta).
+
+    ``ssh_cfg`` contiene host/port/username del bastion e, in chiaro, la
+    password o la chiave privata a seconda di ``auth_method``.
+    """
+    from sshtunnel import SSHTunnelForwarder
+
+    fingerprint = (
+        ssh_cfg.get("host"), ssh_cfg.get("port"), ssh_cfg.get("username"),
+        ssh_cfg.get("auth_method"), remote_host, remote_port,
+    )
+    with _tunnel_lock:
+        existing = _tunnels.get(connection_id)
+        if existing is not None:
+            server, cached_fp = existing
+            if cached_fp == fingerprint and server.is_active:
+                return "127.0.0.1", server.local_bind_port
+            _stop_tunnel(server)
+
+        kwargs: dict[str, Any] = {
+            "ssh_username": ssh_cfg.get("username"),
+            "remote_bind_address": (remote_host, int(remote_port)),
+            "local_bind_address": ("127.0.0.1", 0),
+        }
+        if ssh_cfg.get("auth_method") == "key":
+            kwargs["ssh_pkey"] = _pkey_from_string(ssh_cfg.get("private_key") or "")
+        else:
+            kwargs["ssh_password"] = ssh_cfg.get("password")
+
+        server = SSHTunnelForwarder(
+            (ssh_cfg.get("host"), int(ssh_cfg.get("port") or 22)), **kwargs
+        )
+        server.start()
+        _tunnels[connection_id] = (server, fingerprint)
+        return "127.0.0.1", server.local_bind_port
+
+
+def _pkey_from_string(pem: str):
+    """Costruisce una chiave privata paramiko dal contenuto PEM."""
+    import io
+
+    import paramiko
+
+    for loader in (paramiko.RSAKey, paramiko.Ed25519Key, paramiko.ECDSAKey):
+        try:
+            return loader.from_private_key(io.StringIO(pem))
+        except Exception:  # noqa: BLE001 - prova il tipo di chiave successivo
+            continue
+    raise ValueError("Unsupported or invalid SSH private key")
+
+
+def _stop_tunnel(server: Any) -> None:
+    try:
+        server.stop()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def close_tunnel(connection_id: int) -> None:
+    with _tunnel_lock:
+        entry = _tunnels.pop(connection_id, None)
+    if entry is not None:
+        _stop_tunnel(entry[0])
 
 
 def ping(engine: Engine) -> None:

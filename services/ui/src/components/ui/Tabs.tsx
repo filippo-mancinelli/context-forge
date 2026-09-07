@@ -27,7 +27,7 @@ export function TabsTrigger({
   return (
     <RadixTabs.Trigger
       value={value}
-      className="px-4 py-2 text-sm font-medium text-muted border-b-2 border-transparent -mb-px transition-colors hover:text-text data-[state=active]:text-accent data-[state=active]:border-accent focus:outline-none"
+      className="px-4 py-2 text-sm font-medium text-muted border-b-2 border-transparent -mb-px transition-colors hover:text-text data-[state=active]:text-text data-[state=active]:border-primary focus:outline-none"
     >
       {children}
     </RadixTabs.Trigger>

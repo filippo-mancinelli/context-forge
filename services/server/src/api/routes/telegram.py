@@ -8,10 +8,12 @@ agent too. See ``.omc/plans/telegram-quick-capture.md`` §3 for the full design.
 
 Authentication mirrors ``api/routes/webhooks.py``'s shared-secret pattern, but
 uses Telegram's native mechanism: a ``secret_token`` set via ``setWebhook`` and
-verified against the ``X-Telegram-Bot-Api-Secret-Token`` header. The endpoint
-is disabled (503) when the channel isn't configured, exempt from the
-session-auth guard (see ``api/app.py`` open_paths), and additionally requires
-the message's ``chat_id`` to be allowlisted before any action is taken.
+verified against the ``X-Telegram-Bot-Api-Secret-Token`` header. The secret also
+identifies which organization the update belongs to (each org has its own
+``telegram_webhook_secret``, see ``org_settings.resolve_org_by_webhook_secret``).
+The endpoint is disabled (503) when that org's channel isn't configured, exempt
+from the session-auth guard (see ``api/app.py`` open_paths), and additionally
+requires the message's ``chat_id`` to be allowlisted before any action is taken.
 
 Telegram retries the webhook if it doesn't get a fast response, so the route
 replies 200 immediately and does the LLM/storage work in a background task,
@@ -19,17 +21,16 @@ sending the confirmation message back via ``sendMessage`` once it's done.
 """
 from __future__ import annotations
 
-import hmac
 import logging
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from ...config import get_settings
 from ...db import get_pool
 from ...kb import store
 from ...kb.extract import is_supported
+from ...org_settings import get_org_settings, resolve_org_by_webhook_secret
 from ...telegram import client
 from ...telegram.capture_agent import run_capture
 from ..deps import ActiveOrg, require_role
@@ -101,7 +102,10 @@ async def _handle_attachment(
         file_path = await client.get_file_path(file_id, bot_token)
         data = await client.download_file(file_path, bot_token)
 
-        record = await store.save_upload(org_id, filename, data)
+        from ...projects import get_default_project_id
+
+        project_id = await get_default_project_id(org_id)
+        record = await store.save_upload(org_id, project_id, filename, data)
         doc_id = record["id"]
         # Awaited directly (rather than scheduled as its own BackgroundTasks
         # entry like knowledge.py does) because the extracted text is needed
@@ -132,7 +136,7 @@ def _extract_message(update: dict[str, Any]) -> Optional[dict[str, Any]]:
 @router.get("/webhook-info")
 async def get_webhook_info(org: ActiveOrg = Depends(require_role("admin"))):
     """Return the current webhook URL registered with Telegram, if any."""
-    settings = get_settings()
+    settings = await get_org_settings(org.org_id)
     if not settings.telegram_bot_token:
         raise HTTPException(status_code=400, detail="Bot token not configured")
     try:
@@ -155,7 +159,7 @@ async def register_webhook(
     ``scripts/setup_telegram_webhook.py`` by hand. Requires TELEGRAM_BOT_TOKEN and
     TELEGRAM_WEBHOOK_SECRET to already be saved (via ``PUT /settings``) before calling.
     """
-    settings = get_settings()
+    settings = await get_org_settings(org.org_id)
     if not settings.telegram_bot_token or not settings.telegram_webhook_secret:
         raise HTTPException(
             status_code=400,
@@ -177,21 +181,13 @@ async def telegram_webhook(
     x_telegram_bot_api_secret_token: Optional[str] = Header(None),
 ):
     """Receive a Telegram update, verify it, and dispatch capture in the background."""
-    settings = get_settings()
-    secret = (settings.telegram_webhook_secret or "").strip()
-    if not secret or not settings.telegram_bot_token:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Telegram channel is disabled (set TELEGRAM_BOT_TOKEN "
-                "and TELEGRAM_WEBHOOK_SECRET)"
-            ),
-        )
+    org_id = await resolve_org_by_webhook_secret(x_telegram_bot_api_secret_token or "")
+    if org_id is None:
+        raise HTTPException(status_code=403, detail="Unknown webhook secret")
 
-    if not x_telegram_bot_api_secret_token or not hmac.compare_digest(
-        secret, x_telegram_bot_api_secret_token
-    ):
-        raise HTTPException(status_code=401, detail="Invalid or missing Telegram secret token")
+    s = await get_org_settings(org_id)
+    if not s.telegram_bot_token:
+        raise HTTPException(status_code=503, detail="Telegram channel not configured")
 
     update = await request.json()
     message = _extract_message(update)
@@ -202,13 +198,12 @@ async def telegram_webhook(
     if chat_id is None:
         return {"status": "ignored", "reason": "no chat id"}
 
-    allowed = _allowed_chat_ids(settings.telegram_allowed_chat_ids)
+    allowed = _allowed_chat_ids(s.telegram_allowed_chat_ids)
     if chat_id not in allowed:
         logger.info("Telegram message from non-allowlisted chat_id=%s ignored", chat_id)
         return {"status": "ignored", "reason": "chat_id not in allowlist"}
 
-    bot_token = settings.telegram_bot_token
-    org_id = settings.telegram_org_id
+    bot_token = s.telegram_bot_token
     message_id = message.get("message_id", 0)
 
     document = message.get("document")

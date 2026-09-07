@@ -5,11 +5,13 @@ import logging
 from typing import Optional
 
 from .server import mcp
+from .permissions import requires_permission
 
 logger = logging.getLogger(__name__)
 
 
 @mcp.tool()
+@requires_permission("context-read")
 async def ci_runs(repo: str, limit: int = 10) -> dict:
     """List recent CI runs (GitHub Actions workflow runs / GitLab CI pipelines) for a repository.
 
@@ -39,6 +41,7 @@ async def ci_runs(repo: str, limit: int = 10) -> dict:
 
 
 @mcp.tool()
+@requires_permission("context-read")
 async def ci_failure(repo: str, run_id: Optional[int] = None, max_log_chars: int = 8000) -> dict:
     """Get why a CI run failed: the failed jobs/steps and the tail of their error logs.
 

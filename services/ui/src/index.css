@@ -16,6 +16,26 @@
     --danger: #c0392b;
     --success: #27ae60;
     --warning: #e67e22;
+    /* Primary action color (Azzurro family) */
+    --primary: #3d8fd1;
+    --primary-hover: #2b6fa8;
+    --primary-light: #eaf4fb;
+    --on-primary: #ffffff;
+    --surface-hover: #e9edf1;
+    /* Soft status backgrounds/borders (badges, banners, toasts) */
+    --success-bg: #eafaf1;
+    --success-border: #a9dfbf;
+    --warning-bg: #fef9e7;
+    --warning-border: #f9e4b7;
+    --danger-bg: #fef2f2;
+    --danger-border: #fca5a5;
+    /* Dark sidebar / top bar in Ink */
+    --sidebar-bg: #0b0f14;
+    --sidebar-text: #8b97a5;
+    --sidebar-text-strong: #e6ebf0;
+    --sidebar-text-muted: #b6c0cb;
+    --sidebar-border: rgba(255, 255, 255, 0.10);
+    --sidebar-control-border: rgba(255, 255, 255, 0.20);
   }
 
   *,
