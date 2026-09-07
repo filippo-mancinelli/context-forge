@@ -5,7 +5,9 @@ from src.config import Settings
 from src.vector_index import (
     HNSW_EF_CONSTRUCTION,
     HNSW_EF_SEARCH,
+    HNSW_ITERATIVE_SCAN,
     HNSW_M,
+    PLAN_CACHE_MODE,
     HNSW_TABLES,
     MAINTENANCE_WORK_MEM,
     _like_pattern,
@@ -13,6 +15,7 @@ from src.vector_index import (
     create_index_sql,
     drop_index_sql,
     index_name,
+    search_session_sql,
     vector_expr,
 )
 
@@ -65,3 +68,12 @@ def test_the_like_pattern_escapes_every_literal_underscore():
 
 def test_maintenance_work_mem_is_configurable_and_defaults_to_the_constant():
     assert Settings().hnsw_maintenance_work_mem == MAINTENANCE_WORK_MEM
+
+
+def test_search_session_sql_renders_the_three_knobs_as_one_statement():
+    assert (HNSW_ITERATIVE_SCAN, PLAN_CACHE_MODE) == ("relaxed_order", "force_custom_plan")
+    assert search_session_sql() == (
+        "SET LOCAL hnsw.ef_search = 100; "
+        "SET LOCAL hnsw.iterative_scan = 'relaxed_order'; "
+        "SET LOCAL plan_cache_mode = 'force_custom_plan'"
+    )

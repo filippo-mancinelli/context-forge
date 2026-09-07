@@ -22,7 +22,20 @@ HNSW_TABLES: tuple[str, ...] = ("repo_chunks", "kb_chunks", "web_chunks")
 HNSW_M = 16
 HNSW_EF_CONSTRUCTION = 64
 HNSW_EF_SEARCH = 100
+# Needs pgvector >= 0.8; older builds only log a warning for the unknown GUC.
+HNSW_ITERATIVE_SCAN = "relaxed_order"
+# Filtered HNSW scans need the org_id/project_id literals, not a generic plan.
+PLAN_CACHE_MODE = "force_custom_plan"
 MAINTENANCE_WORK_MEM = "256MB"
+
+
+def search_session_sql() -> str:
+    """The session knobs of one vector search, as a single simple-protocol statement."""
+    return (
+        f"SET LOCAL hnsw.ef_search = {HNSW_EF_SEARCH}; "
+        f"SET LOCAL hnsw.iterative_scan = '{HNSW_ITERATIVE_SCAN}'; "
+        f"SET LOCAL plan_cache_mode = '{PLAN_CACHE_MODE}'"
+    )
 
 
 async def _maintenance_connection():
