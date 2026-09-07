@@ -108,15 +108,16 @@ def cmd_migrate(args: argparse.Namespace) -> None:
     import asyncio
 
     from .db import close_db, get_pool
-    from .migrations.runner import current_version, discover_versions, run_migrations
+    from .migrations.runner import applied_versions, discover_versions, run_migrations
 
     async def _run() -> None:
         pool = await get_pool()
         try:
             if args.status:
-                version = await current_version(pool)
+                applied = await applied_versions(pool)
+                version = max(applied, default=0)
                 print(f"Current schema version: {version}")
-                pending = [m for m in discover_versions() if m.VERSION > version]
+                pending = [m for m in discover_versions() if m.VERSION not in applied]
                 for module in pending:
                     print(f"  pending: {module.VERSION:04d}_{module.NAME}")
                 if not pending:

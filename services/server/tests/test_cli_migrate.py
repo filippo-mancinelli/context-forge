@@ -17,6 +17,8 @@ def _patch(monkeypatch, *, applied=None, version=0, modules=()):
     calls = {"run": 0, "closed": 0}
     pool = object()
 
+    status_applied = set(applied) if applied is not None else set(range(1, version + 1))
+
     async def fake_get_pool():
         return pool
 
@@ -32,10 +34,15 @@ def _patch(monkeypatch, *, applied=None, version=0, modules=()):
         assert arg is pool
         return version
 
+    async def fake_applied_versions(arg):
+        assert arg is pool
+        return status_applied
+
     monkeypatch.setattr(db, "get_pool", fake_get_pool)
     monkeypatch.setattr(db, "close_db", fake_close_db)
     monkeypatch.setattr(runner, "run_migrations", fake_run_migrations)
     monkeypatch.setattr(runner, "current_version", fake_current_version)
+    monkeypatch.setattr(runner, "applied_versions", fake_applied_versions)
     monkeypatch.setattr(runner, "discover_versions", lambda *a, **k: list(modules))
     return calls
 
@@ -73,6 +80,24 @@ def test_status_reports_an_up_to_date_database(monkeypatch, capsys):
     _patch(monkeypatch, version=1, modules=[FakeModule(1, "baseline")])
     cli.cmd_migrate(argparse.Namespace(status=True))
     assert "no pending migrations" in capsys.readouterr().out
+
+
+def test_status_lists_a_lower_pending_version_after_a_higher_one(monkeypatch, capsys):
+    _patch(
+        monkeypatch,
+        applied={1, 3},
+        modules=[
+            FakeModule(1, "baseline"),
+            FakeModule(2, "jobs_retry"),
+            FakeModule(3, "widgets"),
+        ],
+    )
+    cli.cmd_migrate(argparse.Namespace(status=True))
+    out = capsys.readouterr().out
+    assert "Current schema version: 3" in out
+    assert "  pending: 0002_jobs_retry" in out
+    assert "0001_" not in out
+    assert "0003_" not in out
 
 
 def test_migrate_reports_error_and_exits_when_run_migrations_raises(monkeypatch, capsys):
