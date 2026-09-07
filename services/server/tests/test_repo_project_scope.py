@@ -4,7 +4,7 @@ from src import search
 
 
 def test_repo_search_sql_filters_project():
-    for sql in (search._REPO_HYBRID_SQL, search._REPO_VECTOR_SQL, search._SYMBOL_SEARCH_SQL):
+    for sql in (search._repo_hybrid_sql(1536), search._repo_vector_sql(1536), search._SYMBOL_SEARCH_SQL):
         assert "project_id" in sql
 
 
