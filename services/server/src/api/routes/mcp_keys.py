@@ -184,7 +184,11 @@ async def update_key(
     user_id: int = Depends(get_current_user_id),
     org: ActiveOrg = Depends(get_active_org),
 ):
-    """Change a key's rate limit. Creator or org admin only; null = unlimited."""
+    """Replace a key's rate limit. Creator or org admin only.
+
+    PUT semantics: the body replaces the whole setting, so a null or omitted
+    `rate_limit_per_minute` means unlimited.
+    """
     key = await get_mcp_api_key(key_id)
     if not key or key.get("org_id") != org.org_id:
         raise HTTPException(status_code=404, detail="Key not found")

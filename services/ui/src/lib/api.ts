@@ -1280,6 +1280,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(body),
       }),
+    update: (keyId: number, body: { rate_limit_per_minute: number | null }) =>
+      request<{ status: string; rate_limit_per_minute: number | null }>(`/api/mcp/keys/${keyId}`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
     revoke: (keyId: number) => request<{ status: string }>(`/api/mcp/keys/${keyId}`, { method: 'DELETE' }),
   },
   telegram: {
