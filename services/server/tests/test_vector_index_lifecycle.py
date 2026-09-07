@@ -116,6 +116,47 @@ def test_drops_only_the_stale_dimension_of_the_same_org(monkeypatch):
     ]
 
 
+def test_the_stale_dimension_goes_before_the_build_of_the_new_one(monkeypatch):
+    # Both indexes on one table at once would double the memory of the build.
+    conn = FakeConn(stale={"repo_chunks": ["repo_chunks_emb_hnsw_org42_d768"]})
+    _patch_conn(monkeypatch, conn)
+
+    asyncio.run(vector_index.ensure_org_indexes(42, 1536))
+
+    drop = 'DROP INDEX CONCURRENTLY IF EXISTS "public"."repo_chunks_emb_hnsw_org42_d768"'
+    create = next(
+        s for s in conn.executed
+        if s.startswith("CREATE INDEX CONCURRENTLY IF NOT EXISTS repo_chunks")
+    )
+    assert conn.executed.index(drop) < conn.executed.index(create)
+
+
+def test_drop_org_indexes_removes_every_dimension_of_the_organization(monkeypatch):
+    conn = FakeConn(stale={
+        "repo_chunks": ["repo_chunks_emb_hnsw_org42_d1536"],
+        "kb_chunks": ["kb_chunks_emb_hnsw_org42_d768"],
+    })
+    _patch_conn(monkeypatch, conn)
+
+    dropped = asyncio.run(vector_index.drop_org_indexes(42))
+
+    assert dropped == [
+        '"public"."repo_chunks_emb_hnsw_org42_d1536"',
+        '"public"."kb_chunks_emb_hnsw_org42_d768"',
+    ]
+    assert conn.executed == [f"DROP INDEX CONCURRENTLY IF EXISTS {n}" for n in dropped]
+    assert conn.closed is True
+
+
+def test_drop_org_indexes_survives_a_broken_connection(monkeypatch):
+    async def boom():
+        raise RuntimeError("no database")
+
+    monkeypatch.setattr(vector_index, "_maintenance_connection", boom)
+
+    assert asyncio.run(vector_index.drop_org_indexes(42)) == []
+
+
 def test_an_invalid_leftover_is_dropped_before_the_index_is_rebuilt(monkeypatch):
     name = "repo_chunks_emb_hnsw_org42_d1536"
     conn = FakeConn(valid={name: [False, True]})

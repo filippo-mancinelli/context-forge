@@ -160,14 +160,46 @@ async def ensure_org_indexes(org_id: int, dims: int) -> list[str]:
         await conn.execute(f"SET maintenance_work_mem = '{_maintenance_work_mem()}'")
         for table in HNSW_TABLES:
             name = index_name(table, org_id, dims)
+            # Stale first: two dimensions indexed at once double the build cost.
+            await _drop_stale_indexes(conn, table, org_id, name)
             if await _build_index(conn, table, org_id, dims):
                 created.append(name)
-            await _drop_stale_indexes(conn, table, org_id, name)
     except Exception:
         logger.exception("HNSW index maintenance failed (org=%s)", org_id)
     finally:
         await _close(conn, org_id)
     return created
+
+
+async def drop_org_indexes(org_id: int) -> list[str]:
+    """Drop the org's HNSW indexes of every dimension; returns what was dropped.
+
+    A re-embed to a new dimension has to run first: the typed cast of the old
+    index rejects a vector of the new width on the very first UPDATE.
+    """
+    dropped: list[str] = []
+    try:
+        conn = await _maintenance_connection()
+    except Exception:
+        logger.exception("HNSW index drop: no connection (org=%s)", org_id)
+        return dropped
+    try:
+        for table in HNSW_TABLES:
+            try:
+                rows = await _org_index_rows(conn, table, org_id)
+            except Exception:
+                logger.exception("HNSW index lookup failed: %s", table)
+                continue
+            for schemaname, indexname in rows:
+                target = _qualified(schemaname, indexname)
+                try:
+                    await conn.execute(drop_index_sql(target))
+                    dropped.append(target)
+                except Exception:
+                    logger.exception("HNSW index drop failed: %s", target)
+    finally:
+        await _close(conn, org_id)
+    return dropped
 
 
 async def hnsw_indexes_valid(org_id: int, dims: int) -> dict[str, bool]:

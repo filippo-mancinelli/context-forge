@@ -25,11 +25,15 @@ def test_reembed_org_processes_all_tables(monkeypatch):
 
         return OrgSettings(embeddings_dims=1536)
 
+    async def fake_drop(org_id):
+        return []
+
     async def fake_ensure(org_id, dims):
         return []
 
     monkeypatch.setattr(reembed, "_iter_chunks", fake_iter_chunks)
     monkeypatch.setattr(reembed, "embed_batch", fake_embed_batch)
+    monkeypatch.setattr(reembed, "drop_org_indexes", fake_drop)
     monkeypatch.setattr(reembed, "_update_embeddings", fake_update)
     monkeypatch.setattr(reembed, "_set_job_status", fake_job_update)
     monkeypatch.setattr(reembed, "get_org_settings", fake_org_settings)
@@ -61,11 +65,15 @@ def test_reembed_org_failure_marks_job_failed_without_raising(monkeypatch):
 
         return OrgSettings(embeddings_dims=1536)
 
+    async def fake_drop(org_id):
+        return []
+
     async def fake_ensure(org_id, dims):
         return []
 
     monkeypatch.setattr(reembed, "_iter_chunks", fake_iter_chunks)
     monkeypatch.setattr(reembed, "embed_batch", fake_embed_batch)
+    monkeypatch.setattr(reembed, "drop_org_indexes", fake_drop)
     monkeypatch.setattr(reembed, "_update_embeddings", fake_update)
     monkeypatch.setattr(reembed, "_set_job_status", fake_job_update)
     monkeypatch.setattr(reembed, "get_org_settings", fake_org_settings)

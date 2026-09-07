@@ -10,6 +10,10 @@ from src.config import ForgeConfig
 from src.org_settings import OrgSettings
 
 
+async def _no_drop(org_id):
+    return []
+
+
 def test_boot_schedules_index_maintenance_after_tenant_storage():
     src = inspect.getsource(main_module.main)
     assert "ensure_all_indexes" in src
@@ -19,6 +23,85 @@ def test_boot_schedules_index_maintenance_after_tenant_storage():
     # A bare create_task() is only weakly referenced by the loop and can be
     # garbage-collected before it runs: it must be kept alive.
     assert "_keep(asyncio.create_task(ensure_all_indexes()))" in src
+
+
+def test_reembed_drops_the_org_indexes_before_the_first_update(monkeypatch):
+    """A 1536-dim index rejects a 3072-dim UPDATE, so it must go first."""
+    order = []
+
+    async def fake_iter_chunks(table, org_id, batch_size):
+        yield [(10, "hello")]
+
+    async def fake_embed_batch(texts, org_id):
+        return [[0.1] * 4 for _ in texts]
+
+    async def fake_drop(org_id):
+        order.append(("drop", org_id))
+        return []
+
+    async def fake_update(table, pairs, org_id):
+        order.append(("update", table))
+
+    async def fake_job_update(job_id, status, result=None, error=None):
+        pass
+
+    async def fake_org_settings(org_id):
+        return OrgSettings(embeddings_dims=3072)
+
+    async def fake_ensure(org_id, dims):
+        order.append(("ensure", org_id, dims))
+        return []
+
+    monkeypatch.setattr(reembed, "_iter_chunks", fake_iter_chunks)
+    monkeypatch.setattr(reembed, "embed_batch", fake_embed_batch)
+    monkeypatch.setattr(reembed, "drop_org_indexes", fake_drop)
+    monkeypatch.setattr(reembed, "_update_embeddings", fake_update)
+    monkeypatch.setattr(reembed, "_set_job_status", fake_job_update)
+    monkeypatch.setattr(reembed, "get_org_settings", fake_org_settings)
+    monkeypatch.setattr(reembed, "ensure_org_indexes", fake_ensure)
+
+    asyncio.run(reembed.reembed_org(5, "job-1"))
+
+    assert order[0] == ("drop", 5)
+    assert order[1] == ("update", "repo_chunks")
+    assert order[-1] == ("ensure", 5, 3072)
+
+
+def test_reembed_still_runs_when_the_index_drop_fails(monkeypatch):
+    statuses = []
+
+    async def fake_iter_chunks(table, org_id, batch_size):
+        yield [(10, "hello")]
+
+    async def fake_embed_batch(texts, org_id):
+        return [[0.1] * 4 for _ in texts]
+
+    async def fake_drop(org_id):
+        raise RuntimeError("db unavailable")
+
+    async def fake_update(table, pairs, org_id):
+        pass
+
+    async def fake_job_update(job_id, status, result=None, error=None):
+        statuses.append(status)
+
+    async def fake_org_settings(org_id):
+        return OrgSettings(embeddings_dims=1536)
+
+    async def fake_ensure(org_id, dims):
+        return []
+
+    monkeypatch.setattr(reembed, "_iter_chunks", fake_iter_chunks)
+    monkeypatch.setattr(reembed, "embed_batch", fake_embed_batch)
+    monkeypatch.setattr(reembed, "drop_org_indexes", fake_drop)
+    monkeypatch.setattr(reembed, "_update_embeddings", fake_update)
+    monkeypatch.setattr(reembed, "_set_job_status", fake_job_update)
+    monkeypatch.setattr(reembed, "get_org_settings", fake_org_settings)
+    monkeypatch.setattr(reembed, "ensure_org_indexes", fake_ensure)
+
+    asyncio.run(reembed.reembed_org(5, "job-1"))
+
+    assert statuses == ["running", "completed"]
 
 
 def test_reembed_ensures_the_indexes_once_with_the_org_dimension(monkeypatch):
@@ -45,6 +128,7 @@ def test_reembed_ensures_the_indexes_once_with_the_org_dimension(monkeypatch):
 
     monkeypatch.setattr(reembed, "_iter_chunks", fake_iter_chunks)
     monkeypatch.setattr(reembed, "embed_batch", fake_embed_batch)
+    monkeypatch.setattr(reembed, "drop_org_indexes", _no_drop)
     monkeypatch.setattr(reembed, "_update_embeddings", fake_update)
     monkeypatch.setattr(reembed, "_set_job_status", fake_job_update)
     monkeypatch.setattr(reembed, "get_org_settings", fake_org_settings)
@@ -75,6 +159,7 @@ def test_reembed_still_completes_when_index_maintenance_lookup_fails(monkeypatch
 
     monkeypatch.setattr(reembed, "_iter_chunks", fake_iter_chunks)
     monkeypatch.setattr(reembed, "embed_batch", fake_embed_batch)
+    monkeypatch.setattr(reembed, "drop_org_indexes", _no_drop)
     monkeypatch.setattr(reembed, "_update_embeddings", fake_update)
     monkeypatch.setattr(reembed, "_set_job_status", fake_job_update)
     monkeypatch.setattr(reembed, "get_org_settings", fake_org_settings)
