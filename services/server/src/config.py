@@ -86,6 +86,9 @@ class Settings(BaseSettings):
     agent_workspaces_dir: str = "/data/agent-workspaces"
     kb_data_dir: str = "/data/kb"
     log_level: str = "INFO"
+    # Bearer token required by GET /metrics. Empty leaves the endpoint open
+    # (intended for private scraping networks).
+    metrics_token: str = ""
     config_path: str = "/app/context-forge.yml"
     setup_bootstrap_token: str = ""
     # Comma-separated extra origins for the REST API (e.g. UI on another host than the API).

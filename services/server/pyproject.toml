@@ -66,6 +66,9 @@ dependencies = [
     # Scheduling
     "apscheduler>=3.10.4",
 
+    # Metrics
+    "prometheus-client>=0.20",
+
     # Config
     "pyyaml>=6.0",
     "python-dotenv>=1.0.0",
