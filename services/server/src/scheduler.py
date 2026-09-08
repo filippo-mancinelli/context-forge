@@ -1,15 +1,21 @@
 """APScheduler setup for periodic, per-organization indexing and git pulls."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from .db import get_pool
 from .indexer.git_manager import pull_all_repos
 from .indexer.indexer import run_index_repo, run_pending_index_requests, sync_repos_config
+from .mcp.audit import purge_old_calls as purge_old_tool_calls, start_audit_writer
+from .mcp.jobs import run_claimed_job
 from .mcp.oauth_bridge import purge_expired_flows
+from .metrics import record_scheduler_tick, refresh_metrics
 from .org_config import get_org_config, iter_org_configs
+from .vector_index import ensure_all_indexes
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +107,116 @@ async def _purge_expired_oauth_flows() -> None:
         logger.info("Purged %d expired OAuth bridge flow(s)", deleted)
 
 
+async def _expire_write_requests() -> None:
+    """Pending write requests must not stay approvable past their TTL."""
+    from .write_requests import expire_pending
+
+    try:
+        expired = await expire_pending()
+        if expired:
+            logger.info("Expired %d pending write request(s)", expired)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Write requests expiry tick failed: %s", exc)
+
+
+async def _purge_old_tool_calls() -> None:
+    """Delete MCP tool-call audit rows older than MCP_AUDIT_RETENTION_DAYS."""
+    try:
+        deleted = await purge_old_tool_calls()
+        if deleted:
+            logger.info("Purged %d MCP tool-call audit row(s)", deleted)
+    except Exception as exc:  # noqa: BLE001
+        # One line, no traceback: purge_old_calls already swallows its own
+        # failures, this is a second net for anything raised above it.
+        logger.warning("MCP audit retention tick failed: %s", exc)
+
+
+async def _refresh_metrics() -> None:
+    """Repopulate the gauges, beat the heartbeat, and revive a dead audit writer."""
+    try:
+        # Idempotente: riavvia il writer solo se e' morto o non e' mai partito.
+        start_audit_writer()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("MCP audit writer restart failed: %s", exc)
+    try:
+        await refresh_metrics()
+    except Exception as exc:  # noqa: BLE001
+        # One line, no traceback: a database outage would otherwise spam every tick.
+        logger.warning("Metrics refresh tick failed: %s", exc)
+
+
+def is_scheduler_running() -> bool:
+    return _scheduler is not None and bool(getattr(_scheduler, "running", False))
+
+
+_JOB_CLAIM_BATCH = 5
+_JOB_STUCK_MINUTES = 10
+
+# `jobs` has a second producer: src/api/routes/settings.py inserts 'org_reembed'
+# rows that src/reembed.py drives itself. Every statement here is scoped to the
+# rows this executor owns.
+_JOB_CLAIM_SQL = f"""
+UPDATE jobs
+SET status = 'running', attempts = attempts + 1, updated_at = NOW()
+WHERE id IN (
+    SELECT id FROM jobs
+    WHERE tool = 'http' AND status = 'pending' AND next_attempt_at <= NOW()
+      AND attempts < max_attempts
+    ORDER BY next_attempt_at
+    LIMIT {_JOB_CLAIM_BATCH}
+    FOR UPDATE SKIP LOCKED
+)
+RETURNING id, params, attempts, max_attempts
+"""
+
+_JOB_STUCK_RESET_SQL = (
+    "UPDATE jobs SET status = 'pending', updated_at = NOW() "
+    "WHERE tool = 'http' AND status = 'running' "
+    f"AND updated_at < NOW() - INTERVAL '{_JOB_STUCK_MINUTES} minutes'"
+)
+
+# A process that dies mid-attempt never reaches finalize_job, so the max_attempts
+# check there never runs: without this sweep such a job cycles forever.
+_JOB_DEAD_SWEEP_SQL = (
+    "UPDATE jobs SET status = 'dead', "
+    "error_message = COALESCE(error_message, last_error, 'exceeded max_attempts'), "
+    "updated_at = NOW() "
+    "WHERE tool = 'http' AND status = 'pending' AND attempts >= max_attempts"
+)
+
+
+async def _check_jobs() -> None:
+    """Claim and run the http jobs that are due."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(_JOB_CLAIM_SQL)
+        if not rows:
+            return
+        outcomes = await asyncio.gather(
+            *(run_claimed_job(dict(row)) for row in rows), return_exceptions=True
+        )
+        for row, outcome in zip(rows, outcomes):
+            if outcome is not None:
+                logger.warning("Job %s raised: %s", row["id"], outcome)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Job executor tick failed: %s", exc)
+
+
+async def _maintain_jobs() -> None:
+    """Requeue jobs stranded in 'running' and dead-letter those past max_attempts.
+
+    Kept off the executor tick so it still runs while a long job blocks it.
+    """
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(_JOB_STUCK_RESET_SQL)
+            await conn.execute(_JOB_DEAD_SWEEP_SQL)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Job maintenance tick failed: %s", exc)
+
+
 async def start_scheduler() -> None:
     global _scheduler
     _scheduler = AsyncIOScheduler()
@@ -108,6 +224,25 @@ async def start_scheduler() -> None:
     # Check for pending index requests every 10 seconds.
     _scheduler.add_job(
         _check_index_requests, "interval", seconds=10, id="index_requests", replace_existing=True
+    )
+
+    # Claim and run due async jobs. One instance at a time, coalescing missed
+    # runs: back-pressure while a batch is in flight is intentional, not a misfire.
+    _scheduler.add_job(
+        _check_jobs, "interval", seconds=5, id="jobs", replace_existing=True,
+        max_instances=1, coalesce=True, misfire_grace_time=None,
+    )
+
+    # Requeue stranded jobs and dead-letter crash-looped ones, on its own tick.
+    _scheduler.add_job(
+        _maintain_jobs, "interval", seconds=60, id="jobs_maintenance",
+        replace_existing=True, max_instances=1, coalesce=True,
+        misfire_grace_time=None,
+    )
+
+    # Refresh the Prometheus gauges and the heartbeat.
+    _scheduler.add_job(
+        _refresh_metrics, "interval", seconds=30, id="metrics", replace_existing=True
     )
 
     # Safety-net for knowledge-base documents whose background task didn't run.
@@ -132,7 +267,27 @@ async def start_scheduler() -> None:
         replace_existing=True,
     )
 
+    # Daily: pending write requests past their expiry are no longer approvable.
+    _scheduler.add_job(
+        _expire_write_requests, CronTrigger(hour="3", minute="20"),
+        id="write_requests_expiry", replace_existing=True,
+        max_instances=1, coalesce=True, misfire_grace_time=None,
+    )
+
+    # Daily retention of the MCP tool-call audit trail.
+    _scheduler.add_job(
+        _purge_old_tool_calls, "interval", hours=24, id="mcp_audit_retention",
+        replace_existing=True, max_instances=1, coalesce=True, misfire_grace_time=None,
+    )
+
+    # Self-healing: rebuilds any HNSW index left INVALID by an interrupted build.
+    _scheduler.add_job(
+        ensure_all_indexes, "interval", hours=6, id="hnsw_indexes",
+        replace_existing=True,
+    )
+
     _scheduler.start()
+    record_scheduler_tick()
     await sync_scheduler_jobs()
     logger.info("Scheduler started (per-organization refresh jobs)")
 

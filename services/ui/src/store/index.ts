@@ -24,6 +24,8 @@ interface AppStore {
   activeOrgId: number | null
   projects: Project[]
   activeProjectId: number | null
+  pendingApprovals: number
+  loadPendingApprovals: () => Promise<void>
   setAuthState: (state: AuthState) => void
   setSetupMode: (mode: SetupMode) => void
   setActiveOrg: (orgId: number) => void
@@ -43,6 +45,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
   activeOrgId: getActiveOrgId(),
   projects: [],
   activeProjectId: getActiveProjectId(),
+  pendingApprovals: 0,
 
   setAuthState: (authState) => set({ authState }),
   setSetupMode: (setupMode) => set({ setupMode }),
@@ -71,6 +74,22 @@ export const useAppStore = create<AppStore>((set, get) => ({
     }
   },
 
+  loadPendingApprovals: async () => {
+    const { organizations, activeOrgId } = get()
+    const role = organizations.find((o) => o.id === activeOrgId)?.role
+    if (role !== 'admin' && role !== 'owner') {
+      set({ pendingApprovals: 0 })
+      return
+    }
+    try {
+      const res = await api.writeRequests.list({ status: 'pending', limit: 1 })
+      set({ pendingApprovals: res.pending })
+    } catch {
+      // best-effort: the badge simply stays at zero
+      set({ pendingApprovals: 0 })
+    }
+  },
+
   loadIdentity: async () => {
     const me = await api.auth.me()
     const orgs = me.organizations
@@ -80,6 +99,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
     setActiveOrgId(active)
     set({ currentUser: me.user, organizations: orgs, activeOrgId: active })
     await get().loadProjects()
+    await get().loadPendingApprovals()
   },
 
   completeLogin: async () => {
@@ -102,7 +122,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
       clearAuthToken()
       setActiveOrgId(null)
       setActiveProjectId(null)
-      set({ authState: 'login', currentUser: null, organizations: [], activeOrgId: null, projects: [], activeProjectId: null })
+      set({ authState: 'login', currentUser: null, organizations: [], activeOrgId: null, projects: [], activeProjectId: null, pendingApprovals: 0 })
       if (logoutUrl) window.location.assign(logoutUrl)
     }
   },

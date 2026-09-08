@@ -96,3 +96,145 @@ def test_serialize_key_passes_through_project_fields():
     assert out["project_slug"] == "billing"
     assert out["created_at"] == "2026-07-22T12:00:00+00:00"
     assert out["last_used_at"] is None
+
+
+# ===== rate_limit_per_minute: create_key response returns it (consistency with list/update) =====
+
+def test_create_key_response_includes_the_rate_limit(monkeypatch):
+    import asyncio
+
+    from src.api.deps import ActiveOrg
+    from src.api.routes import mcp_keys as routes
+
+    async def fake_resolve_role_permissions(org_id, role):
+        return frozenset({"*"})
+
+    captured = {}
+
+    async def fake_create_mcp_api_key(**kwargs):
+        captured.update(kwargs)
+        return "forge_rawkey"
+
+    async def fake_list_mcp_api_keys(org_id):
+        return [{
+            "id": 1, "name": "k", "scope": "read,write",
+            "permissions": "context-read,context-write", "expires_at": None,
+            "rate_limit_per_minute": 60,
+        }]
+
+    monkeypatch.setattr(routes, "resolve_role_permissions", fake_resolve_role_permissions)
+    monkeypatch.setattr(routes, "create_mcp_api_key", fake_create_mcp_api_key)
+    monkeypatch.setattr(routes, "list_mcp_api_keys", fake_list_mcp_api_keys)
+
+    req = routes.CreateKeyRequest(name="k", rate_limit_per_minute=60, all_projects=True)
+    org = ActiveOrg(org_id=1, role="admin", namespace="ns", name="Org")
+    out = asyncio.run(routes.create_key(req, user_id=7, org=org))
+
+    assert out.rate_limit_per_minute == 60
+    assert captured["rate_limit_per_minute"] == 60
+
+
+# ===== PUT /api/mcp/keys/{key_id}: creator-or-admin gating, null clears the limit =====
+
+def test_update_key_request_rejects_a_zero_rate_limit():
+    from pydantic import ValidationError
+
+    from src.api.routes.mcp_keys import UpdateKeyRequest
+
+    with pytest.raises(ValidationError):
+        UpdateKeyRequest(rate_limit_per_minute=0)
+
+
+def _wire_update(monkeypatch, key, update_result=True):
+    import asyncio as _asyncio
+
+    from src.api.routes import mcp_keys as routes
+
+    async def fake_get_mcp_api_key(key_id):
+        return key
+
+    calls = []
+
+    async def fake_update_mcp_api_key_rate_limit(key_id, org_id, rate_limit_per_minute):
+        calls.append((key_id, org_id, rate_limit_per_minute))
+        return update_result
+
+    monkeypatch.setattr(routes, "get_mcp_api_key", fake_get_mcp_api_key)
+    monkeypatch.setattr(routes, "update_mcp_api_key_rate_limit", fake_update_mcp_api_key_rate_limit)
+    return routes, calls, _asyncio
+
+
+def test_update_key_404_when_key_not_found(monkeypatch):
+    from src.api.deps import ActiveOrg
+
+    routes, _calls, aio = _wire_update(monkeypatch, key=None)
+    org = ActiveOrg(org_id=1, role="admin", namespace="ns", name="Org")
+    req = routes.UpdateKeyRequest(rate_limit_per_minute=10)
+    with pytest.raises(HTTPException) as exc:
+        aio.run(routes.update_key(key_id=5, req=req, user_id=7, org=org))
+    assert exc.value.status_code == 404
+
+
+def test_update_key_404_when_key_belongs_to_another_org(monkeypatch):
+    from src.api.deps import ActiveOrg
+
+    routes, _calls, aio = _wire_update(
+        monkeypatch, key={"id": 5, "org_id": 2, "created_by": 7}
+    )
+    org = ActiveOrg(org_id=1, role="admin", namespace="ns", name="Org")
+    req = routes.UpdateKeyRequest(rate_limit_per_minute=10)
+    with pytest.raises(HTTPException) as exc:
+        aio.run(routes.update_key(key_id=5, req=req, user_id=7, org=org))
+    assert exc.value.status_code == 404
+
+
+def test_update_key_403_for_non_creator_non_admin(monkeypatch):
+    from src.api.deps import ActiveOrg
+
+    routes, _calls, aio = _wire_update(
+        monkeypatch, key={"id": 5, "org_id": 1, "created_by": 99}
+    )
+    org = ActiveOrg(org_id=1, role="member", namespace="ns", name="Org")
+    req = routes.UpdateKeyRequest(rate_limit_per_minute=10)
+    with pytest.raises(HTTPException) as exc:
+        aio.run(routes.update_key(key_id=5, req=req, user_id=7, org=org))
+    assert exc.value.status_code == 403
+
+
+def test_update_key_allows_the_creator(monkeypatch):
+    from src.api.deps import ActiveOrg
+
+    routes, calls, aio = _wire_update(
+        monkeypatch, key={"id": 5, "org_id": 1, "created_by": 7}
+    )
+    org = ActiveOrg(org_id=1, role="member", namespace="ns", name="Org")
+    req = routes.UpdateKeyRequest(rate_limit_per_minute=10)
+    out = aio.run(routes.update_key(key_id=5, req=req, user_id=7, org=org))
+    assert out == {"status": "ok", "rate_limit_per_minute": 10}
+    assert calls == [(5, 1, 10)]
+
+
+def test_update_key_allows_an_org_admin(monkeypatch):
+    from src.api.deps import ActiveOrg
+
+    routes, calls, aio = _wire_update(
+        monkeypatch, key={"id": 5, "org_id": 1, "created_by": 99}
+    )
+    org = ActiveOrg(org_id=1, role="admin", namespace="ns", name="Org")
+    req = routes.UpdateKeyRequest(rate_limit_per_minute=None)
+    out = aio.run(routes.update_key(key_id=5, req=req, user_id=7, org=org))
+    assert out == {"status": "ok", "rate_limit_per_minute": None}
+    assert calls == [(5, 1, None)]
+
+
+def test_update_key_404_when_write_matches_no_row(monkeypatch):
+    from src.api.deps import ActiveOrg
+
+    routes, _calls, aio = _wire_update(
+        monkeypatch, key={"id": 5, "org_id": 1, "created_by": 7}, update_result=False
+    )
+    org = ActiveOrg(org_id=1, role="member", namespace="ns", name="Org")
+    req = routes.UpdateKeyRequest(rate_limit_per_minute=10)
+    with pytest.raises(HTTPException) as exc:
+        aio.run(routes.update_key(key_id=5, req=req, user_id=7, org=org))
+    assert exc.value.status_code == 404

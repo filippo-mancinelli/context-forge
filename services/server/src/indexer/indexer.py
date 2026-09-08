@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import fnmatch
 import hashlib
+import importlib
 import json
 import logging
 import os
@@ -15,6 +16,7 @@ from typing import Any, Iterator
 from ..config import IndexingConfig, RepoConfig
 from ..db import get_pool
 from .embedder import embed_batch
+from .symbols import DEF_NODES
 from .git_manager import (
     commit_exists,
     ensure_repo_cloned,
@@ -26,7 +28,10 @@ from .git_manager import (
 logger = logging.getLogger(__name__)
 
 # File extensions supported by tree-sitter parsers
-PARSEABLE_EXTENSIONS = {".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".java"}
+PARSEABLE_EXTENSIONS = {
+    ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".java",
+    ".cs", ".php", ".kt", ".kts", ".rs",
+}
 TEXT_EXTENSIONS = {
     ".md", ".txt", ".rst", ".yaml", ".yml", ".toml", ".json", ".env",
     ".sh", ".bash", ".sql", ".css", ".html", ".xml", ".ini", ".cfg",
@@ -44,41 +49,68 @@ def _vector_to_pg(embedding: list[float]) -> str:
     return "[" + ",".join(f"{float(v):.10f}" for v in embedding) + "]"
 
 
+# Grammatiche tree-sitter: linguaggio -> (modulo, funzione che ritorna la lingua).
+_LANGUAGE_LOADERS: dict[str, tuple[str, str]] = {
+    "python": ("tree_sitter_python", "language"),
+    "javascript": ("tree_sitter_javascript", "language"),
+    "typescript": ("tree_sitter_typescript", "language_typescript"),
+    "tsx": ("tree_sitter_typescript", "language_tsx"),
+    "go": ("tree_sitter_go", "language"),
+    "java": ("tree_sitter_java", "language"),
+    "csharp": ("tree_sitter_c_sharp", "language"),
+    "php": ("tree_sitter_php", "language_php"),
+    "kotlin": ("tree_sitter_kotlin", "language"),
+    "rust": ("tree_sitter_rust", "language"),
+}
+
+_PARSER_CACHE: dict[str, Any] = {}
+
+
 def _get_parser(language: str):
     """Get a tree-sitter parser for the given language. Returns None if unsupported."""
-    try:
-        import tree_sitter_python as tspython
-        import tree_sitter_javascript as tsjavascript
-        import tree_sitter_typescript as tstypescript
-        import tree_sitter_go as tsgo
-        import tree_sitter_java as tsjava
-        from tree_sitter import Language, Parser
+    if language in _PARSER_CACHE:
+        return _PARSER_CACHE[language]
+    parser = None
+    entry = _LANGUAGE_LOADERS.get(language)
+    if entry is not None:
+        module_name, func_name = entry
+        try:
+            from tree_sitter import Language, Parser
 
-        lang_map = {
-            "python": tspython.language(),
-            "javascript": tsjavascript.language(),
-            "typescript": tstypescript.language_typescript(),
-            "tsx": tstypescript.language_tsx(),
-            "go": tsgo.language(),
-            "java": tsjava.language(),
-        }
-        if language not in lang_map:
-            return None
-        parser = Parser(Language(lang_map[language]))
-        return parser
-    except Exception as e:
-        logger.debug("tree-sitter parser unavailable for %s: %s", language, e)
-        return None
+            module = importlib.import_module(module_name)
+            parser = Parser(Language(getattr(module, func_name)()))
+        except Exception as e:  # noqa: BLE001 - una grammatica mancante non ferma le altre
+            logger.debug("tree-sitter parser unavailable for %s: %s", language, e)
+            parser = None
+    _PARSER_CACHE[language] = parser
+    return parser
+
+
+_EXT_LANGUAGES = {
+    ".py": "python", ".js": "javascript", ".jsx": "javascript",
+    ".ts": "typescript", ".tsx": "tsx", ".go": "go", ".java": "java",
+    ".cs": "csharp", ".php": "php", ".kt": "kotlin", ".kts": "kotlin",
+    ".rs": "rust", ".sql": "sql",
+}
 
 
 def _detect_language(path: Path) -> str:
     """Detect programming language from file extension."""
-    ext = path.suffix.lower()
-    ext_map = {
-        ".py": "python", ".js": "javascript", ".jsx": "javascript",
-        ".ts": "typescript", ".tsx": "tsx", ".go": "go", ".java": "java",
-    }
-    return ext_map.get(ext, "text")
+    return _EXT_LANGUAGES.get(path.suffix.lower(), "text")
+
+
+# Nodi su cui spezzare un file sorgente. I linguaggi assenti usano DEF_NODES.
+_CHUNK_NODES: dict[str, list[str]] = {
+    "python": ["function_definition", "class_definition", "decorated_definition"],
+    "javascript": ["function_declaration", "class_declaration", "arrow_function", "method_definition"],
+    "typescript": ["function_declaration", "class_declaration", "interface_declaration", "type_alias_declaration"],
+    "tsx": ["function_declaration", "class_declaration", "jsx_element"],
+    "go": ["function_declaration", "method_declaration", "type_declaration"],
+    "java": ["class_declaration", "method_declaration", "interface_declaration"],
+}
+
+# Profondita' massima a cui cercare un nodo da spezzare, per linguaggio.
+_CHUNK_MAX_DEPTH: dict[str, int] = {"csharp": 3}
 
 
 def _extract_chunks_treesitter(content: str, language: str, config: IndexingConfig) -> list[dict]:
@@ -92,19 +124,11 @@ def _extract_chunks_treesitter(content: str, language: str, config: IndexingConf
         chunks = []
         content_lines = content.splitlines()
 
-        # Query for top-level declarations
-        node_types = {
-            "python": ["function_definition", "class_definition", "decorated_definition"],
-            "javascript": ["function_declaration", "class_declaration", "arrow_function", "method_definition"],
-            "typescript": ["function_declaration", "class_declaration", "interface_declaration", "type_alias_declaration"],
-            "tsx": ["function_declaration", "class_declaration", "jsx_element"],
-            "go": ["function_declaration", "method_declaration", "type_declaration"],
-            "java": ["class_declaration", "method_declaration", "interface_declaration"],
-        }
-        target_types = set(node_types.get(language, []))
+        target_types = set(_CHUNK_NODES.get(language) or DEF_NODES.get(language, ()))
+        max_depth = _CHUNK_MAX_DEPTH.get(language, 2)
 
         def walk(node, depth=0):
-            if node.type in target_types and depth <= 2:
+            if node.type in target_types and depth <= max_depth:
                 start_line = node.start_point[0]
                 end_line = node.end_point[0]
                 chunk_content = "\n".join(content_lines[start_line:end_line + 1])
@@ -114,7 +138,7 @@ def _extract_chunks_treesitter(content: str, language: str, config: IndexingConf
                 # Extract name from first child
                 name = None
                 for child in node.children:
-                    if child.type in ("identifier", "name"):
+                    if child.type in ("identifier", "name", "type_identifier"):
                         name = content[child.start_byte:child.end_byte]
                         break
                 chunks.append({

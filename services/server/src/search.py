@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import json
 import logging
+from functools import lru_cache
 from typing import Any, Optional
 
 from .config import get_settings
 from .db import get_pool
 from .indexer.embedder import embed_text
+from .org_settings import get_org_settings
+from .vector_index import pgvector_version, search_session_sql, supports_iterative_scan, vector_expr
 
 logger = logging.getLogger(__name__)
 
@@ -77,16 +80,20 @@ def _normalize_scores(rows: list[dict[str, Any]]) -> None:
 # Both branches keep a stable parameter layout so the optional repo filter never
 # needs dynamic placeholder renumbering:
 #   $1 embedding $2 org_id $3 candidate pool $4 query $5 repos (text[] or NULL) $6 limit $7 project (bigint or NULL)
-_REPO_HYBRID_SQL = f"""
+@lru_cache(maxsize=8)
+def _repo_hybrid_sql(dims: int) -> str:
+    d = int(dims)
+    expr = vector_expr(d)
+    return f"""
 WITH tsq AS (
     SELECT websearch_to_tsquery('{TSQUERY_CONFIG}', $4) AS query
 ),
 vec AS (
-    SELECT id, ROW_NUMBER() OVER (ORDER BY embedding <=> $1::vector) AS rank
+    SELECT id, ROW_NUMBER() OVER (ORDER BY {expr} <=> $1::vector({d})) AS rank
     FROM repo_chunks
     WHERE org_id = $2 AND ($7::bigint IS NULL OR project_id = $7)
       AND ($5::text[] IS NULL OR repo_name = ANY($5))
-    ORDER BY embedding <=> $1::vector
+    ORDER BY {expr} <=> $1::vector({d})
     LIMIT $3
 ),
 kw AS (
@@ -112,13 +119,18 @@ ORDER BY f.score DESC
 LIMIT $6
 """
 
-_REPO_VECTOR_SQL = """
+
+@lru_cache(maxsize=8)
+def _repo_vector_sql(dims: int) -> str:
+    d = int(dims)
+    expr = vector_expr(d)
+    return f"""
 SELECT repo_name, file_path, chunk_type, content, metadata,
-       1 - (embedding <=> $1::vector) AS score
+       1 - ({expr} <=> $1::vector({d})) AS score
 FROM repo_chunks
 WHERE org_id = $2 AND ($5::bigint IS NULL OR project_id = $5)
   AND ($3::text[] IS NULL OR repo_name = ANY($3))
-ORDER BY embedding <=> $1::vector
+ORDER BY {expr} <=> $1::vector({d})
 LIMIT $4
 """
 
@@ -138,19 +150,24 @@ async def search_repo_chunks(
     """
     if project_id is None:
         raise ValueError("project_id is required for scoped search")
+    dims = int((await get_org_settings(org_id)).embeddings_dims)
     embedding_str = _vector_to_pg(await embed_text(query, org_id))
     pool = await get_pool()
     hybrid = hybrid_enabled()
 
     async with pool.acquire() as conn:
-        if hybrid:
-            rows = await conn.fetch(
-                _REPO_HYBRID_SQL, embedding_str, org_id, CANDIDATE_POOL, query, repos, limit, project_id
-            )
-        else:
-            rows = await conn.fetch(
-                _REPO_VECTOR_SQL, embedding_str, org_id, repos, limit, project_id
-            )
+        version = await pgvector_version(conn)
+        async with conn.transaction():
+            await conn.execute(search_session_sql(supports_iterative_scan(version)))
+            if hybrid:
+                rows = await conn.fetch(
+                    _repo_hybrid_sql(dims), embedding_str, org_id, CANDIDATE_POOL,
+                    query, repos, limit, project_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    _repo_vector_sql(dims), embedding_str, org_id, repos, limit, project_id
+                )
 
     results = [
         {
@@ -256,16 +273,20 @@ async def search_repo_symbols(
 # --------------------------------------------------------------------------- #
 #   $1 embedding  $2 org_id  $3 candidate pool  $4 query text
 #   $5 page_ids (bigint[] or NULL)  $6 limit  $7 project (bigint or NULL)
-_WEB_HYBRID_SQL = f"""
+@lru_cache(maxsize=8)
+def _web_hybrid_sql(dims: int) -> str:
+    d = int(dims)
+    expr = vector_expr(d, "c.embedding")
+    return f"""
 WITH tsq AS (
     SELECT websearch_to_tsquery('{TSQUERY_CONFIG}', $4) AS query
 ),
 vec AS (
-    SELECT c.id, ROW_NUMBER() OVER (ORDER BY c.embedding <=> $1::vector) AS rank
+    SELECT c.id, ROW_NUMBER() OVER (ORDER BY {expr} <=> $1::vector({d})) AS rank
     FROM web_chunks c
     WHERE c.org_id = $2 AND ($7::bigint IS NULL OR c.project_id = $7)
       AND ($5::bigint[] IS NULL OR c.page_id = ANY($5))
-    ORDER BY c.embedding <=> $1::vector
+    ORDER BY {expr} <=> $1::vector({d})
     LIMIT $3
 ),
 kw AS (
@@ -293,15 +314,20 @@ ORDER BY f.score DESC
 LIMIT $6
 """
 
-_WEB_VECTOR_SQL = """
+
+@lru_cache(maxsize=8)
+def _web_vector_sql(dims: int) -> str:
+    d = int(dims)
+    expr = vector_expr(d, "c.embedding")
+    return f"""
 SELECT c.page_id, c.chunk_index, c.content, c.metadata,
        p.title, p.url,
-       1 - (c.embedding <=> $1::vector) AS score
+       1 - ({expr} <=> $1::vector({d})) AS score
 FROM web_chunks c
 JOIN web_pages p ON p.id = c.page_id
 WHERE c.org_id = $2 AND ($5::bigint IS NULL OR c.project_id = $5)
   AND ($3::bigint[] IS NULL OR c.page_id = ANY($3))
-ORDER BY c.embedding <=> $1::vector
+ORDER BY {expr} <=> $1::vector({d})
 LIMIT $4
 """
 
@@ -316,20 +342,24 @@ async def search_web_chunks(
     """Search scraped web-page chunks for a project (hybrid or vector-only)."""
     if project_id is None:
         raise ValueError("project_id is required for scoped search")
+    dims = int((await get_org_settings(org_id)).embeddings_dims)
     embedding_str = _vector_to_pg(await embed_text(query, org_id))
     pool = await get_pool()
     hybrid = hybrid_enabled()
 
     async with pool.acquire() as conn:
-        if hybrid:
-            rows = await conn.fetch(
-                _WEB_HYBRID_SQL, embedding_str, org_id, CANDIDATE_POOL, query, page_ids, limit,
-                project_id,
-            )
-        else:
-            rows = await conn.fetch(
-                _WEB_VECTOR_SQL, embedding_str, org_id, page_ids, limit, project_id
-            )
+        version = await pgvector_version(conn)
+        async with conn.transaction():
+            await conn.execute(search_session_sql(supports_iterative_scan(version)))
+            if hybrid:
+                rows = await conn.fetch(
+                    _web_hybrid_sql(dims), embedding_str, org_id, CANDIDATE_POOL,
+                    query, page_ids, limit, project_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    _web_vector_sql(dims), embedding_str, org_id, page_ids, limit, project_id
+                )
 
     results = [
         {
@@ -356,16 +386,20 @@ async def search_web_chunks(
 # --------------------------------------------------------------------------- #
 #   $1 embedding  $2 org_id  $3 candidate pool  $4 query text
 #   $5 document_ids (bigint[] or NULL)  $6 limit  $7 project (bigint or NULL)
-_KB_HYBRID_SQL = f"""
+@lru_cache(maxsize=8)
+def _kb_hybrid_sql(dims: int) -> str:
+    d = int(dims)
+    expr = vector_expr(d, "c.embedding")
+    return f"""
 WITH tsq AS (
     SELECT websearch_to_tsquery('{TSQUERY_CONFIG}', $4) AS query
 ),
 vec AS (
-    SELECT c.id, ROW_NUMBER() OVER (ORDER BY c.embedding <=> $1::vector) AS rank
+    SELECT c.id, ROW_NUMBER() OVER (ORDER BY {expr} <=> $1::vector({d})) AS rank
     FROM kb_chunks c
     WHERE c.org_id = $2 AND ($7::bigint IS NULL OR c.project_id = $7)
       AND ($5::bigint[] IS NULL OR c.document_id = ANY($5))
-    ORDER BY c.embedding <=> $1::vector
+    ORDER BY {expr} <=> $1::vector({d})
     LIMIT $3
 ),
 kw AS (
@@ -393,15 +427,20 @@ ORDER BY f.score DESC
 LIMIT $6
 """
 
-_KB_VECTOR_SQL = """
+
+@lru_cache(maxsize=8)
+def _kb_vector_sql(dims: int) -> str:
+    d = int(dims)
+    expr = vector_expr(d, "c.embedding")
+    return f"""
 SELECT c.document_id, c.chunk_index, c.content, c.metadata,
        d.title, d.filename, d.extension,
-       1 - (c.embedding <=> $1::vector) AS score
+       1 - ({expr} <=> $1::vector({d})) AS score
 FROM kb_chunks c
 JOIN kb_documents d ON d.id = c.document_id
 WHERE c.org_id = $2 AND ($5::bigint IS NULL OR c.project_id = $5)
   AND ($3::bigint[] IS NULL OR c.document_id = ANY($3))
-ORDER BY c.embedding <=> $1::vector
+ORDER BY {expr} <=> $1::vector({d})
 LIMIT $4
 """
 
@@ -416,19 +455,24 @@ async def search_kb_chunks(
     """Search knowledge-base chunks for an organization (hybrid or vector-only)."""
     if project_id is None:
         raise ValueError("project_id is required for scoped search")
+    dims = int((await get_org_settings(org_id)).embeddings_dims)
     embedding_str = _vector_to_pg(await embed_text(query, org_id))
     pool = await get_pool()
     hybrid = hybrid_enabled()
 
     async with pool.acquire() as conn:
-        if hybrid:
-            rows = await conn.fetch(
-                _KB_HYBRID_SQL, embedding_str, org_id, CANDIDATE_POOL, query, document_ids, limit, project_id
-            )
-        else:
-            rows = await conn.fetch(
-                _KB_VECTOR_SQL, embedding_str, org_id, document_ids, limit, project_id
-            )
+        version = await pgvector_version(conn)
+        async with conn.transaction():
+            await conn.execute(search_session_sql(supports_iterative_scan(version)))
+            if hybrid:
+                rows = await conn.fetch(
+                    _kb_hybrid_sql(dims), embedding_str, org_id, CANDIDATE_POOL,
+                    query, document_ids, limit, project_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    _kb_vector_sql(dims), embedding_str, org_id, document_ids, limit, project_id
+                )
 
     results = [
         {

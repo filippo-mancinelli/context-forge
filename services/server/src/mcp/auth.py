@@ -21,11 +21,14 @@ from ..tenancy import (
     resolve_role_permissions,
 )
 from .context import (
+    ANONYMOUS,
+    Principal,
     get_current_org_id,
     get_current_project_id,
     set_current_allowed_projects,
     set_current_namespace,
     set_current_org_id,
+    set_current_principal,
     set_current_project_id,
     set_current_user_id,
 )
@@ -113,6 +116,7 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         # Routing per progetto: /mcp/{org}/{project} -> context + path /mcp
+        set_current_principal(ANONYMOUS)
         request.state.mcp_org_level = False
         routed = parse_project_path(request.url.path)
         org_only = None if routed is not None else parse_org_only_path(request.url.path)
@@ -189,6 +193,13 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
                 # (that would make "no membership -> no permissions" unreachable — see C1).
                 user_id = await find_or_create_oidc_user(claims)
                 set_current_user_id(user_id)
+                set_current_principal(
+                    Principal(
+                        kind="user",
+                        id=user_id,
+                        label=claims.get("preferred_username") or f"sub:{claims.get('sub')}",
+                    )
+                )
                 role = await get_membership_role(org_id, user_id) if org_id else None
                 if role is None and (
                     get_current_project_id() is not None
@@ -283,6 +294,14 @@ class MCPAuthMiddleware(BaseHTTPMiddleware):
                 if key_perms is None:
                     # Difesa in profondità per key non ancora backfillate.
                     key_perms = permissions_from_scope(key_info.get("scope"))
+                set_current_principal(
+                    Principal(
+                        kind="api_key",
+                        id=key_info.get("id"),
+                        label=key_info.get("name") or f"key:{key_info.get('id')}",
+                        rate_limit_per_minute=key_info.get("rate_limit_per_minute"),
+                    )
+                )
                 set_current_permissions(key_perms)
                 return await call_next(request)
             else:

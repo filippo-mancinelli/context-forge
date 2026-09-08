@@ -1,8 +1,8 @@
 """FastAPI application for the Web UI backend."""
 from __future__ import annotations
 
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..config import get_settings
@@ -21,6 +21,8 @@ from .routes import github as github_routes
 from .routes import gitlab as gitlab_routes
 from .routes import mcp_keys as mcp_keys_routes
 from .routes import organizations as organizations_routes
+from .routes import tool_calls as tool_calls_routes
+from .routes import write_requests as write_requests_routes
 from .routes import webhooks as webhooks_routes
 from .routes import datasources as datasources_routes
 from .routes import ssh_sources as ssh_sources_routes
@@ -29,6 +31,7 @@ from .routes import ci as ci_routes
 from .routes import telegram as telegram_routes
 from .routes import environments as environments_routes
 from .routes import projects as projects_routes
+from .routes import health as health_routes
 
 api = FastAPI(
     title="context-forge API",
@@ -87,6 +90,8 @@ api.include_router(github_routes.router, prefix="/api")
 api.include_router(gitlab_routes.router, prefix="/api")
 api.include_router(mcp_keys_routes.router, prefix="/api")
 api.include_router(organizations_routes.router, prefix="/api")
+api.include_router(tool_calls_routes.router, prefix="/api")
+api.include_router(write_requests_routes.router, prefix="/api")
 api.include_router(webhooks_routes.router, prefix="/api")
 api.include_router(datasources_routes.router, prefix="/api")
 api.include_router(ssh_sources_routes.router, prefix="/api")
@@ -95,6 +100,7 @@ api.include_router(ci_routes.router, prefix="/api")
 api.include_router(telegram_routes.router, prefix="/api")
 api.include_router(environments_routes.router, prefix="/api")
 api.include_router(projects_routes.router, prefix="/api")
+api.include_router(health_routes.router, prefix="/api")
 
 
 @api.middleware("http")
@@ -106,8 +112,11 @@ async def auth_guard(request, call_next):
     if not path.startswith("/api"):
         return await call_next(request)
 
+    # Exact match: /api/health/details is authenticated.
+    if path == "/api/health":
+        return await call_next(request)
+
     open_paths = (
-        "/api/health",
         "/api/setup",
         "/api/config",  # public, non-sensitive runtime config for the UI
         "/api/auth",
@@ -139,6 +148,26 @@ async def auth_guard(request, call_next):
 async def health():
     """Health check endpoint."""
     return {"status": "ok", "service": "context-forge-api"}
+
+
+@api.get("/metrics")
+async def metrics(request: Request):
+    """Prometheus exposition. Guarded by METRICS_TOKEN when it is set."""
+    import hmac
+
+    from prometheus_client import CONTENT_TYPE_LATEST
+
+    from ..metrics import render_metrics
+
+    token = get_settings().metrics_token
+    if token:
+        # Compared as bytes: compare_digest rejects non-ASCII str, which would
+        # turn a malformed header into a 500 instead of a 401.
+        expected = f"Bearer {token}".encode()
+        supplied = (request.headers.get("Authorization") or "").encode("latin-1", "ignore")
+        if not hmac.compare_digest(supplied, expected):
+            return PlainTextResponse("Unauthorized", status_code=401)
+    return PlainTextResponse(render_metrics(), media_type=CONTENT_TYPE_LATEST)
 
 
 @api.get("/api/tools")

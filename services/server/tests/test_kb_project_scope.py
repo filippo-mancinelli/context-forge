@@ -11,8 +11,8 @@ def test_kb_store_signatures_take_project():
 
 
 def test_kb_search_sql_filters_project():
-    assert "project_id" in search._KB_HYBRID_SQL
-    assert "project_id" in search._KB_VECTOR_SQL
+    assert "project_id" in search._kb_hybrid_sql(1536)
+    assert "project_id" in search._kb_vector_sql(1536)
     assert "project_id" in inspect.signature(search.search_kb_chunks).parameters
 
 

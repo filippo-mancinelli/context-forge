@@ -48,6 +48,10 @@ dependencies = [
     "tree-sitter-typescript>=0.23.0",
     "tree-sitter-go>=0.23.0",
     "tree-sitter-java>=0.23.0",
+    "tree-sitter-c-sharp>=0.23.5",
+    "tree-sitter-php>=0.24.1",
+    "tree-sitter-kotlin>=1.1.0",
+    "tree-sitter-rust>=0.24.2",
 
     # Knowledge base — document text extraction (pure-Python, no system deps)
     "pypdf>=4.2.0",              # PDF
@@ -65,6 +69,9 @@ dependencies = [
 
     # Scheduling
     "apscheduler>=3.10.4",
+
+    # Metrics
+    "prometheus-client>=0.20",
 
     # Config
     "pyyaml>=6.0",
