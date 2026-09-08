@@ -245,27 +245,73 @@ async def db_query(
 
 
 @mcp.tool()
-@requires_permission("db-write")
-async def db_execute(connection: str, sql: str) -> dict:
+@requires_permission("db-write", alternatives=("context-write",))
+async def db_execute(connection: str, sql: str, reason: str = "") -> dict:
     """Execute a single INSERT, UPDATE or DELETE on a project datasource.
 
     Guarded: one DML statement only, UPDATE/DELETE must have a WHERE clause,
     DDL is rejected. Runs in its own transaction and returns the affected
     row count (no result set).
 
+    Without the db-write permission the statement is not executed: it is stored
+    as a write request with an EXPLAIN preview for an organization admin to
+    approve. Poll the outcome with write_request_status.
+
     Args:
         connection: datasource name or id (from db_list).
         sql: the DML statement to execute.
+        reason: why the change is needed; shown to the approver.
     """
     from .context import resolve_org_id, require_project_id
+    from .permissions import has_permission
 
     org_id = await resolve_org_id()
     project_id = await require_project_id()
+    if not has_permission("db-write"):
+        return await _propose_db_execute(org_id, project_id, connection, sql, reason)
     try:
         return await service.run_write(org_id, project_id, connection, sql, source="mcp")
     except Exception as e:  # noqa: BLE001
         logger.error("db_execute failed: %s", e)
         return {"status": "error", "error": str(e)}
+
+
+async def _propose_db_execute(
+    org_id: int, project_id: int, connection: str, sql: str, reason: str
+) -> dict:
+    """Store the statement as a pending write request instead of running it."""
+    from .. import write_previews, write_requests
+    from ..datasources.validator import QueryValidationError, validate_write_query
+    from .approvals import current_requester, pending_response
+    from .audit import scrub_text
+
+    try:
+        validated = validate_write_query(sql)
+    except QueryValidationError as e:
+        return {"status": "error", "error": f"Query rejected: {e}"}
+    try:
+        record = await service.get_connection(org_id, project_id, connection)
+        preview = await write_previews.sql_preview(org_id, project_id, connection, validated)
+    except Exception as e:  # noqa: BLE001
+        logger.error("db_execute proposal failed: %s", e)
+        return {"status": "error", "error": str(e)}
+    if preview.get("explain_error"):
+        preview["explain_error"] = scrub_text(preview["explain_error"])
+
+    kind, requester_id, label = current_requester()
+    created = await write_requests.create(
+        org_id=org_id,
+        project_id=project_id,
+        kind="db_execute",
+        target=record["name"],
+        payload={"sql": validated},
+        preview=preview,
+        reason=reason,
+        requested_by_kind=kind,
+        requested_by_id=requester_id,
+        requested_by=label,
+    )
+    return pending_response(created["id"], preview)
 
 
 @mcp.tool()

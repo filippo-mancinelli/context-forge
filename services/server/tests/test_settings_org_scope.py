@@ -15,10 +15,15 @@ def _org(role="admin"):
     return ActiveOrg(org_id=1, role=role, namespace="ns", name="Org")
 
 
-def _patch(monkeypatch, current=None):
+def _patch(monkeypatch, current=None, probe_dims=1536):
     """Patch org_settings and config functions for test isolation."""
     if current is None:
         current = OrgSettings()
+
+    async def mock_embed_text(text: str, org_id: int) -> list[float]:
+        return [0.0] * probe_dims
+
+    monkeypatch.setattr(settings_routes, "embed_text", mock_embed_text)
 
     async def mock_get_org_settings(org_id: int) -> OrgSettings:
         return current
@@ -53,6 +58,11 @@ def _patch(monkeypatch, current=None):
     monkeypatch.setattr(settings_routes, "sync_repos_config", mock_sync_repos_config)
     monkeypatch.setattr(settings_routes, "reset_embedder_clients", lambda: None)
     monkeypatch.setattr(settings_routes, "reset_memory_client", lambda: None)
+
+    async def mock_ensure_org_indexes(org_id: int, dims: int):
+        return []
+
+    monkeypatch.setattr(settings_routes, "ensure_org_indexes", mock_ensure_org_indexes)
 
     return current
 
@@ -174,7 +184,7 @@ def test_put_settings_own_secret_resave_allowed(monkeypatch):
 
 def test_put_settings_embeddings_dims_change_warns_reset(monkeypatch):
     """PUT /settings with embeddings dims change requires vector reset."""
-    current = _patch(monkeypatch)
+    current = _patch(monkeypatch, probe_dims=1024)
     current.embeddings_dims = 1536
 
     req = settings_routes.SettingsUpdateRequest(
@@ -187,5 +197,70 @@ def test_put_settings_embeddings_dims_change_warns_reset(monkeypatch):
 
         assert out["requires_reindex"] is True
         assert out["requires_vector_reset"] is True
+
+    asyncio.run(run_test())
+
+
+def test_put_settings_rejects_dims_the_provider_does_not_return(monkeypatch):
+    """A dimension the embedding model contradicts is refused and rolled back."""
+    current = _patch(monkeypatch, probe_dims=1536)
+    current.embeddings_dims = 1536
+    current.embeddings_model = "text-embedding-3-small"
+
+    req = settings_routes.SettingsUpdateRequest(
+        forge_config={},
+        settings_overrides={"embeddings_dims": 3072, "embeddings_model": "big-model"},
+    )
+
+    async def run_test():
+        with pytest.raises(HTTPException) as exc_info:
+            await settings_routes.update_runtime_settings(req=req, org=_org("admin"))
+        assert exc_info.value.status_code == 400
+        assert "1536" in exc_info.value.detail and "3072" in exc_info.value.detail
+        # The previous overrides are persisted again, not left half applied.
+        assert current.embeddings_dims == 1536
+        assert current.embeddings_model == "text-embedding-3-small"
+
+    asyncio.run(run_test())
+
+
+def test_put_settings_keeps_the_save_when_the_probe_provider_is_down(monkeypatch):
+    """Configuration must not depend on the provider being reachable."""
+    current = _patch(monkeypatch)
+    current.embeddings_model = "text-embedding-3-small"
+
+    async def exploding_embed_text(text: str, org_id: int):
+        raise RuntimeError("provider unreachable")
+
+    monkeypatch.setattr(settings_routes, "embed_text", exploding_embed_text)
+
+    req = settings_routes.SettingsUpdateRequest(
+        forge_config={}, settings_overrides={"embeddings_model": "text-embedding-3-large"}
+    )
+
+    async def run_test():
+        out = await settings_routes.update_runtime_settings(req=req, org=_org("admin"))
+        assert out["status"] == "ok"
+        assert current.embeddings_model == "text-embedding-3-large"
+
+    asyncio.run(run_test())
+
+
+def test_put_settings_rejects_a_non_numeric_dimension(monkeypatch):
+    """A dimension that is not a positive int is refused before persisting."""
+    current = _patch(monkeypatch)
+    current.embeddings_dims = 1536
+
+    req = settings_routes.SettingsUpdateRequest(
+        forge_config={},
+        settings_overrides={"embeddings_dims": "many", "llm_model": "gpt-4"},
+    )
+
+    async def run_test():
+        with pytest.raises(HTTPException) as exc_info:
+            await settings_routes.update_runtime_settings(req=req, org=_org("admin"))
+        assert exc_info.value.status_code == 400
+        assert current.embeddings_dims == 1536
+        assert current.llm_model != "gpt-4"
 
     asyncio.run(run_test())

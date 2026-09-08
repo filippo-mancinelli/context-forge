@@ -8,6 +8,7 @@ disabled) tools fall back to the default organization.
 from __future__ import annotations
 
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Optional
 
 _current_namespace: ContextVar[Optional[str]] = ContextVar("cf_memory_namespace", default=None)
@@ -175,3 +176,27 @@ def set_current_allowed_projects(project_ids: Optional[frozenset]) -> None:
 
 def get_current_allowed_projects() -> Optional[frozenset]:
     return _current_allowed_projects.get()
+
+
+@dataclass(frozen=True)
+class Principal:
+    """Chi sta chiamando un tool MCP: utente OIDC, API key o anonimo."""
+
+    kind: str
+    id: int | None
+    label: str
+    rate_limit_per_minute: int | None = None
+
+
+ANONYMOUS = Principal(kind="anonymous", id=None, label="anonymous")
+
+_current_principal: ContextVar[Optional[Principal]] = ContextVar("cf_principal", default=None)
+
+
+def set_current_principal(principal: Optional[Principal]) -> None:
+    _current_principal.set(principal)
+
+
+def get_current_principal() -> Principal:
+    """Mai None: un chiamante non autenticato è il principal anonimo."""
+    return _current_principal.get() or ANONYMOUS

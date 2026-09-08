@@ -19,8 +19,8 @@ def test_web_store_signatures_take_project():
 
 
 def test_web_search_sql_filters_project():
-    assert "project_id" in search._WEB_HYBRID_SQL
-    assert "project_id" in search._WEB_VECTOR_SQL
+    assert "project_id" in search._web_hybrid_sql(1536)
+    assert "project_id" in search._web_vector_sql(1536)
 
 
 def test_web_routes_and_tools_scoped():

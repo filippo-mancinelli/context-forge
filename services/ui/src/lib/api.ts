@@ -364,6 +364,56 @@ export interface Job {
   updated_at: string
 }
 
+export interface ToolCall {
+  id: number
+  org_id: number | null
+  project_id: number | null
+  principal_kind: string
+  principal_id: number | null
+  principal: string
+  tool: string
+  permission: string | null
+  outcome: string
+  duration_ms: number
+  error: string | null
+  args_summary: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface ToolStatRow {
+  tool: string
+  calls: number
+  errors: number
+  denied: number
+  rate_limited: number
+  p95_ms: number
+}
+
+export interface PrincipalStatRow {
+  principal: string
+  calls: number
+  errors: number
+  denied: number
+  rate_limited: number
+  p95_ms: number
+}
+
+export interface ToolCallStats {
+  by_tool: ToolStatRow[]
+  by_principal: PrincipalStatRow[]
+  totals: { calls: number; ok: number; errors: number; denied: number; rate_limited: number }
+  total: number
+}
+
+export interface ToolCallFilters {
+  limit?: number
+  offset?: number
+  tool?: string
+  outcome?: string
+  principal?: string
+  project_id?: number
+}
+
 export interface MCPApiKey {
   id: number
   name: string
@@ -375,6 +425,7 @@ export interface MCPApiKey {
   created_by: number
   project_id?: number
   project_slug?: string
+  rate_limit_per_minute?: number | null
 }
 
 export type McpPermission = 'context-read' | 'context-write' | 'db-query' | 'repo-write' | 'jobs'
@@ -732,6 +783,38 @@ export interface SettingsUpdateResponse {
   requires_vector_reset: boolean
 }
 
+export type WriteRequestKind = 'db_execute' | 'ssh_write_file'
+export type WriteRequestStatus =
+  | 'pending' | 'approved' | 'rejected' | 'executed' | 'failed' | 'expired'
+
+export interface WriteRequest {
+  id: number
+  org_id: number
+  project_id: number
+  kind: WriteRequestKind
+  status: WriteRequestStatus
+  target: string
+  payload: Record<string, unknown>
+  preview: Record<string, unknown>
+  reason: string | null
+  requested_by_kind: string
+  requested_by_id: number | null
+  requested_by: string
+  decided_by: number | null
+  decided_at: string | null
+  decision_note: string | null
+  result: Record<string, unknown> | null
+  error: string | null
+  created_at: string
+  expires_at: string
+}
+
+export interface WriteRequestList {
+  requests: WriteRequest[]
+  total: number
+  pending: number
+}
+
 export const api = {
   config: {
     get: () => request<{ public_mcp_url: string }>('/api/config', undefined, false),
@@ -816,6 +899,41 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(user),
       }),
+  },
+  writeRequests: {
+    list: (opts?: { status?: string; limit?: number; offset?: number }) => {
+      const params = new URLSearchParams()
+      if (opts?.status) params.set('status', opts.status)
+      if (opts?.limit !== undefined) params.set('limit', String(opts.limit))
+      if (opts?.offset !== undefined) params.set('offset', String(opts.offset))
+      const qs = params.toString()
+      return request<WriteRequestList>(`/api/write-requests${qs ? `?${qs}` : ''}`)
+    },
+    get: (id: number) => request<{ request: WriteRequest }>(`/api/write-requests/${id}`),
+    approve: (id: number, note = '') =>
+      request<{ status: string; request: WriteRequest }>(
+        `/api/write-requests/${id}/approve`,
+        { method: 'POST', body: JSON.stringify({ note }) }
+      ),
+    reject: (id: number, note = '') =>
+      request<{ status: string; request: WriteRequest }>(
+        `/api/write-requests/${id}/reject`,
+        { method: 'POST', body: JSON.stringify({ note }) }
+      ),
+  },
+  toolCalls: {
+    list: (orgId: number, filters: ToolCallFilters = {}) => {
+      const query = new URLSearchParams()
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value !== undefined && value !== '') query.set(key, String(value))
+      })
+      const suffix = query.toString() ? `?${query.toString()}` : ''
+      return request<{ calls: ToolCall[]; total: number }>(
+        `/api/organizations/${orgId}/tool-calls${suffix}`
+      )
+    },
+    stats: (orgId: number, window: '24h' | '7d') =>
+      request<ToolCallStats>(`/api/organizations/${orgId}/tool-calls/stats?window=${window}`),
   },
   projects: {
     list: () => request<{ projects: Project[] }>('/api/projects'),
@@ -1210,9 +1328,14 @@ export const api = {
   },
   mcpKeys: {
     list: () => request<{ keys: MCPApiKey[] }>('/api/mcp/keys'),
-    create: (body: { name: string; permissions?: string[]; scope?: string; expires_days?: number; project_id?: number }) =>
-      request<{ key: string; id: number; name: string; scope: string; permissions: string; expires_at: string | null }>('/api/mcp/keys', {
+    create: (body: { name: string; permissions?: string[]; scope?: string; expires_days?: number; project_id?: number; rate_limit_per_minute?: number }) =>
+      request<{ key: string; id: number; name: string; scope: string; permissions: string; expires_at: string | null; rate_limit_per_minute: number | null }>('/api/mcp/keys', {
         method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    update: (keyId: number, body: { rate_limit_per_minute: number | null }) =>
+      request<{ status: string; rate_limit_per_minute: number | null }>(`/api/mcp/keys/${keyId}`, {
+        method: 'PUT',
         body: JSON.stringify(body),
       }),
     revoke: (keyId: number) => request<{ status: string }>(`/api/mcp/keys/${keyId}`, { method: 'DELETE' }),

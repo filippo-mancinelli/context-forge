@@ -200,6 +200,7 @@ async def create_mcp_api_key(
     permissions: Optional[str] = None,
     project_id: Optional[int] = None,
     project_ids: Optional[list[int]] = None,
+    rate_limit_per_minute: Optional[int] = None,
 ) -> str:
     """Create a new MCP API key and return the raw key (only shown once).
 
@@ -227,8 +228,8 @@ async def create_mcp_api_key(
     async with pool.acquire() as conn:
         async with conn.transaction():
             key_id = await conn.fetchval(
-                """INSERT INTO mcp_api_keys (name, key_hash, scope, created_by, expires_at, org_id, permissions, project_id)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id""",
+                """INSERT INTO mcp_api_keys (name, key_hash, scope, created_by, expires_at, org_id, permissions, project_id, rate_limit_per_minute)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id""",
                 name,
                 key_hash,
                 scope,
@@ -237,6 +238,7 @@ async def create_mcp_api_key(
                 org_id,
                 permissions,
                 legacy_project_id,
+                rate_limit_per_minute,
             )
             for pid in allowed:
                 await conn.execute(
@@ -260,7 +262,8 @@ async def validate_mcp_api_key(api_key: str) -> Optional[dict]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            """SELECT id, name, scope, permissions, expires_at, org_id, project_id
+            """SELECT id, name, scope, permissions, expires_at, org_id, project_id,
+                      rate_limit_per_minute
                FROM mcp_api_keys
                WHERE key_hash = $1 AND (expires_at IS NULL OR expires_at > $2)""",
             key_hash,
@@ -295,7 +298,8 @@ async def list_mcp_api_keys(org_id: Optional[int] = None) -> list[dict]:
         if org_id is not None:
             rows = await conn.fetch(
                 """SELECT k.id, k.name, k.scope, k.permissions, k.created_at, k.last_used_at,
-                          k.expires_at, k.created_by, k.org_id, k.project_id, p.slug AS project_slug
+                          k.expires_at, k.created_by, k.org_id, k.project_id, k.rate_limit_per_minute,
+                          p.slug AS project_slug
                    FROM mcp_api_keys k
                    LEFT JOIN projects p ON p.id = k.project_id
                    WHERE k.org_id = $1
@@ -305,7 +309,8 @@ async def list_mcp_api_keys(org_id: Optional[int] = None) -> list[dict]:
         else:
             rows = await conn.fetch(
                 """SELECT k.id, k.name, k.scope, k.permissions, k.created_at, k.last_used_at,
-                          k.expires_at, k.created_by, k.org_id, k.project_id, p.slug AS project_slug
+                          k.expires_at, k.created_by, k.org_id, k.project_id, k.rate_limit_per_minute,
+                          p.slug AS project_slug
                    FROM mcp_api_keys k
                    LEFT JOIN projects p ON p.id = k.project_id
                    ORDER BY k.created_at DESC"""
@@ -322,6 +327,21 @@ async def get_mcp_api_key(key_id: int) -> Optional[dict]:
             key_id,
         )
     return dict(row) if row else None
+
+
+async def update_mcp_api_key_rate_limit(
+    key_id: int, org_id: int, rate_limit_per_minute: Optional[int]
+) -> bool:
+    """Set (or clear, with None) the per-minute rate limit of a key."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE mcp_api_keys SET rate_limit_per_minute = $1 WHERE id = $2 AND org_id = $3",
+            rate_limit_per_minute,
+            key_id,
+            org_id,
+        )
+    return result == "UPDATE 1"
 
 
 async def revoke_mcp_api_key(key_id: int, org_id: Optional[int] = None) -> bool:

@@ -20,6 +20,16 @@ logging.basicConfig(
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
+# The event loop only holds tasks weakly: without a strong reference a
+# fire-and-forget background task can be garbage-collected before it runs.
+_boot_tasks: set = set()
+
+
+def _keep(task):
+    _boot_tasks.add(task)
+    task.add_done_callback(_boot_tasks.discard)
+    return task
+
 
 async def main() -> None:
     from .config import get_settings
@@ -28,7 +38,7 @@ async def main() -> None:
     from .scheduler import start_scheduler, stop_scheduler, initial_index
 
     # Import tool modules so they register on the mcp instance
-    from .mcp import memory, repos, jobs, knowledge, web, datasources, contracts, ci, code_tools, code_graph, project_tools, project_admin, ssh_files, git_write_tools  # noqa: F401
+    from .mcp import memory, repos, jobs, knowledge, web, datasources, contracts, ci, code_tools, code_graph, project_tools, project_admin, ssh_files, git_write_tools, approvals  # noqa: F401
     from .mcp.server import mcp
     from .mcp import oauth_bridge  # noqa: F401 - registra le route del bridge OAuth su mcp
     from .api.app import api
@@ -46,6 +56,11 @@ async def main() -> None:
     # migrate repo storage to tenant-aware composite identity.
     await ensure_tenant_storage()
 
+    # Rebuilt in the background: a large HNSW build must not delay boot.
+    from .vector_index import ensure_all_indexes
+
+    _keep(asyncio.create_task(ensure_all_indexes()))
+
     # Requeue any knowledge-base documents / web pages / repos left mid-processing by a crash.
     from .kb.store import reset_stale_processing
     from .web.store import reset_stale_processing as reset_stale_web
@@ -57,10 +72,14 @@ async def main() -> None:
 
     # Initial indexing (background)
     logger.info("Starting initial repo sync...")
-    asyncio.create_task(initial_index())
+    _keep(asyncio.create_task(initial_index()))
 
     # Start scheduler
     await start_scheduler()
+
+    from .mcp.audit import start_audit_writer, stop_audit_writer
+
+    start_audit_writer()
 
     # Configure both ASGI apps
     mcp_app = mcp.http_app(path="/mcp")
@@ -93,6 +112,7 @@ async def main() -> None:
             api_server.serve(),
         )
     finally:
+        await stop_audit_writer()
         await stop_scheduler()
         await close_db()
 

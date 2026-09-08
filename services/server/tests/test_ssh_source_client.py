@@ -37,6 +37,19 @@ def test_confine_rejects_sibling_prefix():
         client._confine("/etc/aster", "../aster-other/x")
 
 
+# ── confined_path (guardia pubblica, usata prima di proporre una scrittura) ──
+
+def test_confined_path_returns_the_resolved_path_inside_root():
+    conn = {"root_path": "/etc/aster"}
+    assert client.confined_path(conn, "sub/app.yml") == "/etc/aster/sub/app.yml"
+
+
+def test_confined_path_rejects_an_escaping_path():
+    conn = {"root_path": "/etc/aster"}
+    with pytest.raises(ValueError, match="escapes the source root"):
+        client.confined_path(conn, "../../etc/passwd")
+
+
 # ── filtri glob ───────────────────────────────────────────────────────────────
 
 def test_matches_include_only():

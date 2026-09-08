@@ -12,10 +12,12 @@ from fastmcp import Context
 from .server import mcp
 from .context import get_selected_project_id, set_current_project_id
 from . import project_access
+from .permissions import audit_only
 from .session_state import set_selected_project
 
 
 @mcp.tool()
+@audit_only
 async def list_projects(ctx: Context = None) -> dict:
     """List the projects you can access in this organization.
 
@@ -36,6 +38,7 @@ async def list_projects(ctx: Context = None) -> dict:
 
 
 @mcp.tool()
+@audit_only
 async def use_project(project: str, ctx: Context = None) -> dict:
     """Select the active project for subsequent tool calls in this session.
 
@@ -61,6 +64,7 @@ async def use_project(project: str, ctx: Context = None) -> dict:
 
 
 @mcp.tool()
+@audit_only
 async def current_project(ctx: Context = None) -> dict:
     """Show the project currently selected for this session, if any."""
     selected = get_selected_project_id()

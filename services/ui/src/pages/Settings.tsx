@@ -3,6 +3,7 @@ import { AlertCircle, Check, Clipboard, Plus, Save, Trash2, X } from 'lucide-rea
 import { api, type Repo, type MCPApiKey, type OrgRole } from '../lib/api'
 import { Banner, Button, Card, Input, Textarea, Select, Tabs, TabsList, TabsTrigger, TabsContent, Badge, Dialog, DialogFooter, Table, Thead, Tbody, Tr, Th, Td, useConfirm, useToast } from '../components/ui'
 import { useAppStore } from '../store'
+import { parseRateLimit, RATE_LIMIT_HINT } from '../lib/rateLimit'
 
 type Tab = 'access' | 'models' | 'runtime' | 'mcp_keys' | 'channels'
 
@@ -472,6 +473,10 @@ function McpKeysTab() {
   const [keyName, setKeyName] = useState('')
   const [keyPermissions, setKeyPermissions] = useState<string[]>(['context-read', 'context-write'])
   const [expiresDays, setExpiresDays] = useState('')
+  const [rateLimit, setRateLimit] = useState('')
+  // Bozze del rate limit per riga, finche' non vengono salvate.
+  const [rateDrafts, setRateDrafts] = useState<Record<number, string>>({})
+  const [savingRate, setSavingRate] = useState<number | null>(null)
   const projects = useAppStore((s) => s.projects)
   const activeProjectId = useAppStore((s) => s.activeProjectId)
   const organizations = useAppStore((s) => s.organizations)
@@ -494,6 +499,11 @@ function McpKeysTab() {
   useEffect(() => { loadKeys() }, [loadKeys])
 
   const handleCreate = async () => {
+    const parsedRate = parseRateLimit(rateLimit)
+    if ('error' in parsedRate) {
+      toast.error(parsedRate.error)
+      return
+    }
     setCreating(true)
     setError(null)
     try {
@@ -503,6 +513,7 @@ function McpKeysTab() {
         permissions: keyPermissions,
         expires_days: expiresDays ? parseInt(expiresDays, 10) : undefined,
         project_id: keyProjectId ?? undefined,
+        rate_limit_per_minute: parsedRate.value ?? undefined,
       })
       const endpoint = chosen && orgSlug ? `/mcp/${orgSlug}/${chosen.slug}` : ''
       setNewKey({ key: response.key, name: response.name, endpoint })
@@ -511,11 +522,45 @@ function McpKeysTab() {
       setShowCreate(false)
       setKeyName('')
       setExpiresDays('')
+      setRateLimit('')
       setKeyPermissions(['context-read', 'context-write'])
     } catch (e) {
       toast.error(String(e))
     } finally {
       setCreating(false)
+    }
+  }
+
+  const storedRate = (key: MCPApiKey) =>
+    key.rate_limit_per_minute ? String(key.rate_limit_per_minute) : ''
+  const draftRate = (key: MCPApiKey) => rateDrafts[key.id] ?? storedRate(key)
+
+  const handleSaveRate = async (key: MCPApiKey) => {
+    const parsed = parseRateLimit(draftRate(key))
+    if ('error' in parsed) {
+      toast.error(parsed.error)
+      return
+    }
+    setSavingRate(key.id)
+    try {
+      await api.mcpKeys.update(key.id, { rate_limit_per_minute: parsed.value })
+      setKeys((prev) =>
+        prev.map((k) => (k.id === key.id ? { ...k, rate_limit_per_minute: parsed.value } : k))
+      )
+      setRateDrafts((prev) => {
+        const next = { ...prev }
+        delete next[key.id]
+        return next
+      })
+      toast.success(
+        parsed.value === null
+          ? `Rate limit removed for "${key.name}"`
+          : `Rate limit set to ${parsed.value}/min for "${key.name}"`
+      )
+    } catch (e) {
+      toast.error(String(e))
+    } finally {
+      setSavingRate(null)
     }
   }
 
@@ -567,6 +612,7 @@ function McpKeysTab() {
                 <Th>Name</Th>
                 <Th>Project</Th>
                 <Th>Permissions</Th>
+                <Th>Rate limit</Th>
                 <Th>Created</Th>
                 <Th>Last used</Th>
                 <Th>Expires</Th>
@@ -597,6 +643,32 @@ function McpKeysTab() {
                   </Td>
                   <Td>
                     <code className="text-xs font-mono text-muted">{key.permissions ?? key.scope}</code>
+                  </Td>
+                  <Td className="text-xs text-muted">
+                    <div className="flex items-center gap-1">
+                      <Input
+                        type="number"
+                        min={1}
+                        className="w-24 px-2 py-1 text-xs"
+                        value={draftRate(key)}
+                        placeholder="Unlimited"
+                        aria-label={`Rate limit per minute for ${key.name}`}
+                        title={RATE_LIMIT_HINT}
+                        onChange={e => setRateDrafts(prev => ({ ...prev, [key.id]: e.target.value }))}
+                      />
+                      {draftRate(key) !== storedRate(key) && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleSaveRate(key)}
+                          loading={savingRate === key.id}
+                          title="Save rate limit"
+                          aria-label={`Save rate limit for ${key.name}`}
+                        >
+                          <Save className="w-3 h-3" />
+                        </Button>
+                      )}
+                    </div>
                   </Td>
                   <Td className="text-xs text-muted">{fmtDate(key.created_at)}</Td>
                   <Td className="text-xs text-muted">{fmtDate(key.last_used_at)}</Td>
@@ -654,6 +726,15 @@ function McpKeysTab() {
             value={expiresDays}
             onChange={e => setExpiresDays(e.target.value)}
             placeholder="Leave empty for no expiration"
+          />
+          <Input
+            label="Rate limit (calls/min)"
+            type="number"
+            min={1}
+            value={rateLimit}
+            onChange={e => setRateLimit(e.target.value)}
+            placeholder="Leave empty for unlimited"
+            hint="Applies to this key only, per server process. Editable later from the list."
           />
         </div>
         <DialogFooter>

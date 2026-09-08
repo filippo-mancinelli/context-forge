@@ -86,12 +86,17 @@ class Settings(BaseSettings):
     agent_workspaces_dir: str = "/data/agent-workspaces"
     kb_data_dir: str = "/data/kb"
     log_level: str = "INFO"
+    # Bearer token required by GET /metrics. Empty leaves the endpoint open
+    # (intended for private scraping networks).
+    metrics_token: str = ""
     config_path: str = "/app/context-forge.yml"
     setup_bootstrap_token: str = ""
     # Comma-separated extra origins for the REST API (e.g. UI on another host than the API).
     cors_origins: str = ""
     # MCP authentication mode: "disabled", "enabled", "transition"
     mcp_auth_mode: str = "disabled"
+    # Days of MCP tool-call audit history kept; 0 disables the retention job.
+    mcp_audit_retention_days: int = 90
     # OIDC (e.g. Keycloak) - inert unless oidc_enabled
     oidc_enabled: bool = False
     oidc_issuer: str = ""
@@ -111,6 +116,8 @@ class Settings(BaseSettings):
     # Hybrid retrieval: fuse dense vector similarity with lexical full-text
     # ranking (RRF). Set SEARCH_HYBRID=false to fall back to vector-only search.
     search_hybrid: bool = True
+    # Work memory for HNSW index builds, applied on the maintenance connection.
+    hnsw_maintenance_work_mem: str = "256MB"
     # Shared secret for the /api/webhooks/index push endpoint. Empty disables it.
     # GitHub: HMAC-SHA256 (X-Hub-Signature-256); GitLab: X-Gitlab-Token; generic:
     # X-Webhook-Secret. Set WEBHOOK_SECRET to enable push-triggered indexing.

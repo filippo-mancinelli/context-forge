@@ -47,10 +47,12 @@ services:
       - GITLAB_URL=${GITLAB_URL:-}
       - SETUP_BOOTSTRAP_TOKEN=${SETUP_BOOTSTRAP_TOKEN:-}
       - SEARCH_HYBRID=${SEARCH_HYBRID:-true}
+      - HNSW_MAINTENANCE_WORK_MEM=${HNSW_MAINTENANCE_WORK_MEM:-256MB}
       - WEBHOOK_SECRET=${WEBHOOK_SECRET:-}
       - CORS_ORIGINS=${CORS_ORIGINS:-}
       # MCP endpoint auth: disabled | transition | enabled (see .env.example)
       - MCP_AUTH_MODE=${MCP_AUTH_MODE:-disabled}
+      - MCP_AUDIT_RETENTION_DAYS=${MCP_AUDIT_RETENTION_DAYS:-90}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
       # OIDC login (optional; inert unless OIDC_ENABLED=true)
       - OIDC_ENABLED=${OIDC_ENABLED:-false}
@@ -69,6 +71,7 @@ services:
       - REPOS_CACHE_DIR=/data/repos-cache
       - KB_DATA_DIR=/data/kb
       - AGENT_WORKSPACES_DIR=/data/agent-workspaces
+      - METRICS_TOKEN=${METRICS_TOKEN:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
       - repos_cache:/data/repos-cache

@@ -39,6 +39,39 @@ DEF_NODES: dict[str, set[str]] = {
         "interface_declaration",
         "enum_declaration",
     },
+    "csharp": {
+        "class_declaration",
+        "interface_declaration",
+        "struct_declaration",
+        "record_declaration",
+        "enum_declaration",
+        "method_declaration",
+        "constructor_declaration",
+        "property_declaration",
+    },
+    "php": {
+        "class_declaration",
+        "interface_declaration",
+        "trait_declaration",
+        "enum_declaration",
+        "function_definition",
+        "method_declaration",
+    },
+    "kotlin": {
+        "class_declaration",
+        "object_declaration",
+        "function_declaration",
+        "property_declaration",
+    },
+    "rust": {
+        "function_item",
+        "struct_item",
+        "enum_item",
+        "trait_item",
+        "impl_item",
+        "type_item",
+        "mod_item",
+    },
 }
 
 # Nodi che valgono come uso di un nome.
@@ -48,6 +81,22 @@ REF_NODES = {
     "field_identifier",
     "property_identifier",
 }
+
+# Nodi di riferimento aggiuntivi, per grammatiche che non usano ``identifier``.
+REF_NODES_EXTRA: dict[str, set[str]] = {"php": {"name"}}
+
+# Nodi il cui nome non sta nel campo ``name``: (linguaggio, nodo) -> campo.
+NAME_FIELDS: dict[tuple[str, str], str] = {
+    ("rust", "impl_item"): "type",
+}
+
+# Nodi il cui nome sta dentro un figlio: (linguaggio, nodo) -> tipo del figlio.
+NAME_HOLDERS: dict[tuple[str, str], str] = {
+    ("kotlin", "property_declaration"): "variable_declaration",
+}
+
+# Identificatori usati come ripiego quando il campo del nome manca.
+IDENT_NODES = ("identifier", "type_identifier", "property_identifier")
 
 # Nomi troppo comuni per portare informazione: creerebbero archi fra tutti.
 STOP_NAMES = {
@@ -66,15 +115,35 @@ PATH_MATCH_WEIGHT = 1.0
 MIN_PATH_TOKEN_LEN = 6
 
 
-def _name_of(node, source: bytes) -> Optional[str]:
-    """Nome dichiarato da un nodo di definizione."""
-    field = node.child_by_field_name("name") if hasattr(node, "child_by_field_name") else None
-    if field is not None:
-        return source[field.start_byte : field.end_byte].decode("utf-8", "replace")
+def _ref_nodes(language: str) -> set[str]:
+    """Nodi che valgono come uso di un nome, per il linguaggio dato."""
+    return REF_NODES | REF_NODES_EXTRA.get(language, set())
+
+
+def _name_node(node, language: str = ""):
+    """Nodo che porta il nome dichiarato da un nodo di definizione."""
+    holder = NAME_HOLDERS.get((language, node.type))
+    if holder:
+        for child in node.children:
+            if child.type == holder:
+                node = child
+                break
+    field = NAME_FIELDS.get((language, node.type), "name")
+    found = node.child_by_field_name(field) if hasattr(node, "child_by_field_name") else None
+    if found is not None:
+        return found
     for child in node.children:
-        if child.type in ("identifier", "type_identifier", "property_identifier"):
-            return source[child.start_byte : child.end_byte].decode("utf-8", "replace")
+        if child.type in IDENT_NODES:
+            return child
     return None
+
+
+def _name_of(node, source: bytes, language: str = "") -> Optional[str]:
+    """Nome dichiarato da un nodo di definizione."""
+    found = _name_node(node, language)
+    if found is None:
+        return None
+    return source[found.start_byte : found.end_byte].decode("utf-8", "replace")
 
 
 def _keep(name: Optional[str]) -> bool:
@@ -100,6 +169,7 @@ def extract_symbols(content: str, language: str, parser: Any) -> dict[str, list[
         return {"defs": [], "refs": []}
 
     def_nodes = DEF_NODES[language]
+    ref_nodes = _ref_nodes(language)
     defs: list[dict] = []
     refs: list[dict] = []
     def_name_spans: set[tuple[int, int]] = set()
@@ -108,19 +178,15 @@ def extract_symbols(content: str, language: str, parser: Any) -> dict[str, list[
     while stack:
         node = stack.pop()
         if node.type in def_nodes:
-            name = _name_of(node, source)
+            name = _name_of(node, source, language)
             if _keep(name):
                 defs.append(
                     {"name": name, "kind": node.type, "line": node.start_point[0] + 1}
                 )
-                field = (
-                    node.child_by_field_name("name")
-                    if hasattr(node, "child_by_field_name")
-                    else None
-                )
+                field = _name_node(node, language)
                 if field is not None:
                     def_name_spans.add((field.start_byte, field.end_byte))
-        elif node.type in REF_NODES:
+        elif node.type in ref_nodes:
             span = (node.start_byte, node.end_byte)
             if span not in def_name_spans:
                 name = source[node.start_byte : node.end_byte].decode("utf-8", "replace")

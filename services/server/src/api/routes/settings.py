@@ -8,13 +8,15 @@ org_reembed job).
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ...config import ForgeConfig
-from ...indexer.embedder import reset_embedder_clients
+from ...indexer.embedder import embed_text, reset_embedder_clients
 from ...org_settings import (
     ORG_OVERRIDE_FIELDS,
     get_org_settings,
@@ -25,11 +27,44 @@ from ...indexer.indexer import sync_repos_config
 from ...tenancy import role_at_least
 from ...mcp.memory import reset_memory_client
 from ...org_config import get_org_config, persist_org_config
+from ...vector_index import ensure_org_indexes
 from ..deps import ActiveOrg, get_active_org, require_role
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 _background_tasks: set = set()
+
+
+def _schedule(coro) -> None:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+
+def _positive_dims(value: Any) -> int:
+    """embeddings_dims as a positive int, or 400: it is interpolated into DDL."""
+    try:
+        dims = int(value)
+    except (TypeError, ValueError):
+        dims = 0
+    if dims <= 0:
+        raise HTTPException(
+            status_code=400, detail="embeddings_dims must be a positive integer"
+        )
+    return dims
+
+
+async def _probe_embedding_dims(org_id: int) -> int | None:
+    """Width of one vector from the configured provider; None if it is unreachable."""
+    try:
+        return len(await embed_text("dimension probe", org_id))
+    except Exception:
+        logger.warning(
+            "Embeddings probe failed (org=%s): dimension left unverified", org_id
+        )
+        return None
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -81,6 +116,7 @@ async def update_runtime_settings(
                 status_code=409,
                 detail="This Telegram webhook secret is already used by another organization",
             )
+    dims = _positive_dims(next_overrides.get("embeddings_dims"))
     overrides_changed = any(
         next_overrides[field] != getattr(current, field)
         for field in ORG_OVERRIDE_FIELDS
@@ -101,9 +137,31 @@ async def update_runtime_settings(
                 "Embeddings configuration changed organization. "
                 "Run re-embed job so search memory use new embeddings."
             )
+        embeddings_changed = embeddings_dims_changed or any(
+            next_overrides[f] != getattr(current, f)
+            for f in ("embeddings_provider", "embeddings_model",
+                      "embeddings_base_url", "embeddings_api_key")
+        )
+        previous_overrides = {f: getattr(current, f) for f in ORG_OVERRIDE_FIELDS}
         await persist_org_settings_overrides(org.org_id, next_overrides)
         reset_embedder_clients()
         reset_memory_client()
+        if embeddings_changed:
+            probed = await _probe_embedding_dims(org.org_id)
+            if probed is not None and probed != dims:
+                await persist_org_settings_overrides(org.org_id, previous_overrides)
+                reset_embedder_clients()
+                reset_memory_client()
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Embedding model returned {probed} dimensions, "
+                        f"but embeddings_dims is {dims}"
+                    ),
+                )
+        # A changed dimension is handled by the re-embed, which ensures too.
+        if not embeddings_dims_changed:
+            _schedule(ensure_org_indexes(org.org_id, dims))
 
     return {
         "status": "ok",
@@ -116,8 +174,6 @@ async def update_runtime_settings(
 @router.post("/reembed")
 async def start_reembed(org: ActiveOrg = Depends(require_role("admin"))):
     """Avvia il ricalcolo degli embedding dell'organizzazione (job asincrono)."""
-    import asyncio
-
     from ...db import get_pool
     from ...projects import get_default_project_id
     from ...reembed import reembed_org
@@ -130,7 +186,5 @@ async def start_reembed(org: ActiveOrg = Depends(require_role("admin"))):
             "VALUES ('org_reembed', 'pending', $1, $2) RETURNING id",
             org.org_id, project_id,
         )
-    task = asyncio.create_task(reembed_org(org.org_id, str(job_id)))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    _schedule(reembed_org(org.org_id, str(job_id)))
     return {"status": "ok", "job_id": str(job_id)}

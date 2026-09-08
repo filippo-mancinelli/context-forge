@@ -1,0 +1,280 @@
+"""Boot, re-embed and settings-save all refresh the HNSW indexes."""
+import asyncio
+import inspect
+
+from src import main as main_module
+from src import reembed
+from src.api.deps import ActiveOrg
+from src.api.routes import settings as settings_routes
+from src.config import ForgeConfig
+from src.org_settings import OrgSettings
+
+
+async def _no_drop(org_id, keep_dims=None):
+    return []
+
+
+def test_boot_schedules_index_maintenance_after_tenant_storage():
+    src = inspect.getsource(main_module.main)
+    assert "ensure_all_indexes" in src
+    assert src.index("ensure_tenant_storage()") < src.index("ensure_all_indexes()")
+    # It must not block boot: the ensure runs as a background task.
+    assert "asyncio.create_task(ensure_all_indexes())" in src
+    # A bare create_task() is only weakly referenced by the loop and can be
+    # garbage-collected before it runs: it must be kept alive.
+    assert "_keep(asyncio.create_task(ensure_all_indexes()))" in src
+
+
+def test_reembed_drops_the_org_indexes_before_the_first_update(monkeypatch):
+    """A 1536-dim index rejects a 3072-dim UPDATE, so it must go first."""
+    order = []
+
+    async def fake_iter_chunks(table, org_id, batch_size):
+        yield [(10, "hello")]
+
+    async def fake_embed_batch(texts, org_id):
+        return [[0.1] * 4 for _ in texts]
+
+    async def fake_drop(org_id, keep_dims=None):
+        order.append(("drop", org_id, keep_dims))
+        return []
+
+    async def fake_update(table, pairs, org_id):
+        order.append(("update", table))
+
+    async def fake_job_update(job_id, status, result=None, error=None):
+        pass
+
+    async def fake_org_settings(org_id):
+        return OrgSettings(embeddings_dims=3072)
+
+    async def fake_ensure(org_id, dims):
+        order.append(("ensure", org_id, dims))
+        return []
+
+    monkeypatch.setattr(reembed, "_iter_chunks", fake_iter_chunks)
+    monkeypatch.setattr(reembed, "embed_batch", fake_embed_batch)
+    monkeypatch.setattr(reembed, "drop_org_indexes", fake_drop)
+    monkeypatch.setattr(reembed, "_update_embeddings", fake_update)
+    monkeypatch.setattr(reembed, "_set_job_status", fake_job_update)
+    monkeypatch.setattr(reembed, "get_org_settings", fake_org_settings)
+    monkeypatch.setattr(reembed, "ensure_org_indexes", fake_ensure)
+
+    asyncio.run(reembed.reembed_org(5, "job-1"))
+
+    assert order[0] == ("drop", 5, 3072)
+    assert order[1] == ("update", "repo_chunks")
+    assert order[-1] == ("ensure", 5, 3072)
+
+
+def test_reembed_still_runs_when_the_index_drop_fails(monkeypatch):
+    statuses = []
+
+    async def fake_iter_chunks(table, org_id, batch_size):
+        yield [(10, "hello")]
+
+    async def fake_embed_batch(texts, org_id):
+        return [[0.1] * 4 for _ in texts]
+
+    async def fake_drop(org_id, keep_dims=None):
+        raise RuntimeError("db unavailable")
+
+    async def fake_update(table, pairs, org_id):
+        pass
+
+    async def fake_job_update(job_id, status, result=None, error=None):
+        statuses.append(status)
+
+    async def fake_org_settings(org_id):
+        return OrgSettings(embeddings_dims=1536)
+
+    async def fake_ensure(org_id, dims):
+        return []
+
+    monkeypatch.setattr(reembed, "_iter_chunks", fake_iter_chunks)
+    monkeypatch.setattr(reembed, "embed_batch", fake_embed_batch)
+    monkeypatch.setattr(reembed, "drop_org_indexes", fake_drop)
+    monkeypatch.setattr(reembed, "_update_embeddings", fake_update)
+    monkeypatch.setattr(reembed, "_set_job_status", fake_job_update)
+    monkeypatch.setattr(reembed, "get_org_settings", fake_org_settings)
+    monkeypatch.setattr(reembed, "ensure_org_indexes", fake_ensure)
+
+    asyncio.run(reembed.reembed_org(5, "job-1"))
+
+    assert statuses == ["running", "completed"]
+
+
+def test_reembed_ensures_the_indexes_once_with_the_org_dimension(monkeypatch):
+    calls = []
+
+    async def fake_iter_chunks(table, org_id, batch_size):
+        yield [(10, "hello")]
+
+    async def fake_embed_batch(texts, org_id):
+        return [[0.1] * 4 for _ in texts]
+
+    async def fake_update(table, pairs, org_id):
+        pass
+
+    async def fake_job_update(job_id, status, result=None, error=None):
+        pass
+
+    async def fake_org_settings(org_id):
+        return OrgSettings(embeddings_dims=3072)
+
+    async def fake_ensure(org_id, dims):
+        calls.append((org_id, dims))
+        return []
+
+    monkeypatch.setattr(reembed, "_iter_chunks", fake_iter_chunks)
+    monkeypatch.setattr(reembed, "embed_batch", fake_embed_batch)
+    monkeypatch.setattr(reembed, "drop_org_indexes", _no_drop)
+    monkeypatch.setattr(reembed, "_update_embeddings", fake_update)
+    monkeypatch.setattr(reembed, "_set_job_status", fake_job_update)
+    monkeypatch.setattr(reembed, "get_org_settings", fake_org_settings)
+    monkeypatch.setattr(reembed, "ensure_org_indexes", fake_ensure)
+
+    asyncio.run(reembed.reembed_org(5, "job-1"))
+
+    assert calls == [(5, 3072)]
+
+
+def test_reembed_still_completes_when_index_maintenance_lookup_fails(monkeypatch):
+    statuses = []
+
+    async def fake_iter_chunks(table, org_id, batch_size):
+        yield [(10, "hello")]
+
+    async def fake_embed_batch(texts, org_id):
+        return [[0.1] * 4 for _ in texts]
+
+    async def fake_update(table, pairs, org_id):
+        pass
+
+    async def fake_job_update(job_id, status, result=None, error=None):
+        statuses.append(status)
+
+    async def fake_org_settings(org_id):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(reembed, "_iter_chunks", fake_iter_chunks)
+    monkeypatch.setattr(reembed, "embed_batch", fake_embed_batch)
+    monkeypatch.setattr(reembed, "drop_org_indexes", _no_drop)
+    monkeypatch.setattr(reembed, "_update_embeddings", fake_update)
+    monkeypatch.setattr(reembed, "_set_job_status", fake_job_update)
+    monkeypatch.setattr(reembed, "get_org_settings", fake_org_settings)
+
+    asyncio.run(reembed.reembed_org(5, "job-1"))
+
+    assert statuses == ["running", "completed"]
+
+
+def _patch_settings(monkeypatch, current, calls):
+    async def mock_get_org_settings(org_id):
+        return current
+
+    async def mock_persist_overrides(org_id, overrides):
+        for k, v in overrides.items():
+            if hasattr(current, k):
+                setattr(current, k, v)
+
+    async def mock_persist_org_config(org_id, config):
+        pass
+
+    async def mock_get_org_config(org_id):
+        return ForgeConfig()
+
+    async def mock_sync_repos_config(org_id):
+        pass
+
+    async def fake_ensure(org_id, dims):
+        calls.append((org_id, dims))
+        return []
+
+    async def fake_embed_text(text, org_id):
+        # The probe answers with whatever dimension was just saved.
+        return [0.0] * int(current.embeddings_dims)
+
+    monkeypatch.setattr(settings_routes, "embed_text", fake_embed_text)
+    monkeypatch.setattr(settings_routes, "get_org_settings", mock_get_org_settings)
+    monkeypatch.setattr(settings_routes, "persist_org_settings_overrides", mock_persist_overrides)
+    monkeypatch.setattr(settings_routes, "persist_org_config", mock_persist_org_config)
+    monkeypatch.setattr(settings_routes, "get_org_config", mock_get_org_config)
+    monkeypatch.setattr(settings_routes, "sync_repos_config", mock_sync_repos_config)
+    monkeypatch.setattr(settings_routes, "reset_embedder_clients", lambda: None)
+    monkeypatch.setattr(settings_routes, "reset_memory_client", lambda: None)
+    monkeypatch.setattr(settings_routes, "ensure_org_indexes", fake_ensure)
+
+
+def _org():
+    return ActiveOrg(org_id=1, role="admin", namespace="ns", name="Org")
+
+
+def test_settings_save_without_a_dimension_change_ensures_the_indexes(monkeypatch):
+    calls = []
+    current = OrgSettings(embeddings_dims=1536)
+    _patch_settings(monkeypatch, current, calls)
+
+    req = settings_routes.SettingsUpdateRequest(
+        forge_config={}, settings_overrides={"embeddings_model": "text-embedding-3-large"}
+    )
+
+    async def run():
+        await settings_routes.update_runtime_settings(req=req, org=_org())
+        await asyncio.sleep(0)  # let the background task run
+
+    asyncio.run(run())
+    assert calls == [(1, 1536)]
+
+
+def test_settings_save_with_a_dimension_change_leaves_it_to_the_reembed(monkeypatch):
+    calls = []
+    current = OrgSettings(embeddings_dims=1536)
+    _patch_settings(monkeypatch, current, calls)
+
+    req = settings_routes.SettingsUpdateRequest(
+        forge_config={}, settings_overrides={"embeddings_dims": 1024}
+    )
+
+    async def run():
+        out = await settings_routes.update_runtime_settings(req=req, org=_org())
+        await asyncio.sleep(0)
+        assert out["requires_vector_reset"] is True
+
+    asyncio.run(run())
+    assert calls == []
+
+
+def test_scheduler_registers_the_hnsw_self_healing_job(monkeypatch):
+    """An interval job repairs indexes left invalid by an interrupted build."""
+    from src import scheduler as scheduler_module
+    from src.vector_index import ensure_all_indexes
+
+    jobs = []
+
+    class FakeScheduler:
+        def add_job(self, func, trigger=None, **kwargs):
+            jobs.append((func, trigger, kwargs))
+
+        def start(self):
+            pass
+
+        def get_jobs(self):
+            return []
+
+    async def no_sync():
+        pass
+
+    monkeypatch.setattr(scheduler_module, "_scheduler", None)
+    monkeypatch.setattr(scheduler_module, "AsyncIOScheduler", FakeScheduler)
+    monkeypatch.setattr(scheduler_module, "sync_scheduler_jobs", no_sync)
+
+    asyncio.run(scheduler_module.start_scheduler())
+
+    registered = [j for j in jobs if j[2].get("id") == "hnsw_indexes"]
+    assert len(registered) == 1
+    func, trigger, kwargs = registered[0]
+    assert func is ensure_all_indexes
+    assert trigger == "interval"
+    assert kwargs["hours"] == 6
+    assert kwargs["replace_existing"] is True
