@@ -63,6 +63,15 @@ DEF_NODES: dict[str, set[str]] = {
         "function_declaration",
         "property_declaration",
     },
+    "rust": {
+        "function_item",
+        "struct_item",
+        "enum_item",
+        "trait_item",
+        "impl_item",
+        "type_item",
+        "mod_item",
+    },
 }
 
 # Nodi che valgono come uso di un nome.
@@ -77,7 +86,9 @@ REF_NODES = {
 REF_NODES_EXTRA: dict[str, set[str]] = {"php": {"name"}}
 
 # Nodi il cui nome non sta nel campo ``name``: (linguaggio, nodo) -> campo.
-NAME_FIELDS: dict[tuple[str, str], str] = {}
+NAME_FIELDS: dict[tuple[str, str], str] = {
+    ("rust", "impl_item"): "type",
+}
 
 # Nodi il cui nome sta dentro un figlio: (linguaggio, nodo) -> tipo del figlio.
 NAME_HOLDERS: dict[tuple[str, str], str] = {
