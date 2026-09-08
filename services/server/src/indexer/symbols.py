@@ -57,6 +57,12 @@ DEF_NODES: dict[str, set[str]] = {
         "function_definition",
         "method_declaration",
     },
+    "kotlin": {
+        "class_declaration",
+        "object_declaration",
+        "function_declaration",
+        "property_declaration",
+    },
 }
 
 # Nodi che valgono come uso di un nome.
@@ -74,7 +80,9 @@ REF_NODES_EXTRA: dict[str, set[str]] = {"php": {"name"}}
 NAME_FIELDS: dict[tuple[str, str], str] = {}
 
 # Nodi il cui nome sta dentro un figlio: (linguaggio, nodo) -> tipo del figlio.
-NAME_HOLDERS: dict[tuple[str, str], str] = {}
+NAME_HOLDERS: dict[tuple[str, str], str] = {
+    ("kotlin", "property_declaration"): "variable_declaration",
+}
 
 # Identificatori usati come ripiego quando il campo del nome manca.
 IDENT_NODES = ("identifier", "type_identifier", "property_identifier")
