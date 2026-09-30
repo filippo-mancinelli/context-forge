@@ -101,7 +101,7 @@ def test_repo_map_passes_the_repo_filter(monkeypatch):
     conn = _install_pool(monkeypatch, [[], []])
     asyncio.run(code_graph.repo_map(repos=["aster-desk"]))
     assert all(a[1] == ["aster-desk"] for a in conn.args)
-    assert all("repo_name = ANY" in q for q in conn.queries)
+    assert all("sr.name = ANY" in q for q in conn.queries)
 
 
 def test_repo_map_without_a_graph_says_so(monkeypatch):

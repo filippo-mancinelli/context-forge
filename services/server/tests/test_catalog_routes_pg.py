@@ -83,7 +83,7 @@ def test_project_member_selects_normal_resources_only(pg_database):
     with _client(ids["member"]) as client:
         ok = client.post(url, json={"kind": "folders", "resource_id": catalog["logs"]["id"]})
         restricted = client.post(url, json={"kind": "folders", "resource_id": catalog["secret"]["id"]})
-        unknown = client.post(url, json={"kind": "repos", "resource_id": 1})
+        unknown = client.post(url, json={"kind": "connectors", "resource_id": 1})
         listed = client.get(url).json()
     assert ok.status_code == 200 and ok.json()["already_selected"] is False
     assert restricted.status_code == 403

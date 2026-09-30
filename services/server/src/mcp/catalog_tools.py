@@ -1,7 +1,7 @@
 """Tool MCP per consultare il catalogo dell'organizzazione e sceglierne le risorse.
 
-Il catalogo elenca cartelle SSH e database censiti per l'organizzazione; i tool
-del progetto vedono solo quelli selezionati. Selezionare richiede il ruolo
+Il catalogo elenca cartelle SSH, database e repository censiti per l'organizzazione;
+i tool del progetto vedono solo quelli selezionati. Selezionare richiede il ruolo
 member sul progetto e, per una risorsa riservata, un admin dell'organizzazione.
 Nessuna credenziale passa da qui.
 """
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from ..catalog import repos as repo_catalog
 from ..catalog import selections
 from ..datasources import service as db_service
 from ..ssh_sources import service as ssh_service
@@ -17,7 +18,7 @@ from .permissions import PermissionDenied, requires_permission
 from .project_access import selection_rights
 from .server import mcp
 
-CATALOG_KINDS = ("folders", "databases")
+CATALOG_KINDS = ("folders", "databases", "repos")
 
 
 def _error(message: str) -> dict:
@@ -48,20 +49,33 @@ def _database_item(connection: dict, selected: set[int]) -> dict:
     }
 
 
+def _repo_item(repo: dict, selected: set[int]) -> dict:
+    return {
+        "name": repo["name"],
+        "type": repo["type"],
+        "url": repo.get("url") or repo.get("path"),
+        "branch": repo.get("branch"),
+        "status": repo.get("status"),
+        "description": repo.get("description"),
+        "restricted": repo["restricted"],
+        "selected": repo["id"] in selected,
+    }
+
+
 @mcp.tool()
 @requires_permission("context-read")
 async def catalog_list(kind: Optional[str] = None) -> dict:
-    """List the organization's catalog of SSH folders and databases.
+    """List the organization's catalog of SSH folders, databases and repositories.
 
     Each entry says whether the active project already selected it. Tools such
-    as ssh_read_file or db_query only reach selected resources: when the one you
-    need is listed with selected=false, add it with resource_select.
+    as ssh_read_file, db_query or repo_search only reach selected resources: when
+    the one you need is listed with selected=false, add it with resource_select.
 
     Args:
-        kind: 'folders' or 'databases'. Omit to list both.
+        kind: 'folders', 'databases' or 'repos'. Omit to list all.
 
     Returns:
-        dict with `folders` and/or `databases`, each entry with name,
+        dict with folders, databases and/or repos, each entry with name,
         description, restricted and selected.
     """
     if kind is not None and kind not in CATALOG_KINDS:
@@ -77,6 +91,9 @@ async def catalog_list(kind: Optional[str] = None) -> dict:
         out["databases"] = [
             _database_item(c, selected) for c in await db_service.list_catalog_connections(org_id)
         ]
+    if kind in (None, "repos"):
+        selected = await selections.selected_ids(project_id, "repos")
+        out["repos"] = [_repo_item(r, selected) for r in await repo_catalog.list_catalog(org_id)]
     return out
 
 
@@ -89,7 +106,7 @@ async def resource_select(kind: str, name: str) -> dict:
     added by an organization admin.
 
     Args:
-        kind: 'folders' or 'databases'.
+        kind: 'folders', 'databases' or 'repos'.
         name: resource name, as shown by catalog_list.
 
     Returns:
@@ -120,7 +137,7 @@ async def resource_deselect(kind: str, name: str) -> dict:
     """Remove a catalog resource from the active project. The resource stays in the catalog.
 
     Args:
-        kind: 'folders' or 'databases'.
+        kind: 'folders', 'databases' or 'repos'.
         name: resource name, as shown by catalog_list.
     """
     org_id = await resolve_org_id()

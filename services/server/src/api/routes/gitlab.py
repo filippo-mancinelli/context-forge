@@ -8,12 +8,9 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ...config import RepoConfig, get_settings
-from ...indexer.indexer import sync_repos_config
-from ...org_config import get_org_config, persist_org_config
+from ...config import get_settings
 from ...org_settings import get_org_settings
-from ...projects import bind_repo_to_project, get_repo_project_name
-from ..deps import ActiveOrg, ActiveProject, get_active_org, require_project_role
+from ..deps import ActiveOrg, get_active_org
 
 router = APIRouter(prefix="/gitlab", tags=["gitlab"])
 
@@ -30,11 +27,6 @@ class GitLabRepo(BaseModel):
     language: Optional[str] = None
     star_count: int = 0
     forked_from_project: bool = False
-
-
-class AddGitLabRepoRequest(BaseModel):
-    full_name: str
-    branch: Optional[str] = None
 
 
 def _gitlab_headers(token: str) -> dict[str, str]:
@@ -70,6 +62,19 @@ def _map_repo(project: dict) -> GitLabRepo:
         star_count=project.get("star_count", 0),
         forked_from_project=bool(project.get("forked_from_project")),
     )
+
+
+async def fetch_project(token: str, full_name: str) -> dict:
+    """Progetto GitLab per percorso completo (``gruppo/progetto``)."""
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{_gitlab_base_url()}/projects/{quote_plus(full_name)}",
+            headers=_gitlab_headers(token),
+            timeout=30.0,
+        )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=f"GitLab API error: {resp.text}")
+    return resp.json()
 
 
 @router.get("/repos", response_model=list[GitLabRepo])
@@ -183,64 +188,3 @@ async def search_gitlab_repos(
 
     repos = [_map_repo(project) for project in resp.json()]
     return {"repos": repos, "total_count": len(repos)}
-
-
-@router.post("/repos/add")
-async def add_gitlab_repo(
-    req: AddGitLabRepoRequest,
-    org: ActiveProject = Depends(require_project_role("member")),
-):
-    """Add a GitLab repository to the active project."""
-    cfg = await get_org_config(org.org_id)
-    repo_name = req.full_name.replace("/", "-")
-    if any(repo.name == repo_name for repo in cfg.repos):
-        holder = await get_repo_project_name(org.org_id, repo_name)
-        detail = (
-            f"Repository already configured in project '{holder}'"
-            if holder
-            else "Repository already configured"
-        )
-        raise HTTPException(status_code=400, detail=detail)
-
-    s = await get_org_settings(org.org_id)
-    if not s.gitlab_token:
-        raise HTTPException(status_code=400, detail="GitLab token not configured")
-
-    encoded = quote_plus(req.full_name)
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{_gitlab_base_url()}/projects/{encoded}",
-            headers=_gitlab_headers(s.gitlab_token),
-            timeout=30.0,
-        )
-
-    if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail=f"GitLab API error: {resp.text}")
-
-    project = resp.json()
-    branch = req.branch or project.get("default_branch") or "main"
-    repo_url = project["web_url"]
-
-    cfg.repos.append(
-        RepoConfig(
-            name=repo_name,
-            type="gitlab",
-            url=repo_url,
-            branch=branch,
-        )
-    )
-
-    await persist_org_config(org.org_id, cfg)
-    await sync_repos_config(org.org_id)
-    await bind_repo_to_project(org.org_id, org.project_id, repo_name)
-
-    return {
-        "status": "ok",
-        "message": f"Repository {req.full_name} added",
-        "repo": {
-            "name": repo_name,
-            "type": "gitlab",
-            "url": repo_url,
-            "branch": branch,
-        },
-    }

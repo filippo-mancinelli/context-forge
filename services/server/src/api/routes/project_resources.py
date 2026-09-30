@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ... import projects
+from ...catalog import repos as repo_catalog
 from ...catalog import selections
 from ...datasources import service as db_service
 from ...ssh_sources import service as ssh_service
@@ -44,6 +45,7 @@ async def list_project_resources(
     return {
         "folders": await ssh_service.list_sources(org.org_id, project_id),
         "databases": await db_service.list_connections(org.org_id, project_id),
+        "repos": await repo_catalog.list_project_repos(org.org_id, project_id),
     }
 
 

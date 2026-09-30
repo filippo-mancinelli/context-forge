@@ -46,9 +46,11 @@ def run_db(fn: Callable[[], Awaitable[T]]) -> T:
 async def prepare_schema() -> None:
     """Full application schema on an empty database."""
     from src.catalog.migration import apply_catalog_migration
+    from src.catalog.repo_migration import apply_repo_catalog_migration
 
     await db.init_db()
     await apply_catalog_migration()
+    await apply_repo_catalog_migration()
 
 
 async def make_legacy_schema() -> None:
@@ -84,6 +86,60 @@ async def make_legacy_schema() -> None:
             ADD COLUMN ssh_password_enc TEXT,
             ADD COLUMN ssh_private_key_enc TEXT,
             ADD CONSTRAINT db_connections_project_name_key UNIQUE (project_id, name)
+        """
+    )
+
+
+async def make_legacy_repo_schema() -> None:
+    """Bring repositories and derived data back to the name- and project-keyed shape.
+
+    The ``repo_id`` columns stay nullable, as after migration 0006 on a database
+    not converted yet.
+    """
+    await execute("DROP TABLE project_repos")
+    await execute("DROP INDEX repos_org_lower_name_idx")
+    await execute("DROP INDEX repos_org_url_branch_idx")
+    await execute(
+        """
+        ALTER TABLE repo_chunks
+            DROP CONSTRAINT repo_chunks_repo_fkey,
+            DROP CONSTRAINT repo_chunks_repo_unique,
+            ALTER COLUMN repo_id DROP NOT NULL,
+            ADD COLUMN repo_name TEXT NOT NULL,
+            ADD COLUMN project_id BIGINT NOT NULL,
+            ADD CONSTRAINT repo_chunks_org_unique UNIQUE (org_id, repo_name, file_path, chunk_index)
+        """
+    )
+    await execute(
+        """
+        ALTER TABLE repo_symbols
+            DROP CONSTRAINT repo_symbols_repo_fkey,
+            DROP CONSTRAINT repo_symbols_repo_pkey,
+            ALTER COLUMN repo_id DROP NOT NULL,
+            ADD COLUMN project_id BIGINT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            ADD COLUMN repo_name TEXT NOT NULL,
+            ADD PRIMARY KEY (project_id, repo_name, file_path, name, kind)
+        """
+    )
+    await execute(
+        """
+        ALTER TABLE chunk_annotations
+            DROP CONSTRAINT chunk_annotations_repo_fkey,
+            ALTER COLUMN repo_id DROP NOT NULL,
+            ADD COLUMN repo_name TEXT NOT NULL,
+            ADD COLUMN project_id BIGINT NOT NULL
+        """
+    )
+    await execute(
+        "ALTER TABLE index_requests DROP CONSTRAINT index_requests_repo_fkey, ADD COLUMN repo_name TEXT"
+    )
+    await execute(
+        """
+        ALTER TABLE repos
+            DROP CONSTRAINT repos_pkey,
+            DROP COLUMN id,
+            ADD COLUMN project_id BIGINT NOT NULL,
+            ADD CONSTRAINT repos_org_name_pkey PRIMARY KEY (org_id, name)
         """
     )
 

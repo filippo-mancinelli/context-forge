@@ -6,7 +6,6 @@ try:
 except ImportError:  # older fastmcp
     ToolError = RuntimeError
 
-from ..db import get_pool
 from ..git_providers import GitProviderError, create_pull_request, resolve_repo
 from ..indexer.git_write import GitWriteError, commit_and_push, prepare_workspace
 from .context import require_project_id, resolve_org_id
@@ -43,17 +42,12 @@ async def repo_commit_files(repo_name: str, branch_name: str, files: list[dict],
     org_id = await resolve_org_id()
     project_id = await require_project_id()
 
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        in_project = await conn.fetchval(
-            "SELECT 1 FROM repos WHERE org_id=$1 AND project_id=$2 AND name=$3",
-            org_id, project_id, repo_name,
-        )
-    if not in_project:
-        return {"status": "error", "error": f"Repository '{repo_name}' not found"}
+    try:
+        target = await resolve_repo(org_id, project_id, repo_name)
+    except GitProviderError as exc:
+        return {"status": "error", "error": str(exc)}
 
     try:
-        target = await resolve_repo(org_id, repo_name)
         repo = target["repo"]
         if branch_name == repo.branch:
             raise GitWriteError(
@@ -92,17 +86,12 @@ async def repo_open_pr(repo_name: str, branch_name: str, title: str,
     org_id = await resolve_org_id()
     project_id = await require_project_id()
 
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        in_project = await conn.fetchval(
-            "SELECT 1 FROM repos WHERE org_id=$1 AND project_id=$2 AND name=$3",
-            org_id, project_id, repo_name,
-        )
-    if not in_project:
-        return {"status": "error", "error": f"Repository '{repo_name}' not found"}
+    try:
+        target = await resolve_repo(org_id, project_id, repo_name)
+    except GitProviderError as exc:
+        return {"status": "error", "error": str(exc)}
 
     try:
-        target = await resolve_repo(org_id, repo_name)
         base = base_branch or target["repo"].branch
         pr = await create_pull_request(target, branch_name, base, title, description)
     except GitProviderError as exc:

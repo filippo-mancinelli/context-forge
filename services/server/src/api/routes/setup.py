@@ -8,7 +8,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ...config import ForgeConfig, get_settings, RUNTIME_OVERRIDE_FIELDS
-from ...indexer.indexer import sync_repos_config
 from ...indexer.embedder import reset_embedder_clients
 from ...mcp.memory import reset_memory_client
 from ...runtime_state import persist_runtime_config, save_runtime_state, load_runtime_state
@@ -68,15 +67,15 @@ async def setup_init(req: SetupInitRequest):
         await persist_runtime_config(forge, req.settings_overrides)
         created_runtime_config = True
 
-    # Provision the default organization with the first admin as owner and
-    # migrate repo storage to tenant-aware composite identity.
+    # Provision the default organization with the first admin as owner. The
+    # startup migrations register the repositories listed in the runtime config
+    # into the catalog and select them in the default project.
     from ...tenancy import ensure_tenant_storage
 
     await ensure_tenant_storage()
 
     reset_embedder_clients()
     reset_memory_client()
-    await sync_repos_config()
 
     return {
         "status": "ok",

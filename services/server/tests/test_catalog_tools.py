@@ -73,11 +73,16 @@ def test_catalog_list_marks_what_the_project_already_selected(monkeypatch):
         return [{"id": 7, "name": "erp", "engine": "mysql", "host": "h", "database_name": "d",
                  "ssh_machine_name": None, "description": None, "restricted": False}]
 
+    async def fake_repos(org_id):
+        return [{"id": 9, "name": "aster-desk", "type": "gitlab", "url": "https://git.example.org/aster/aster-desk",
+                 "branch": "main", "status": "indexed", "description": None, "restricted": False}]
+
     async def fake_selected(project_id, kind):
-        return {1} if kind == "folders" else set()
+        return {1} if kind == "folders" else {9} if kind == "repos" else set()
 
     monkeypatch.setattr(catalog_tools.ssh_service, "list_catalog", fake_folders)
     monkeypatch.setattr(catalog_tools.db_service, "list_catalog_connections", fake_databases)
+    monkeypatch.setattr(catalog_tools.repo_catalog, "list_catalog", fake_repos)
     monkeypatch.setattr(catalog_tools.selections, "selected_ids", fake_selected)
 
     with _Identity():
@@ -87,11 +92,12 @@ def test_catalog_list_marks_what_the_project_already_selected(monkeypatch):
         ("logs", True, False), ("reports", False, True),
     ]
     assert result["databases"][0]["selected"] is False
+    assert [(r["name"], r["selected"]) for r in result["repos"]] == [("aster-desk", True)]
 
 
 def test_catalog_list_rejects_an_unknown_kind():
     with _Identity():
-        result = asyncio.run(_underlying(catalog_tools.catalog_list)("repos"))
+        result = asyncio.run(_underlying(catalog_tools.catalog_list)("connectors"))
     assert result["status"] == "error"
 
 

@@ -64,74 +64,144 @@ def test_repo_add_requires_the_sources_write_permission():
         perms.set_current_permissions(None)
 
 
-def test_repo_add_registers_and_queues_indexing(monkeypatch):
+def _no_existing_repo(monkeypatch, module):
+    async def no_existing(org_id, url, branch):
+        return None
+
+    monkeypatch.setattr(module.repo_catalog, "find_repo", no_existing)
+
+
+def _capture_queue(monkeypatch, module, calls):
+    async def fake_queue(org_id, repo_id, project_id):
+        calls.append((org_id, repo_id, project_id))
+
+    monkeypatch.setattr(module.repo_catalog, "queue_index", fake_queue)
+
+
+def test_repo_add_registers_selects_and_queues_indexing(monkeypatch):
     from src.mcp import repos
 
-    added = []
-    queued = []
+    created, queued, selected = [], [], []
 
-    async def fake_add(**kwargs):
-        added.append(kwargs)
-        return {"name": kwargs["name"], "type": kwargs["type"], "branch": kwargs["branch"],
-                "language": "auto"}
+    async def fake_create(org_id, data):
+        created.append((org_id, data))
+        return {"id": 12, "name": data["name"], "type": data["type"], "url": data["url"],
+                "path": None, "branch": data["branch"], "status": "pending"}
 
-    async def fake_queue(org_id, project_id, repo_name):
-        queued.append((org_id, project_id, repo_name))
-
-    monkeypatch.setattr(repos.repo_registry, "add_repo", fake_add)
-    monkeypatch.setattr(repos.repo_registry, "queue_index", fake_queue)
+    _no_existing_repo(monkeypatch, repos)
+    monkeypatch.setattr(repos.repo_catalog, "create_repo", fake_create)
+    _capture_queue(monkeypatch, repos, queued)
+    _capture_selection(monkeypatch, repos, selected)
 
     with _SourceIdentity():
         result = asyncio.run(
-            _underlying(repos.repo_add)(
-                "asterai-v2", "gitlab", url="https://git.example.org/aster/asterai-v2"
-            )
+            _underlying(repos.repo_add)("asterai-v2", "gitlab", url="https://git.example.org/aster/asterai-v2")
         )
 
-    assert result["status"] == "ok"
-    assert result["indexing"] is True
-    assert added[0]["org_id"] == 1 and added[0]["project_id"] == 4
-    assert queued == [(1, 4, "asterai-v2")]
+    assert result["status"] == "ok" and result["created"] is True and result["indexing"] is True
+    assert "token" not in created[0][1]
+    assert selected == [(1, 4, "repos", 12)]
+    assert queued == [(1, 12, 4)]
+
+
+def test_repo_add_selects_an_indexed_repository_without_registering_a_copy(monkeypatch):
+    from src.mcp import repos
+
+    queued, selected = [], []
+
+    async def existing(org_id, url, branch):
+        return {"id": 3, "name": "aster-desk", "type": "gitlab", "url": url, "path": None,
+                "branch": branch, "status": "indexed"}
+
+    async def must_not_create(*args):
+        raise AssertionError("create_repo must not be called")
+
+    monkeypatch.setattr(repos.repo_catalog, "find_repo", existing)
+    monkeypatch.setattr(repos.repo_catalog, "create_repo", must_not_create)
+    _capture_queue(monkeypatch, repos, queued)
+    _capture_selection(monkeypatch, repos, selected)
+
+    with _SourceIdentity():
+        result = asyncio.run(
+            _underlying(repos.repo_add)("desk", "gitlab", url="https://git.example.org/aster/aster-desk.git")
+        )
+
+    assert result["status"] == "ok" and result["created"] is False and result["indexing"] is False
+    assert selected == [(1, 4, "repos", 3)]
+    assert queued == []
 
 
 def test_repo_add_can_skip_indexing(monkeypatch):
     from src.mcp import repos
 
-    queued = []
+    queued, selected = [], []
 
-    async def fake_add(**kwargs):
-        return {"name": kwargs["name"], "type": kwargs["type"], "branch": kwargs["branch"],
-                "language": "auto"}
+    async def fake_create(org_id, data):
+        return {"id": 5, "name": data["name"], "type": data["type"], "url": None,
+                "path": data["path"], "branch": "main", "status": "pending"}
 
-    async def fake_queue(org_id, project_id, repo_name):
-        queued.append(repo_name)
-
-    monkeypatch.setattr(repos.repo_registry, "add_repo", fake_add)
-    monkeypatch.setattr(repos.repo_registry, "queue_index", fake_queue)
+    _no_existing_repo(monkeypatch, repos)
+    monkeypatch.setattr(repos.repo_catalog, "create_repo", fake_create)
+    _capture_queue(monkeypatch, repos, queued)
+    _capture_selection(monkeypatch, repos, selected)
 
     with _SourceIdentity():
-        result = asyncio.run(
-            _underlying(repos.repo_add)("asterai-v2", "gitlab", index=False)
-        )
+        result = asyncio.run(_underlying(repos.repo_add)("local-tools", "local", path="/repos/tools", index=False))
 
-    assert result["indexing"] is False
+    assert result["status"] == "ok" and result["indexing"] is False
     assert queued == []
 
 
-def test_repo_add_reports_a_duplicate_name(monkeypatch):
+def test_repo_add_reports_a_name_already_in_the_catalog(monkeypatch):
     from src.mcp import repos
-    from src import repo_registry
 
-    async def fake_add(**kwargs):
-        raise repo_registry.RepoAlreadyExistsError("Repository 'asterai-v2' already exists")
+    async def conflicting(org_id, data):
+        raise repos.repo_catalog.RepoConflictError({"name": "asterai-v2"})
 
-    monkeypatch.setattr(repos.repo_registry, "add_repo", fake_add)
+    _no_existing_repo(monkeypatch, repos)
+    monkeypatch.setattr(repos.repo_catalog, "create_repo", conflicting)
 
     with _SourceIdentity():
-        result = asyncio.run(_underlying(repos.repo_add)("asterai-v2", "gitlab"))
+        result = asyncio.run(_underlying(repos.repo_add)("asterai-v2", "local", path="/repos/other"))
 
-    assert result["status"] == "error"
-    assert "already exists" in result["error"]
+    assert result["status"] == "error" and "asterai-v2" in result["error"]
+
+
+def test_repo_add_refuses_a_role_below_member(monkeypatch):
+    from src.mcp import repos
+
+    _roles(monkeypatch, "viewer")
+
+    async def must_not_look_up(*args):
+        raise AssertionError("the catalog must not be touched")
+
+    monkeypatch.setattr(repos.repo_catalog, "find_repo", must_not_look_up)
+
+    with _SourceIdentity(user_id=7):
+        with pytest.raises(perms.PermissionDenied, match="member role"):
+            asyncio.run(_underlying(repos.repo_add)("desk", "gitlab", url="https://git.example.org/a/desk"))
+
+
+def test_repo_add_does_not_hand_a_restricted_repository_to_an_api_key(monkeypatch):
+    from src.mcp import repos
+
+    rights = []
+
+    async def existing(org_id, url, branch):
+        return {"id": 3, "name": "payroll-app", "type": "gitlab", "url": url, "status": "indexed"}
+
+    async def must_not_create(*args):
+        raise AssertionError("create_repo must not be called")
+
+    monkeypatch.setattr(repos.repo_catalog, "find_repo", existing)
+    monkeypatch.setattr(repos.repo_catalog, "create_repo", must_not_create)
+    _refuse_restricted(monkeypatch, repos, rights, "payroll-app")
+
+    with _SourceIdentity():
+        with pytest.raises(perms.PermissionDenied, match="restricted"):
+            asyncio.run(_underlying(repos.repo_add)("x", "gitlab", url="https://git.example.com/a/payroll"))
+
+    assert rights == [False]
 
 
 def test_api_add_requires_a_source(monkeypatch):

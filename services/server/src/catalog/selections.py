@@ -15,6 +15,7 @@ from ..db import get_pool
 KINDS: dict[str, dict[str, str]] = {
     "folders": {"table": "ssh_sources", "link": "project_ssh_sources", "column": "ssh_source_id"},
     "databases": {"table": "db_connections", "link": "project_db_connections", "column": "db_connection_id"},
+    "repos": {"table": "repos", "link": "project_repos", "column": "repo_id"},
 }
 
 

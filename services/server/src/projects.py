@@ -144,10 +144,9 @@ async def count_projects(org_id: int) -> int:
 
 # Tabelle che portano project_id e che rendono "occupato" un progetto. Non sono
 # incluse project_members, mcp_api_key_projects e le selezioni del catalogo
-# (project_ssh_sources, project_db_connections): hanno ON DELETE CASCADE verso
-# projects e spariscono da sole, mentre le risorse restano nel catalogo.
+# (project_ssh_sources, project_db_connections, project_repos): hanno ON DELETE
+# CASCADE verso projects e spariscono da sole, mentre le risorse restano nel catalogo.
 PROJECT_RESOURCE_TABLES = (
-    "repos",
     "kb_documents",
     "web_sites",
     "api_contracts",
@@ -174,39 +173,6 @@ async def count_project_resources(project_id: int) -> dict[str, int]:
             if total:
                 counts[table] = int(total)
     return counts
-
-
-async def bind_repo_to_project(org_id: int, project_id: int, repo_name: str) -> None:
-    """Lega un repo al progetto indicato.
-
-    Il config di org è bootstrap org-level: le righe nate dal sync finiscono nel
-    progetto di default, quindi chi aggiunge un repo da un progetto specifico
-    deve riassegnarlo esplicitamente.
-    """
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE repos SET project_id = $1 WHERE org_id = $2 AND name = $3",
-            project_id,
-            org_id,
-            repo_name,
-        )
-
-
-async def get_repo_project_name(org_id: int, repo_name: str) -> Optional[str]:
-    """Nome del progetto che contiene il repo, se il repo esiste già."""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        val = await conn.fetchval(
-            """
-            SELECT p.name FROM repos r
-            JOIN projects p ON p.id = r.project_id
-            WHERE r.org_id = $1 AND r.name = $2
-            """,
-            org_id,
-            repo_name,
-        )
-    return str(val) if val is not None else None
 
 
 # ── Abilitazione utente↔progetto ──────────────────────────────────────────────

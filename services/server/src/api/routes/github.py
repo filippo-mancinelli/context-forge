@@ -7,12 +7,8 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ...config import RepoConfig
-from ...indexer.indexer import sync_repos_config
-from ...org_config import get_org_config, persist_org_config
 from ...org_settings import get_org_settings
-from ...projects import bind_repo_to_project, get_repo_project_name
-from ..deps import ActiveOrg, ActiveProject, get_active_org, require_project_role
+from ..deps import ActiveOrg, get_active_org
 
 router = APIRouter(prefix="/github", tags=["github"])
 
@@ -29,11 +25,6 @@ class GitHubRepo(BaseModel):
     language: Optional[str] = None
     stargazers_count: int = 0
     fork: bool = False
-
-
-class AddGitHubRepoRequest(BaseModel):
-    full_name: str
-    branch: Optional[str] = None
 
 
 @router.get("/repos", response_model=list[GitHubRepo])
@@ -91,53 +82,6 @@ async def list_github_repos(
             ))
         
         return repos
-
-
-@router.post("/repos/add")
-async def add_github_repo(
-    req: AddGitHubRepoRequest,
-    org: ActiveProject = Depends(require_project_role("member")),
-):
-    """Add a GitHub repository to the active project."""
-    cfg = await get_org_config(org.org_id)
-
-    repo_name = req.full_name.replace("/", "-")
-    # Repo names are unique within an organization, across all its projects
-    existing = next((r for r in cfg.repos if r.name == repo_name), None)
-    if existing:
-        holder = await get_repo_project_name(org.org_id, repo_name)
-        detail = (
-            f"Repository already configured in project '{holder}'"
-            if holder
-            else "Repository already configured"
-        )
-        raise HTTPException(status_code=400, detail=detail)
-
-    # Add new repo
-    branch = req.branch or "main"
-    repo_url = f"https://github.com/{req.full_name}"
-
-    cfg.repos.append(RepoConfig(
-        name=repo_name,
-        type="github",
-        url=repo_url,
-        branch=branch,
-    ))
-
-    await persist_org_config(org.org_id, cfg)
-    await sync_repos_config(org.org_id)
-    await bind_repo_to_project(org.org_id, org.project_id, repo_name)
-
-    return {
-        "status": "ok",
-        "message": f"Repository {req.full_name} added",
-        "repo": {
-            "name": repo_name,
-            "type": "github",
-            "url": repo_url,
-            "branch": branch,
-        },
-    }
 
 
 @router.get("/branches")

@@ -9,6 +9,7 @@ from typing import Optional
 from .server import mcp
 from .permissions import requires_permission
 from ..db import get_pool
+from ..catalog import repos as repo_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -96,28 +97,17 @@ async def code_explain(
         dict with the code snippet and its explanation
     """
     from ..indexer.git_manager import get_repo_local_path
-    from ..org_config import get_org_config
     from .context import resolve_org_id, require_project_id
 
     org_id = await resolve_org_id()
     project_id = await require_project_id()
 
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        in_project = await conn.fetchval(
-            "SELECT 1 FROM repos WHERE org_id=$1 AND project_id=$2 AND name=$3",
-            org_id, project_id, repo,
-        )
-    if not in_project:
-        return {"status": "error", "error": f"Repository '{repo}' not found"}
+    try:
+        record = await repo_catalog.resolve_project_repo(org_id, project_id, repo)
+    except (repo_catalog.RepoNotFoundError, repo_catalog.RepoNotAvailableError) as e:
+        return {"status": "error", "error": str(e)}
 
-    # Read the file
-    cfg = await get_org_config(org_id)
-    repo_cfg = next((r for r in cfg.repos if r.name == repo), None)
-    if not repo_cfg:
-        return {"status": "error", "error": f"Repository '{repo}' not found in runtime settings"}
-
-    repo_path = get_repo_local_path(repo_cfg, org_id)
+    repo_path = get_repo_local_path(record, org_id)
     full_path = Path(repo_path) / file_path.lstrip("/")
 
     if not full_path.exists():
@@ -165,9 +155,10 @@ async def repo_annotate(
 ) -> dict:
     """Add a persistent annotation/note on a file or code chunk.
 
-    Annotations are visible to everyone using this project and persist
-    across re-indexing. Use this to document design decisions, flag technical
-    debt, or leave review notes that agents and teammates can discover.
+    Annotations are visible to every project that selected the repository and
+    persist across re-indexing. Use this to document design decisions, flag
+    technical debt, or leave review notes that agents and teammates can
+    discover.
 
     Args:
         repo: Repository name
@@ -183,28 +174,26 @@ async def repo_annotate(
 
     org_id = await resolve_org_id()
     project_id = await require_project_id()
+
+    try:
+        record = await repo_catalog.resolve_project_repo(org_id, project_id, repo)
+    except (repo_catalog.RepoNotFoundError, repo_catalog.RepoNotAvailableError) as e:
+        return {"status": "error", "error": str(e)}
+
     pool = await get_pool()
-
     async with pool.acquire() as conn:
-        # Verify repo exists in this project
-        exists = await conn.fetchval(
-            "SELECT 1 FROM repos WHERE org_id=$1 AND project_id=$2 AND name=$3", org_id, project_id, repo
-        )
-        if not exists:
-            return {"status": "error", "error": f"Repository '{repo}' not found"}
-
         row = await conn.fetchrow(
-            """INSERT INTO chunk_annotations (org_id, project_id, repo_name, file_path, start_line, end_line, note)
-               VALUES ($1, $2, $3, $4, $5, $6, $7)
+            """INSERT INTO chunk_annotations (org_id, repo_id, file_path, start_line, end_line, note)
+               VALUES ($1, $2, $3, $4, $5, $6)
                RETURNING id, created_at""",
-            org_id, project_id, repo, file_path, start_line, end_line, note,
+            org_id, record.id, file_path, start_line, end_line, note,
         )
 
     return {
         "status": "ok",
         "annotation": {
             "id": row["id"],
-            "repo": repo,
+            "repo": record.name,
             "file_path": file_path,
             "start_line": start_line,
             "end_line": end_line,
@@ -235,29 +224,31 @@ async def repo_annotations(
 
     org_id = await resolve_org_id()
     project_id = await require_project_id()
-    pool = await get_pool()
 
-    query = """SELECT id, repo_name, file_path, start_line, end_line, note, created_at
+    try:
+        record = await repo_catalog.resolve_project_repo(org_id, project_id, repo)
+    except (repo_catalog.RepoNotFoundError, repo_catalog.RepoNotAvailableError) as e:
+        return {"status": "error", "error": str(e)}
+
+    query = """SELECT id, file_path, start_line, end_line, note, created_at
                FROM chunk_annotations
-               WHERE org_id=$1 AND project_id=$2 AND repo_name=$3"""
-    params: list = [org_id, project_id, repo]
-
+               WHERE repo_id=$1"""
+    params: list = [record.id]
     if file_path:
-        query += " AND file_path=$4"
-        params.append(file_path)
-        query += " ORDER BY start_line NULLS LAST, created_at DESC LIMIT $5"
-        params.append(limit)
+        query += " AND file_path=$2 ORDER BY start_line NULLS LAST, created_at DESC LIMIT $3"
+        params += [file_path, limit]
     else:
-        query += " ORDER BY created_at DESC LIMIT $4"
+        query += " ORDER BY created_at DESC LIMIT $2"
         params.append(limit)
 
+    pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(query, *params)
 
     annotations = [
         {
             "id": r["id"],
-            "repo": r["repo_name"],
+            "repo": record.name,
             "file_path": r["file_path"],
             "start_line": r["start_line"],
             "end_line": r["end_line"],

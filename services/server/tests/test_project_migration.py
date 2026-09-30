@@ -44,3 +44,10 @@ def test_ensure_tenant_storage_runs_the_catalog_migration_after_projects():
 
     source = inspect.getsource(tenancy.ensure_tenant_storage)
     assert source.index("apply_project_migration()") < source.index("apply_catalog_migration()")
+
+
+def test_ensure_tenant_storage_runs_the_repo_migration_last():
+    from src import tenancy
+
+    source = inspect.getsource(tenancy.ensure_tenant_storage)
+    assert source.index("apply_catalog_migration()") < source.index("apply_repo_catalog_migration()")

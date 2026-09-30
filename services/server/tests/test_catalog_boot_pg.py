@@ -4,40 +4,12 @@ A fresh context-forge database is created by the baseline migration, so SSH
 folders and databases start project-owned; ensure_tenant_storage() must bring
 them to the catalog shape, with or without an organization.
 """
-import asyncio
-import uuid
-
-import asyncpg
-import pytest
-
-from src import config, db, tenancy
+from src import tenancy
 from src.datasources.secrets import encrypt_secret
 from tests import pgutil
 from tests.pgutil import execute, fetch, fetchval, run_db, seed_org, seed_project
 
 pytestmark = pgutil.requires_pg
-
-
-@pytest.fixture
-def baseline_database(monkeypatch):
-    """Database with the versioned migrations only, before any conversion."""
-    name = f"cf_test_{uuid.uuid4().hex[:12]}"
-
-    async def _admin(statement: str) -> None:
-        conn = await asyncpg.connect(pgutil.TEST_DATABASE_URL)
-        try:
-            await conn.execute(statement)
-        finally:
-            await conn.close()
-
-    asyncio.run(_admin(f'CREATE DATABASE "{name}"'))
-    monkeypatch.setattr(config.get_settings(), "database_url", pgutil.database_url(name))
-    monkeypatch.setattr(config.get_settings(), "encryption_key", "test-key")
-    try:
-        run_db(db.init_db)
-        yield name
-    finally:
-        asyncio.run(_admin(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
 
 
 async def _shape() -> dict:
