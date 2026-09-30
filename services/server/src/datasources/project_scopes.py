@@ -18,7 +18,7 @@ from ..catalog.names import unique_name
 from ..catalog.selections import ResourceNotFoundError, RestrictedResourceError
 from ..db import get_pool
 from . import service
-from .scopes import normalize_scope, scope_label
+from .scopes import ScopeShapeError, normalize_scope, scope_label
 
 __all__ = [
     "ALIAS_MAX_LENGTH", "AliasError", "ResourceNotFoundError", "RestrictedResourceError",
@@ -204,14 +204,21 @@ async def update_scope(
     database: Optional[str],
     schema: Optional[str],
     alias: Optional[str],
+    *,
+    can_select_restricted: bool = False,
 ) -> dict[str, Any]:
-    """Cambia perimetro e alias del collegamento e lo segna come confermato."""
+    """Cambia perimetro e alias del collegamento e lo segna come confermato.
+
+    Su una connessione riservata spostare il perimetro su un altro database o
+    schema vale come un nuovo collegamento: lo fa solo chi può selezionare
+    risorse riservate. Cambiare soltanto l'alias resta permesso ai member."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
             current = await conn.fetchrow(
                 """
-                SELECT s.id, s.db_connection_id, s.alias, c.engine
+                SELECT s.id, s.db_connection_id, s.alias, s.database_name, s.schema_name,
+                       c.engine, c.name, c.restricted
                   FROM project_db_scopes s
                   JOIN db_connections c ON c.id = s.db_connection_id
                   JOIN projects p ON p.id = s.project_id
@@ -222,6 +229,14 @@ async def update_scope(
             if current is None:
                 raise ScopeNotFoundError(f"Data source #{scope_id} is not in this project")
             database, schema = normalize_scope(current["engine"], database, schema)
+            before = (current["database_name"], current["schema_name"])
+            try:
+                before = normalize_scope(current["engine"], *before)
+            except ScopeShapeError:
+                pass  # una riga di forma vecchia: il confronto resta sui valori salvati
+            moved = (database, schema) != before
+            if current["restricted"] and moved and not can_select_restricted:
+                raise RestrictedResourceError(current["name"])
             alias = _clean_alias(alias) or current["alias"]
             await _check_free(
                 conn, project_id, current["db_connection_id"], database, schema, alias, scope_id

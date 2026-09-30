@@ -101,6 +101,38 @@ def test_viewers_cannot_link_and_restricted_needs_an_org_admin(pg_database):
         assert client.post(url, json={"connection_id": ids["vault"], "database": "app"}).status_code == 200
 
 
+def test_only_an_org_admin_re_points_a_restricted_scope(pg_database):
+    ids = _seed()
+    url = f"/api/projects/{ids['alpha']}/databases"
+    with _client(ids["admin"]) as client:
+        linked = client.post(url, json={"connection_id": ids["vault"], "database": "app",
+                                        "schema": "vendite", "alias": "vault"}).json()["scope"]
+    scope_url = f"{url}/{linked['scope_id']}"
+
+    def row():
+        return run_db(lambda: fetch(
+            "SELECT database_name, schema_name, alias FROM project_db_scopes WHERE id = $1",
+            linked["scope_id"],
+        ))[0]
+
+    with _client(ids["member"]) as client:
+        re_pointed = client.put(scope_url, json={"database": "app", "schema": "paghe", "alias": "vault"})
+        other_db = client.put(scope_url, json={"database": "hr", "schema": "vendite", "alias": "vault"})
+        after_refusal = dict(row())
+        renamed = client.put(scope_url, json={"database": "app", "schema": "vendite", "alias": "cassaforte"})
+        # Lo schema omesso vale public su PostgreSQL: è un altro perimetro.
+        implicit = client.put(scope_url, json={"database": "app", "alias": "cassaforte"})
+    with _client(ids["admin"]) as client:
+        by_admin = client.put(scope_url, json={"database": "app", "schema": "paghe", "alias": "cassaforte"})
+
+    assert re_pointed.status_code == 403 and other_db.status_code == 403
+    assert implicit.status_code == 403
+    assert after_refusal == {"database_name": "app", "schema_name": "vendite", "alias": "vault"}
+    assert renamed.status_code == 200 and renamed.json()["scope"]["alias"] == "cassaforte"
+    assert by_admin.status_code == 200
+    assert dict(row()) == {"database_name": "app", "schema_name": "paghe", "alias": "cassaforte"}
+
+
 def test_an_unexpected_error_is_not_echoed_as_a_bad_request(pg_database, monkeypatch):
     ids = _seed()
 

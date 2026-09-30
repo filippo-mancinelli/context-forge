@@ -177,7 +177,8 @@ async def update_project_database(
     await _require_member(project_id, org, user_id)
     try:
         scope = await project_scopes.update_scope(
-            org.org_id, project_id, scope_id, req.database, req.scope_schema, req.alias
+            org.org_id, project_id, scope_id, req.database, req.scope_schema, req.alias,
+            can_select_restricted=role_at_least(org.role, "admin"),
         )
     except _SCOPE_ERRORS as e:
         raise _scope_http_error(e) from e
