@@ -30,3 +30,10 @@ def test_tools_stay_project_scoped():
     import src.mcp.datasources as ds_tools
 
     assert "require_project_id" in inspect.getsource(ds_tools)
+
+
+def test_scope_fields_are_additive():
+    # Le viste di progetto leggono il perimetro dal collegamento, non dalla connessione.
+    source = inspect.getsource(service)
+    assert "project_db_scopes" in source
+    assert "scope_label" in source

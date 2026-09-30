@@ -11,6 +11,7 @@ import logging
 from collections import Counter, defaultdict
 from typing import Any
 
+from ..datasources.scope_migration import LEGACY_DB_LINKS_DDL
 from ..datasources.secrets import decrypt_secret
 from ..db import get_pool
 from .names import machine_name, unique_name
@@ -197,6 +198,9 @@ async def apply_catalog_migration() -> dict[str, Any]:
             if await _column_exists(conn, "ssh_sources", "project_id"):
                 await _move_to_selections(conn, "ssh_sources", "project_ssh_sources", "ssh_source_id", report)
             if await _column_exists(conn, "db_connections", "project_id"):
+                # Un database con connessioni di progetto passa dai collegamenti
+                # legacy, che la migrazione del perimetro converte e poi rimuove.
+                await conn.execute(LEGACY_DB_LINKS_DDL)
                 await _move_to_selections(conn, "db_connections", "project_db_connections", "db_connection_id", report)
             await _drop_legacy_columns(conn)
             await _ensure_unique_names(conn)

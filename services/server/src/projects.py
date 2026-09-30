@@ -144,7 +144,7 @@ async def count_projects(org_id: int) -> int:
 
 # Tabelle che portano project_id e che rendono "occupato" un progetto. Non sono
 # incluse project_members, mcp_api_key_projects e le selezioni del catalogo
-# (project_ssh_sources, project_db_connections, project_repos): hanno ON DELETE
+# (project_ssh_sources, project_db_scopes, project_repos): hanno ON DELETE
 # CASCADE verso projects e spariscono da sole, mentre le risorse restano nel catalogo.
 PROJECT_RESOURCE_TABLES = (
     "kb_documents",

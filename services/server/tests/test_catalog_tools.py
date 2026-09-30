@@ -5,6 +5,8 @@ import pytest
 from src import projects as projects_module
 from src import tenancy as tenancy_module
 from src.catalog import selections as selections_module
+from src.datasources import project_scopes as project_scopes_module
+from src.datasources.scopes import ScopeShapeError
 from src.mcp import catalog_tools
 from src.mcp import context as mcp_context
 from src.mcp import permissions as perms
@@ -80,10 +82,14 @@ def test_catalog_list_marks_what_the_project_already_selected(monkeypatch):
     async def fake_selected(project_id, kind):
         return {1} if kind == "folders" else {9} if kind == "repos" else set()
 
+    async def fake_scopes(org_id, project_id):
+        return []
+
     monkeypatch.setattr(catalog_tools.ssh_service, "list_catalog", fake_folders)
     monkeypatch.setattr(catalog_tools.db_service, "list_catalog_connections", fake_databases)
     monkeypatch.setattr(catalog_tools.repo_catalog, "list_catalog", fake_repos)
     monkeypatch.setattr(catalog_tools.selections, "selected_ids", fake_selected)
+    monkeypatch.setattr(catalog_tools.db_service, "list_connections", fake_scopes)
 
     with _Identity():
         result = asyncio.run(_underlying(catalog_tools.catalog_list)())
@@ -197,7 +203,7 @@ def test_db_tools_say_when_a_connection_is_not_selected(monkeypatch):
     async def nothing_selected(org_id, project_id):
         return []
 
-    monkeypatch.setattr(service, "get_connection", not_selected)
+    monkeypatch.setattr(service, "get_scope", not_selected)
     monkeypatch.setattr(service, "list_connections", nothing_selected)
 
     with _Identity():
@@ -234,3 +240,163 @@ def test_selection_rights_follow_the_principal_kind(monkeypatch):
     assert rights(_principal(42), 42) == (True, True)
     # A user principal without a resolved user id gets no rights.
     assert rights(_principal(42), None) == (False, False)
+
+
+VENDITE = {"scope_id": 31, "alias": "erp-vendite", "scope_label": "app.vendite",
+           "scope_inferred": False}
+
+
+def test_catalog_list_shows_the_scopes_the_project_linked(monkeypatch):
+    async def fake_databases(org_id):
+        return [{"id": 7, "name": "erp", "engine": "postgresql", "host": "h", "database_name": "app",
+                 "ssh_machine_name": None, "description": None, "restricted": False},
+                {"id": 8, "name": "crm", "engine": "mysql", "host": "h", "database_name": "crm",
+                 "ssh_machine_name": None, "description": None, "restricted": False}]
+
+    async def fake_selected(project_id, kind):
+        return {7}
+
+    async def fake_scopes(org_id, project_id):
+        return [
+            {"id": 7, "alias": "erp", "scope_label": "app.public", "scope_inferred": True},
+            {"id": 7, "alias": "erp/app.vendite", "scope_label": "app.vendite", "scope_inferred": False},
+        ]
+
+    monkeypatch.setattr(catalog_tools.db_service, "list_catalog_connections", fake_databases)
+    monkeypatch.setattr(catalog_tools.selections, "selected_ids", fake_selected)
+    monkeypatch.setattr(catalog_tools.db_service, "list_connections", fake_scopes)
+
+    with _Identity():
+        result = asyncio.run(_underlying(catalog_tools.catalog_list)("databases"))
+
+    erp, crm = result["databases"]
+    assert erp["selected"] is True and erp["scopes"] == [
+        {"alias": "erp", "scope": "app.public", "inferred": True},
+        {"alias": "erp/app.vendite", "scope": "app.vendite", "inferred": False},
+    ]
+    assert crm["selected"] is False and crm["scopes"] == []
+
+
+def _scope_calls(monkeypatch, calls, *, found=None, error=None):
+    """create_scope finto: registra la chiamata, oppure solleva ``error``.
+    ``found`` è il perimetro che find_project_scope trova dopo la chiamata."""
+
+    async def fake_create(org_id, project_id, connection_id, database, schema, alias,
+                          user_id, can_select_restricted, inferred=False):
+        calls.append((org_id, project_id, connection_id, database, schema, alias,
+                      user_id, can_select_restricted, inferred))
+        if error is not None:
+            raise error
+        return {"id": 31}
+
+    async def fake_find(org_id, project_id, connection_id, database, schema):
+        return found if calls else None
+
+    async def fake_catalog_connection(org_id, connection_id, include_secret=False):
+        return {"id": connection_id, "name": "erp", "engine": "postgresql", "database_name": "app"}
+
+    monkeypatch.setattr(catalog_tools.project_scopes, "create_scope", fake_create)
+    monkeypatch.setattr(catalog_tools.db_service, "find_project_scope", fake_find)
+    monkeypatch.setattr(catalog_tools.db_service, "get_catalog_connection", fake_catalog_connection)
+
+
+def test_resource_select_links_the_chosen_scope(monkeypatch):
+    calls = []
+    _roles(monkeypatch, "member", "member")
+    _resource(monkeypatch, {"id": 7, "name": "erp", "restricted": False})
+    _scope_calls(monkeypatch, calls, found=VENDITE)
+
+    with _Identity():
+        result = asyncio.run(_underlying(catalog_tools.resource_select)(
+            "databases", "erp", database="app", schema="vendite", alias="erp-vendite"))
+
+    # Il perimetro scelto da chi chiama nasce confermato.
+    assert calls == [(1, 4, 7, "app", "vendite", "erp-vendite", 42, False, False)]
+    assert result == {"status": "ok", "kind": "databases", "name": "erp",
+                      "already_selected": False, "scope_id": 31, "alias": "erp-vendite",
+                      "scope": "app.vendite", "inferred": False}
+
+
+def test_resource_select_without_a_scope_links_the_default_one(monkeypatch):
+    calls = []
+    _roles(monkeypatch, "member", "member")
+    _resource(monkeypatch, {"id": 7, "name": "erp", "restricted": False})
+    _scope_calls(monkeypatch, calls, found=VENDITE)
+
+    with _Identity():
+        result = asyncio.run(_underlying(catalog_tools.resource_select)("databases", "erp"))
+
+    # Senza database ne schema il perimetro e' dedotto dalla connessione, non
+    # scelto: resta marcato come dedotto e tiene l'avviso di verificarlo.
+    assert calls == [(1, 4, 7, "app", "public", None, 42, False, True)]
+    assert result["status"] == "ok"
+
+
+def test_resource_select_with_only_the_schema_confirms_the_scope(monkeypatch):
+    """Chi nomina anche solo lo schema ha scelto il perimetro: quello nasce
+    confermato, come quando nomina il database."""
+    calls = []
+    _roles(monkeypatch, "member", "member")
+    _resource(monkeypatch, {"id": 7, "name": "erp", "restricted": False})
+    _scope_calls(monkeypatch, calls, found=VENDITE)
+
+    with _Identity():
+        asyncio.run(_underlying(catalog_tools.resource_select)(
+            "databases", "erp", schema="vendite"))
+
+    assert calls == [(1, 4, 7, None, "vendite", None, 42, False, False)]
+
+
+def test_resource_select_reports_an_existing_scope_as_already_selected(monkeypatch):
+    calls = []
+    _roles(monkeypatch, "member", "member")
+    _resource(monkeypatch, {"id": 7, "name": "erp", "restricted": False})
+    _scope_calls(monkeypatch, calls, found=VENDITE,
+                 error=project_scopes_module.ScopeConflictError("scope already linked"))
+
+    with _Identity():
+        result = asyncio.run(_underlying(catalog_tools.resource_select)(
+            "databases", "erp", database="app", schema="vendite"))
+
+    assert result["status"] == "ok" and result["already_selected"] is True
+    assert result["alias"] == "erp-vendite"
+
+
+@pytest.mark.parametrize("error, text", [
+    (project_scopes_module.ScopeConflictError("alias 'erp' is already used"), "already used"),
+    (ScopeShapeError("Engine 'mysql' has no schema separate from the database 'app'"), "no schema"),
+])
+def test_resource_select_reports_scope_errors(monkeypatch, error, text):
+    calls = []
+    _roles(monkeypatch, "member", "member")
+    _resource(monkeypatch, {"id": 7, "name": "erp", "restricted": False})
+    _scope_calls(monkeypatch, calls, found=None, error=error)
+
+    with _Identity():
+        result = asyncio.run(_underlying(catalog_tools.resource_select)(
+            "databases", "erp", database="app", schema="other", alias="erp"))
+
+    assert result["status"] == "error" and text in result["error"]
+
+
+def test_resource_select_refuses_a_restricted_scope(monkeypatch):
+    calls = []
+    _roles(monkeypatch, "member", "member")
+    _resource(monkeypatch, {"id": 7, "name": "erp", "restricted": False})
+    _scope_calls(monkeypatch, calls, found=None, error=selections_module.RestrictedResourceError("erp"))
+
+    with _Identity():
+        with pytest.raises(perms.PermissionDenied, match="restricted"):
+            asyncio.run(_underlying(catalog_tools.resource_select)(
+                "databases", "erp", database="app", schema="other", alias="erp"))
+
+
+def test_scope_fields_apply_only_to_databases(monkeypatch):
+    _roles(monkeypatch, "member", "member")
+    _resource(monkeypatch, {"id": 1, "name": "logs", "restricted": False})
+
+    with _Identity():
+        result = asyncio.run(_underlying(catalog_tools.resource_select)(
+            "folders", "logs", schema="vendite"))
+
+    assert result["status"] == "error" and "databases" in result["error"]

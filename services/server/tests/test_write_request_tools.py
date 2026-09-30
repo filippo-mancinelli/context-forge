@@ -33,6 +33,30 @@ def _patch_principal(monkeypatch):
     monkeypatch.setattr(mcp_approvals, "get_current_principal", lambda: _Principal(), raising=False)
 
 
+def _scope(alias="erp", name="erp", schema="public"):
+    """A confirmed PostgreSQL scope of connection 4, as service.get_scope returns it."""
+    return {"id": 4, "name": name, "engine": "postgresql", "database_name": "app",
+            "scope_id": 31, "alias": alias, "scope_database": "app", "scope_schema": schema,
+            "scope_inferred": False, "scope_label": f"app.{schema}"}
+
+
+def _patch_scopes(monkeypatch, *scopes):
+    """get_scope resolves an alias (case-insensitive) or a connection name; other refs are unknown."""
+    from src.datasources import service
+
+    async def fake_get_scope(org_id, project_id, ref, include_secret=False):
+        for scope in scopes:
+            if str(ref).lower() == scope["alias"].lower() or ref == scope["name"]:
+                return scope
+        raise service.ConnectionNotFoundError(f"Database connection '{ref}' not found")
+
+    async def fake_list(org_id, project_id):
+        return list(scopes)
+
+    monkeypatch.setattr(service, "get_scope", fake_get_scope)
+    monkeypatch.setattr(service, "list_connections", fake_list)
+
+
 # ===== db_execute =====
 
 def test_db_execute_direct_path_is_unchanged(monkeypatch):
@@ -50,6 +74,7 @@ def test_db_execute_direct_path_is_unchanged(monkeypatch):
 
     monkeypatch.setattr(mcp_datasources.service, "run_write", fake_run_write)
     monkeypatch.setattr(wr_service, "create", no_create)
+    _patch_scopes(monkeypatch, _scope())
     set_current_org_id(1)
     set_current_project_id(2)
     set_current_permissions(frozenset({"db-write"}))
@@ -68,6 +93,7 @@ def test_db_execute_direct_path_with_auth_disabled(monkeypatch):
         return {"connection": "erp", "sql": sql, "row_count": 2, "duration_ms": 1}
 
     monkeypatch.setattr(mcp_datasources.service, "run_write", fake_run_write)
+    _patch_scopes(monkeypatch, _scope())
     set_current_org_id(1)
     set_current_project_id(2)
     set_current_permissions(None)
@@ -81,6 +107,7 @@ def test_db_execute_direct_path_error_shape_is_unchanged(monkeypatch):
         raise RuntimeError("db statement timeout")
 
     monkeypatch.setattr(mcp_datasources.service, "run_write", boom)
+    _patch_scopes(monkeypatch, _scope())
     set_current_org_id(1)
     set_current_project_id(2)
     set_current_permissions(frozenset({"db-write"}))
@@ -96,9 +123,6 @@ def test_db_execute_without_db_write_creates_a_request(monkeypatch):
     async def no_run_write(*a, **k):
         raise AssertionError("must not execute without db-write")
 
-    async def fake_get_connection(org_id, project_id, ref, include_secret=False):
-        return {"id": 4, "name": "erp"}
-
     async def fake_sql_preview(org_id, project_id, connection, sql):
         return {"statement": sql, "plan_rows": 3, "plan_text": "{}"}
 
@@ -107,7 +131,7 @@ def test_db_execute_without_db_write_creates_a_request(monkeypatch):
         return {"id": 12}
 
     monkeypatch.setattr(mcp_datasources.service, "run_write", no_run_write)
-    monkeypatch.setattr(mcp_datasources.service, "get_connection", fake_get_connection)
+    _patch_scopes(monkeypatch, _scope())
     monkeypatch.setattr(write_previews, "sql_preview", fake_sql_preview)
     monkeypatch.setattr(wr_service, "create", fake_create)
     set_current_org_id(1)
@@ -138,6 +162,7 @@ def test_db_execute_proposal_validates_before_previewing(monkeypatch):
         raise AssertionError("must not preview an invalid statement")
 
     monkeypatch.setattr(write_previews, "sql_preview", no_preview)
+    _patch_scopes(monkeypatch, _scope())
     set_current_org_id(1)
     set_current_project_id(2)
     set_current_permissions(frozenset({"context-write"}))
@@ -159,9 +184,6 @@ def test_db_execute_with_neither_permission_is_denied():
 
 def test_db_execute_proposal_scrubs_the_explain_error(monkeypatch):
     """Il preview non deve portare credenziali di connessione all'agente/UI."""
-    async def fake_get_connection(org_id, project_id, ref, include_secret=False):
-        return {"id": 4, "name": "erp"}
-
     async def fake_sql_preview(org_id, project_id, connection, sql):
         return {
             "statement": sql,
@@ -173,7 +195,7 @@ def test_db_execute_proposal_scrubs_the_explain_error(monkeypatch):
     async def fake_create(**kwargs):
         return {"id": 12, "preview": kwargs["preview"]}
 
-    monkeypatch.setattr(mcp_datasources.service, "get_connection", fake_get_connection)
+    _patch_scopes(monkeypatch, _scope())
     monkeypatch.setattr(write_previews, "sql_preview", fake_sql_preview)
     monkeypatch.setattr(wr_service, "create", fake_create)
     set_current_org_id(1)
@@ -186,6 +208,128 @@ def test_db_execute_proposal_scrubs_the_explain_error(monkeypatch):
     assert "password" not in out["preview"]["explain_error"]
     assert out["preview"]["explain_error"] == "could not connect to postgresql://host:5432/db"
 
+
+def _no_request(monkeypatch):
+    async def no_preview(*a, **k):
+        raise AssertionError("a refused proposal must not be previewed")
+
+    async def no_create(**kwargs):
+        raise AssertionError("a refused proposal must not be stored")
+
+    monkeypatch.setattr(write_previews, "sql_preview", no_preview)
+    monkeypatch.setattr(wr_service, "create", no_create)
+
+
+def test_db_execute_proposal_targets_the_scope_alias(monkeypatch):
+    """The request stores the scope alias, not the connection name: the same
+    connection can be linked on several scopes of the project."""
+    _patch_principal(monkeypatch)
+    created, previewed = {}, []
+
+    async def fake_sql_preview(org_id, project_id, connection, sql):
+        previewed.append(connection)
+        return {"statement": sql, "plan_rows": 1, "plan_text": "{}"}
+
+    async def fake_create(**kwargs):
+        created.update(kwargs)
+        return {"id": 14}
+
+    _patch_scopes(monkeypatch, _scope(), _scope(alias="erp-vendite", schema="vendite"))
+    monkeypatch.setattr(write_previews, "sql_preview", fake_sql_preview)
+    monkeypatch.setattr(wr_service, "create", fake_create)
+    set_current_org_id(1)
+    set_current_project_id(2)
+    set_current_permissions(frozenset({"context-write"}))
+
+    out = asyncio.run(_underlying(mcp_datasources.db_execute)(
+        connection="ERP-Vendite", sql="UPDATE vendite.t SET a=1 WHERE id=1"))
+
+    assert out["status"] == "pending_approval" and out["request_id"] == 14
+    assert created["target"] == "erp-vendite"
+    assert previewed == ["erp-vendite"]
+    assert created["payload"] == {"sql": "UPDATE vendite.t SET a=1 WHERE id=1"}
+
+
+def test_db_execute_proposal_outside_the_scope_schema_is_refused(monkeypatch):
+    _no_request(monkeypatch)
+    _patch_scopes(monkeypatch, _scope(alias="erp-vendite", schema="vendite"))
+    set_current_org_id(1)
+    set_current_project_id(2)
+    set_current_permissions(frozenset({"context-write"}))
+
+    out = asyncio.run(_underlying(mcp_datasources.db_execute)(
+        connection="erp-vendite", sql="UPDATE acquisti.t SET a=1 WHERE id=1"))
+
+    # Same shape as the direct path's scope refusal.
+    assert out["status"] == "error"
+    assert "limited to the scope 'app.vendite'" in out["error"]
+    assert "erp-vendite" in out["error"]
+
+
+@pytest.mark.parametrize("error_name, text", [
+    ("ConnectionNotSelectedError", "not available in this project"),
+    ("ConnectionNotFoundError", "not found"),
+])
+def test_db_execute_proposal_on_an_unusable_reference_is_refused(monkeypatch, error_name, text):
+    from src.datasources import service
+
+    _no_request(monkeypatch)
+    error = getattr(service, error_name)
+
+    async def refuse(org_id, project_id, ref, include_secret=False):
+        raise error(f"Database connection '{ref}' {text}")
+
+    async def one_scope(org_id, project_id):
+        return [_scope()]
+
+    monkeypatch.setattr(service, "get_scope", refuse)
+    monkeypatch.setattr(service, "list_connections", one_scope)
+    set_current_org_id(1)
+    set_current_project_id(2)
+    set_current_permissions(frozenset({"context-write"}))
+
+    out = asyncio.run(_underlying(mcp_datasources.db_execute)(
+        connection="crm", sql="UPDATE t SET a=1 WHERE id=1"))
+
+    assert out["status"] == "error" and text in out["error"]
+
+
+def test_db_execute_proposal_on_an_ambiguous_reference_is_refused(monkeypatch):
+    from src.datasources import service
+
+    _no_request(monkeypatch)
+
+    async def ambiguous(org_id, project_id, ref, include_secret=False):
+        raise service.ConnectionAmbiguousError("Database connection #4 has 2 scopes in this project")
+
+    monkeypatch.setattr(service, "get_scope", ambiguous)
+    set_current_org_id(1)
+    set_current_project_id(2)
+    set_current_permissions(frozenset({"context-write"}))
+
+    out = asyncio.run(_underlying(mcp_datasources.db_execute)(
+        connection="4", sql="UPDATE t SET a=1 WHERE id=1"))
+
+    assert out == {"status": "error", "error": "Database connection #4 has 2 scopes in this project"}
+
+
+def test_db_execute_direct_path_runs_on_the_resolved_alias(monkeypatch):
+    called = {}
+
+    async def fake_run_write(org_id, project_id, ref, sql, source="mcp"):
+        called["ref"] = ref
+        return {"connection": ref, "sql": sql, "row_count": 1, "duration_ms": 1}
+
+    monkeypatch.setattr(mcp_datasources.service, "run_write", fake_run_write)
+    _patch_scopes(monkeypatch, _scope(alias="erp-vendite", schema="vendite"))
+    set_current_org_id(1)
+    set_current_project_id(2)
+    set_current_permissions(frozenset({"db-write"}))
+
+    asyncio.run(_underlying(mcp_datasources.db_execute)(
+        connection="ERP-VENDITE", sql="UPDATE t SET a=1 WHERE id=1"))
+
+    assert called == {"ref": "erp-vendite"}
 
 # ===== ssh_write_file =====
 

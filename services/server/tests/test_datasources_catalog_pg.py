@@ -1,3 +1,4 @@
+import json
 from urllib.parse import urlparse
 
 import pytest
@@ -6,7 +7,7 @@ from src import config
 from src.catalog import selections
 from src.datasources import service
 from src.datasources.secrets import decrypt_secret, encrypt_secret
-from tests.pgutil import TEST_DATABASE_URL, fetchval, requires_pg, run_db, seed_org, seed_project
+from tests.pgutil import TEST_DATABASE_URL, execute, fetchval, requires_pg, run_db, seed_org, seed_project
 
 pytestmark = requires_pg
 
@@ -82,23 +83,29 @@ def test_project_view_and_not_selected_error(pg_database):
     assert "not available in this project" in str(not_selected)
     assert isinstance(not_selected, service.ConnectionNotFoundError)
     assert not isinstance(missing, service.ConnectionNotSelectedError)
-    assert {c["name"]: c["project_count"] for c in catalog} == {"crm": 0, "erp": 1}
+    assert {c["name"]: c["scope_count"] for c in catalog} == {"crm": 0, "erp": 1}
 
 
-def test_find_connection_matches_null_values(pg_database):
+def test_find_connection_matches_the_route_the_user_and_the_engine(pg_database):
     async def scenario():
         org = await seed_org("acme")
         machine = await _machine(org)
         tunnel = await service.create_connection(org, _data(ssh_machine_id=machine))
         return (
             tunnel["id"],
-            await service.find_connection(org, machine, "127.0.0.1", 3306, "app"),
-            await service.find_connection(org, None, "127.0.0.1", 3306, "app"),
+            await service.find_connection(org, machine, "127.0.0.1", 3306, "reader", "mysql"),
+            await service.find_connection(org, None, "127.0.0.1", 3306, "reader", "mysql"),
+            await service.find_connection(org, machine, "127.0.0.1", 3306, "writer", "mysql"),
+            await service.find_connection(org, machine, "127.0.0.1", 3306, "reader", "postgresql"),
         )
 
-    tunnel_id, via_machine, direct = run_db(scenario)
+    tunnel_id, via_machine, direct, other_user, other_engine = run_db(scenario)
+    # Il database non conta più: lo stesso server con la stessa utenza è una connessione sola.
     assert via_machine["id"] == tunnel_id
-    assert direct is None
+    assert direct is None and other_user is None
+    # Un motore diverso è un'altra connessione: riusare quella sbagliata
+    # normalizzerebbe il perimetro sulla forma di un altro motore.
+    assert other_engine is None
 
 
 def test_update_keeps_the_password_and_delete_drops_selections(pg_database):
@@ -110,7 +117,7 @@ def test_update_keeps_the_password_and_delete_drops_selections(pg_database):
         stored = await service.get_catalog_connection(org, created["id"], include_secret=True)
         await selections.select_resource(org, project, "databases", created["id"], None, True)
         await service.delete_connection(org, created["id"])
-        remaining = await fetchval("SELECT count(*) FROM project_db_connections")
+        remaining = await fetchval("SELECT count(*) FROM project_db_scopes")
         return updated, stored, remaining
 
     updated, stored, remaining = run_db(scenario)
@@ -144,7 +151,7 @@ def test_tunnelled_connection_reaches_the_database_through_the_machine(pg_databa
         captured["tunnel"] = (connection_id, ssh_cfg, remote_host, remote_port)
         return "127.0.0.1", 15432
 
-    def fake_engine(connection_id, engine, url):
+    def fake_engine(connection_id, engine, url, scope_key=()):
         captured["url"] = url
         return "engine"
 
@@ -182,3 +189,59 @@ def test_resolve_connection_keeps_the_not_selected_error(pg_database):
             await service.resolve_connection(org, project, "crm")
 
     run_db(scenario)
+
+
+SEEN = [
+    {"database": "app", "schema": "public", "label": "app.public"},
+    {"database": "app", "schema": "sales", "label": "app.sales"},
+]
+
+
+def test_catalog_row_counts_scopes_and_shows_the_scopes_seen(pg_database):
+    async def scenario():
+        org = await seed_org("acme")
+        alpha = await seed_project(org, "alpha")
+        conn = await service.create_connection(org, _data(name="erp", engine="postgresql", port=5432))
+        await selections.select_resource(org, alpha, "databases", conn["id"], None, False)
+        await execute(
+            "INSERT INTO project_db_scopes (project_id, db_connection_id, database_name, "
+            "schema_name, alias) VALUES ($1, $2, 'app', 'sales', 'erp-sales')",
+            alpha, conn["id"],
+        )
+        await execute(
+            "UPDATE db_connections SET available_scopes = $2::jsonb, "
+            "scopes_checked_at = '2026-09-18T10:00:00+00' WHERE id = $1",
+            conn["id"], json.dumps(SEEN),
+        )
+        return (
+            await service.list_catalog_connections(org),
+            await service.get_catalog_connection(org, conn["id"]),
+        )
+
+    listed, single = run_db(scenario)
+    row = listed[0]
+    # La colonna conta i perimetri, non i progetti: due perimetri nello stesso progetto.
+    assert row["scope_count"] == 2 and "project_count" not in row
+    assert row["available_scopes"] == SEEN
+    assert row["scopes_checked_at"].startswith("2026-09-18T10:00:00")
+    assert single["available_scopes"] == SEEN
+
+
+def test_catalog_row_counts_the_scopes_of_every_project(pg_database):
+    async def scenario():
+        org = await seed_org("acme")
+        alpha = await seed_project(org, "alpha")
+        beta = await seed_project(org, "beta")
+        conn = await service.create_connection(org, _data(name="erp", engine="postgresql", port=5432))
+        # Due progetti diversi collegano la stessa connessione, ognuno sul suo perimetro.
+        await selections.select_resource(org, alpha, "databases", conn["id"], None, False)
+        await selections.select_resource(org, beta, "databases", conn["id"], None, False)
+        return await service.list_catalog_connections(org), await fetchval(
+            "SELECT count(DISTINCT project_id) FROM project_db_scopes WHERE db_connection_id = $1",
+            conn["id"],
+        )
+
+    listed, projects = run_db(scenario)
+    # Il conteggio somma i perimetri dei progetti: uno per progetto fa due.
+    assert projects == 2
+    assert listed[0]["scope_count"] == 2

@@ -284,6 +284,7 @@ async def ensure_tenant_storage() -> Optional[int]:
     """
     from .catalog.migration import apply_catalog_migration
     from .catalog.repo_migration import apply_repo_catalog_migration
+    from .datasources.scope_migration import apply_db_scope_migration
 
     default_org_id = await ensure_default_org()
     if default_org_id is not None:
@@ -295,6 +296,7 @@ async def ensure_tenant_storage() -> Optional[int]:
     # The catalog conversions need no org: they also run before setup.
     await apply_catalog_migration()
     await apply_repo_catalog_migration()
+    await apply_db_scope_migration()
     return default_org_id
 
 

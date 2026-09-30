@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from ... import projects
 from ...catalog import machines, selections
 from ...catalog import repos as repo_catalog
+from ...datasources import scope_catalog
 from ...datasources import service as db_service
 from ...datasources.engines import SUPPORTED_ENGINES
 from ...org_settings import get_org_settings
@@ -260,6 +261,46 @@ async def test_database(connection_id: int, org: ActiveOrg = Depends(require_rol
 @router.get("/databases/{connection_id}/projects")
 async def database_projects(connection_id: int, org: ActiveOrg = Depends(require_role("admin"))):
     return {"projects": await selections.projects_using(org.org_id, "databases", connection_id)}
+
+
+async def _require_live_scope_listing(org: ActiveOrg, user_id: int, connection_id: int) -> None:
+    """Rileggere i perimetri dal server usa la credenziale della connessione per
+    aprirla ed elencarne database e schemi: lo chiede chi lavora davvero su un
+    progetto dell'organizzazione, e per una connessione riservata solo un admin."""
+    connection = await db_service.get_catalog_connection(org.org_id, connection_id)
+    if connection["restricted"]:
+        if not role_at_least(org.role, "admin"):
+            raise HTTPException(
+                status_code=403,
+                detail="Restricted connection: only organization admins can read its scopes from the server",
+            )
+        return
+    if role_at_least(org.role, "admin"):
+        return
+    accessible = await projects.list_accessible_projects(org.org_id, user_id)
+    if not any(role_at_least(p["role"], "member") for p in accessible):
+        raise HTTPException(
+            status_code=403,
+            detail="Requires the member role on at least one project of this organization",
+        )
+
+
+# La fotografia dei perimetri serve a chi sceglie quello del proprio progetto: basta
+# poter consultare il catalogo. Non espone credenziali, solo nomi di database e schemi.
+# Rileggerla dal server è invece un'operazione sulla connessione, con i suoi diritti.
+@router.get("/databases/{connection_id}/scopes")
+async def database_scopes(
+    connection_id: int,
+    refresh: bool = False,
+    org: ActiveOrg = Depends(get_active_org),
+    user_id: int = Depends(get_current_user_id),
+):
+    try:
+        if refresh:
+            await _require_live_scope_listing(org, user_id, connection_id)
+        return await scope_catalog.list_available_scopes(org.org_id, connection_id, refresh)
+    except db_service.ConnectionNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # ── Repository ────────────────────────────────────────────────────────────────

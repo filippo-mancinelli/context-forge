@@ -368,12 +368,34 @@ def _capture_selection(monkeypatch, module, calls):
     monkeypatch.setattr(module.selections, "select_resource", fake_select)
 
 
-def test_db_add_never_passes_a_secret_marks_pending_and_selects(monkeypatch):
+def _capture_scope(monkeypatch, module, calls, restricted_name=None):
+    """create_scope finto con lo stesso comportamento del database: registra il
+    perimetro e rifiuta una connessione riservata a chi non può sceglierla."""
+    linked = {}
+
+    async def fake_find(org_id, project_id, connection_id, database, schema):
+        return linked.get(connection_id)
+
+    async def fake_create(org_id, project_id, connection_id, database, schema, alias,
+                          user_id, can_select_restricted):
+        calls.append((org_id, project_id, connection_id, database, schema, can_select_restricted))
+        if restricted_name and not can_select_restricted:
+            raise selections_module.RestrictedResourceError(restricted_name)
+        label = f"{database}.{schema}" if schema else str(database)
+        linked[connection_id] = {"scope_id": 50, "alias": "x", "scope_label": label,
+                                 "scope_inferred": False}
+        return {"id": 50}
+
+    monkeypatch.setattr(module.service, "find_project_scope", fake_find)
+    monkeypatch.setattr(module.project_scopes, "create_scope", fake_create)
+
+
+def test_db_add_never_passes_a_secret_marks_pending_and_links_the_scope(monkeypatch):
     from src.mcp import datasources
 
-    created, marked, selected = [], [], []
+    created, marked, scoped = [], [], []
 
-    async def no_existing(org_id, machine_id, host, port, database_name):
+    async def no_existing(org_id, machine_id, host, port, username, engine):
         return None
 
     async def fake_create(org_id, data):
@@ -386,7 +408,7 @@ def test_db_add_never_passes_a_secret_marks_pending_and_selects(monkeypatch):
     monkeypatch.setattr(datasources.service, "find_connection", no_existing)
     monkeypatch.setattr(datasources.service, "create_connection", fake_create)
     monkeypatch.setattr(datasources.service, "mark_pending_secret", fake_mark)
-    _capture_selection(monkeypatch, datasources, selected)
+    _capture_scope(monkeypatch, datasources, scoped)
 
     with _SourceIdentity():
         result = asyncio.run(
@@ -400,22 +422,25 @@ def test_db_add_never_passes_a_secret_marks_pending_and_selects(monkeypatch):
     org_id, data = created[0]
     assert org_id == 1
     assert not any(key in data for key in SECRET_KEYS)
+    assert data["database_name"] == "asterai_v2"
     assert marked == [(1, 9)]
-    assert selected == [(1, 4, "databases", 9)]
+    assert scoped == [(1, 4, 9, "asterai_v2", None, False)]
+    assert result["scope"] == {"alias": "x", "scope": "asterai_v2", "inferred": False}
     assert "next_step" in result
 
 
-def test_db_add_selects_an_existing_connection_instead_of_duplicating(monkeypatch):
+def test_db_add_reuses_an_existing_connection_instead_of_duplicating(monkeypatch):
     from src.mcp import datasources
 
-    selected, looked_up = [], []
+    scoped, looked_up = [], []
 
     async def fake_machine(org_id, name):
         return {"id": 5, "name": name}
 
-    async def existing(org_id, machine_id, host, port, database_name):
-        looked_up.append(machine_id)
-        return {"id": 3, "name": "chat-db", "status": "ok"}
+    async def existing(org_id, machine_id, host, port, username, engine):
+        looked_up.append((machine_id, username, engine))
+        return {"id": 3, "name": "chat-db", "engine": "mysql", "database_name": "asterchat",
+                "status": "ok"}
 
     async def must_not_create(*args):
         raise AssertionError("create_connection must not be called")
@@ -423,20 +448,89 @@ def test_db_add_selects_an_existing_connection_instead_of_duplicating(monkeypatc
     monkeypatch.setattr(datasources.machines, "get_machine_by_name", fake_machine)
     monkeypatch.setattr(datasources.service, "find_connection", existing)
     monkeypatch.setattr(datasources.service, "create_connection", must_not_create)
-    _capture_selection(monkeypatch, datasources, selected)
+    _capture_scope(monkeypatch, datasources, scoped)
 
     with _SourceIdentity():
         result = asyncio.run(
             _underlying(datasources.db_add)(
                 "chat-db", "mysql", host="127.0.0.1", port=3306, database_name="asterchat",
-                ssh_machine="astercare@192.168.0.206",
+                username="astercare", ssh_machine="astercare@192.168.0.206",
             )
         )
 
     assert result["status"] == "ok" and result["created"] is False
-    assert looked_up == [5]
-    assert selected == [(1, 4, "databases", 3)]
+    assert looked_up == [(5, "astercare", "mysql")]
+    assert scoped == [(1, 4, 3, "asterchat", None, False)]
     assert "next_step" not in result
+
+
+def test_db_add_does_not_reuse_a_connection_of_another_engine(monkeypatch):
+    """Il motore fa parte dell'identità della connessione: db_add non può
+    attaccarsi a un server dello stesso indirizzo con un motore diverso, altrimenti
+    normalizzerebbe il perimetro sulla forma sbagliata e direbbe di non aver creato
+    nulla parlando di un'altra connessione."""
+    from src.mcp import datasources
+
+    created, scoped, looked_up = [], [], []
+    rows = [{"id": 3, "name": "erp", "engine": "postgresql", "database_name": "app",
+             "status": "ok"}]
+
+    async def by_engine(org_id, machine_id, host, port, username, engine):
+        looked_up.append(engine)
+        return next((r for r in rows if r["engine"] == engine), None)
+
+    async def fake_create(org_id, data):
+        created.append(data)
+        return {"id": 9, "name": data["name"], "engine": data["engine"], "status": "unknown"}
+
+    async def fake_mark(org_id, connection_id):
+        return None
+
+    monkeypatch.setattr(datasources.service, "find_connection", by_engine)
+    monkeypatch.setattr(datasources.service, "create_connection", fake_create)
+    monkeypatch.setattr(datasources.service, "mark_pending_secret", fake_mark)
+    _capture_scope(monkeypatch, datasources, scoped)
+
+    with _SourceIdentity():
+        result = asyncio.run(
+            _underlying(datasources.db_add)(
+                "erp-mysql", "mysql", host="10.0.0.8", port=3306,
+                database_name="app", username="reader",
+            )
+        )
+
+    assert looked_up == ["mysql"]
+    assert result["created"] is True and [d["engine"] for d in created] == ["mysql"]
+    assert scoped == [(1, 4, 9, "app", None, False)]
+
+
+def test_db_add_links_a_second_schema_on_the_same_server(monkeypatch):
+    from src.mcp import datasources
+
+    scoped = []
+
+    async def existing(org_id, machine_id, host, port, username, engine):
+        return {"id": 3, "name": "erp", "engine": "postgresql", "database_name": "app",
+                "status": "ok"}
+
+    async def must_not_create(*args):
+        raise AssertionError("create_connection must not be called")
+
+    monkeypatch.setattr(datasources.service, "find_connection", existing)
+    monkeypatch.setattr(datasources.service, "create_connection", must_not_create)
+    _capture_scope(monkeypatch, datasources, scoped)
+
+    with _SourceIdentity():
+        result = asyncio.run(
+            _underlying(datasources.db_add)(
+                "erp-vendite", "postgresql", host="10.0.0.8", port=5432, schema="vendite",
+                username="reader",
+            )
+        )
+
+    # Senza database esplicito vale il database predefinito della connessione riusata.
+    assert scoped == [(1, 4, 3, "app", "vendite", False)]
+    assert result["scope"]["scope"] == "app.vendite"
 
 
 def test_db_add_has_no_secret_parameter():
@@ -583,17 +677,18 @@ def test_db_add_does_not_hand_a_restricted_connection_to_an_api_key(monkeypatch)
     una connessione riservata registrandola di nuovo."""
     from src.mcp import datasources
 
-    rights = []
+    scoped = []
 
-    async def existing(org_id, machine_id, host, port, database_name):
-        return {"id": 3, "name": "payroll", "status": "ok"}
+    async def existing(org_id, machine_id, host, port, username, engine):
+        return {"id": 3, "name": "payroll", "engine": "mysql", "database_name": "payroll",
+                "status": "ok"}
 
     async def must_not_create(*args):
         raise AssertionError("create_connection must not be called")
 
     monkeypatch.setattr(datasources.service, "find_connection", existing)
     monkeypatch.setattr(datasources.service, "create_connection", must_not_create)
-    _refuse_restricted(monkeypatch, datasources, rights, "payroll")
+    _capture_scope(monkeypatch, datasources, scoped, restricted_name="payroll")
 
     with _SourceIdentity():
         with pytest.raises(perms.PermissionDenied, match="restricted"):
@@ -603,7 +698,7 @@ def test_db_add_does_not_hand_a_restricted_connection_to_an_api_key(monkeypatch)
                 )
             )
 
-    assert rights == [False]
+    assert [call[-1] for call in scoped] == [False]
 
 
 def test_db_add_refuses_a_role_below_member(monkeypatch):
@@ -614,11 +709,11 @@ def test_db_add_refuses_a_role_below_member(monkeypatch):
     async def must_not_find(*args):
         raise AssertionError("find_connection must not be called")
 
-    async def must_not_select(*args):
-        raise AssertionError("select_resource must not be called")
+    async def must_not_link(*args):
+        raise AssertionError("create_scope must not be called")
 
     monkeypatch.setattr(datasources.service, "find_connection", must_not_find)
-    monkeypatch.setattr(datasources.selections, "select_resource", must_not_select)
+    monkeypatch.setattr(datasources.project_scopes, "create_scope", must_not_link)
 
     with _SourceIdentity(user_id=42):
         with pytest.raises(perms.PermissionDenied, match="member role"):

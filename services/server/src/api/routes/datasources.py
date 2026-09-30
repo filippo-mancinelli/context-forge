@@ -1,4 +1,10 @@
-"""REST API routes for external database connections (data sources)."""
+"""REST API routes for the data sources of the active project.
+
+Ogni rotta di dettaglio riceve l'id del perimetro, cioè del collegamento del
+progetto a una connessione. Per un rilascio accetta anche l'id di una
+connessione che nel progetto ha un solo perimetro. Una richiesta che esce dal
+perimetro confermato riceve 400 con un messaggio che nomina il perimetro.
+"""
 from __future__ import annotations
 
 from typing import Optional
@@ -8,7 +14,8 @@ from pydantic import BaseModel
 
 from ...datasources import service
 from ...datasources.engines import SUPPORTED_ENGINES
-from ...datasources.service import ConnectionNotFoundError
+from ...datasources.scopes import ScopeViolationError
+from ...datasources.service import ConnectionAmbiguousError, ConnectionNotFoundError
 from ...datasources.validator import QueryValidationError
 from ..deps import ActiveProject, get_active_project, require_project_role
 
@@ -16,6 +23,7 @@ router = APIRouter(prefix="/datasources", tags=["datasources"])
 
 
 class AnnotationItem(BaseModel):
+    # Vuoto = schema del perimetro per un perimetro confermato.
     schema_name: str = ""
     table_name: str
     column_name: str = ""
@@ -35,29 +43,38 @@ class ExecuteRequest(BaseModel):
     sql: str
 
 
+def _lookup_error(e: Exception) -> HTTPException:
+    """Errori di risoluzione del perimetro tradotti in HTTP."""
+    if isinstance(e, ConnectionAmbiguousError):
+        return HTTPException(status_code=409, detail=str(e))
+    return HTTPException(status_code=404, detail=str(e))
+
+
 @router.get("")
 async def list_connections(org: ActiveProject = Depends(get_active_project)):
     connections = await service.list_connections(org.org_id, org.project_id)
     return {"connections": connections, "engines": list(SUPPORTED_ENGINES)}
 
 
-@router.get("/{connection_id}/schema")
+@router.get("/{source_id}/schema")
 async def get_schema(
-    connection_id: int,
+    source_id: int,
     schema: Optional[str] = None,
     org: ActiveProject = Depends(get_active_project),
 ):
     try:
-        return await service.schema_overview(org.org_id, org.project_id, connection_id, schema=schema)
-    except ConnectionNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        return await service.schema_overview(org.org_id, org.project_id, source_id, schema=schema)
+    except (ConnectionNotFoundError, ConnectionAmbiguousError) as e:
+        raise _lookup_error(e)
+    except ScopeViolationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Schema introspection failed: {e}")
 
 
-@router.get("/{connection_id}/tables/{table_name}")
+@router.get("/{source_id}/tables/{table_name}")
 async def describe_table(
-    connection_id: int,
+    source_id: int,
     table_name: str,
     schema: Optional[str] = None,
     sample_rows: int = 0,
@@ -65,30 +82,30 @@ async def describe_table(
 ):
     try:
         return await service.describe_table(
-            org.org_id, org.project_id, connection_id, table_name, schema=schema, sample_rows=sample_rows
+            org.org_id, org.project_id, source_id, table_name, schema=schema, sample_rows=sample_rows
         )
-    except ConnectionNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except (ConnectionNotFoundError, ConnectionAmbiguousError) as e:
+        raise _lookup_error(e)
+    except ScopeViolationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Table introspection failed: {e}")
 
 
-@router.get("/{connection_id}/annotations")
-async def list_annotations(connection_id: int, org: ActiveProject = Depends(get_active_project)):
-    # Membership check via connection lookup.
+@router.get("/{source_id}/annotations")
+async def list_annotations(source_id: int, org: ActiveProject = Depends(get_active_project)):
     try:
-        await service.get_connection(org.org_id, org.project_id, connection_id)
-    except ConnectionNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    annotations = await service.list_annotations(connection_id)
+        annotations = await service.scope_annotations(org.org_id, org.project_id, source_id)
+    except (ConnectionNotFoundError, ConnectionAmbiguousError) as e:
+        raise _lookup_error(e)
     return {"annotations": annotations, "count": len(annotations)}
 
 
-@router.put("/{connection_id}/annotations")
+@router.put("/{source_id}/annotations")
 async def upsert_annotations(
-    connection_id: int,
+    source_id: int,
     req: AnnotationsRequest,
     org: ActiveProject = Depends(require_project_role("member")),
 ):
@@ -98,57 +115,64 @@ async def upsert_annotations(
     an existing hand-written data dictionary).
     """
     try:
-        await service.get_connection(org.org_id, org.project_id, connection_id)
-    except ConnectionNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    written = await service.upsert_annotations(
-        connection_id, [a.model_dump() for a in req.annotations]
-    )
+        written = await service.save_scope_annotations(
+            org.org_id, org.project_id, source_id, [a.model_dump() for a in req.annotations]
+        )
+    except (ConnectionNotFoundError, ConnectionAmbiguousError) as e:
+        raise _lookup_error(e)
+    except ScopeViolationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"status": "ok", "written": written}
 
 
-@router.post("/{connection_id}/query")
+@router.post("/{source_id}/query")
 async def run_query(
-    connection_id: int, req: QueryRequest, org: ActiveProject = Depends(require_project_role("member"))
+    source_id: int, req: QueryRequest, org: ActiveProject = Depends(require_project_role("member"))
 ):
     try:
         return await service.run_query(
-            org.org_id, org.project_id, connection_id, req.sql, max_rows=req.max_rows, source="ui"
+            org.org_id, org.project_id, source_id, req.sql, max_rows=req.max_rows, source="ui"
         )
-    except ConnectionNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except (ConnectionNotFoundError, ConnectionAmbiguousError) as e:
+        raise _lookup_error(e)
+    except ScopeViolationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except QueryValidationError as e:
         raise HTTPException(status_code=400, detail=f"Query rejected: {e}")
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=str(e))
 
 
-@router.post("/{connection_id}/execute")
+@router.post("/{source_id}/execute")
 async def execute_write(
-    connection_id: int,
+    source_id: int,
     req: ExecuteRequest,
     project: ActiveProject = Depends(require_project_role("owner")),
 ):
     """Execute a guarded DML statement on the datasource (owner only)."""
     try:
         return await service.run_write(
-            project.org_id, project.project_id, connection_id, req.sql, source="ui"
+            project.org_id, project.project_id, source_id, req.sql, source="ui"
         )
-    except ConnectionNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except (ConnectionNotFoundError, ConnectionAmbiguousError) as e:
+        raise _lookup_error(e)
+    except ScopeViolationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except QueryValidationError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=str(e))
 
 
-@router.get("/{connection_id}/log")
+@router.get("/{source_id}/log")
 async def get_query_log(
-    connection_id: int, limit: int = 50, org: ActiveProject = Depends(get_active_project)
+    source_id: int, limit: int = 50, org: ActiveProject = Depends(get_active_project)
 ):
     try:
-        await service.get_connection(org.org_id, org.project_id, connection_id)
-    except ConnectionNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    log = await service.query_log(org.org_id, org.project_id, connection_id, limit=min(limit, 200))
+        record = await service.get_scope(org.org_id, org.project_id, source_id)
+    except (ConnectionNotFoundError, ConnectionAmbiguousError) as e:
+        raise _lookup_error(e)
+    # Il log è della connessione nel progetto: la colonna schema_name dice su
+    # quale perimetro è girata ciascuna query.
+    log = await service.query_log(org.org_id, org.project_id, record["id"], limit=min(limit, 200))
     return {"log": log, "count": len(log)}

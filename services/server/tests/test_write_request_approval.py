@@ -79,6 +79,32 @@ def test_approve_executes_and_records_the_result(monkeypatch):
     assert approve_args == (12, 9, "looks fine")
 
 
+
+def test_approve_runs_the_write_on_the_alias_stored_at_proposal_time(monkeypatch):
+    """The request target is the scope alias: the approved write resolves it
+    again, so it runs on the scope the statement was proposed for."""
+    from src.datasources import service
+
+    _patch_role(monkeypatch, "owner")
+    calls = []
+
+    async def fake_run_write(org_id, project_id, ref, sql, source="mcp"):
+        calls.append((org_id, project_id, ref, sql, source))
+        return {"connection": ref, "sql": sql, "row_count": 1, "duration_ms": 2}
+
+    monkeypatch.setattr(service, "run_write", fake_run_write)
+    conn = FakeConn(fetchrow_results=[
+        _row(target="erp-vendite"),
+        _row(status="approved", target="erp-vendite"),
+        _row(status="executed", target="erp-vendite", result=json.dumps({"row_count": 1})),
+    ])
+    _patch_pool(monkeypatch, conn)
+
+    out = asyncio.run(write_requests.approve(12, user_id=9))
+
+    assert out["status"] == "executed"
+    assert calls == [(1, 2, "erp-vendite", "UPDATE t SET a=1 WHERE id=1", "approval")]
+
 def test_approve_records_a_failed_execution(monkeypatch):
     _patch_role(monkeypatch, "owner")
 

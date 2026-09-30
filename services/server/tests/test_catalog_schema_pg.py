@@ -7,7 +7,7 @@ def test_fresh_schema_has_the_catalog_shape(pg_database):
         rows = await fetch(
             "SELECT table_name, column_name, is_nullable FROM information_schema.columns "
             "WHERE table_name IN ('machines', 'ssh_sources', 'db_connections', "
-            "'project_ssh_sources', 'project_db_connections')"
+            "'project_ssh_sources', 'project_db_scopes', 'project_db_connections')"
         )
         return {f"{r['table_name']}.{r['column_name']}": r["is_nullable"] for r in rows}
 
@@ -21,4 +21,5 @@ def test_fresh_schema_has_the_catalog_shape(pg_database):
     assert "db_connections.restricted" in columns
     assert "machines.private_key_enc" in columns
     assert "project_ssh_sources.added_by" in columns
-    assert "project_db_connections.db_connection_id" in columns
+    assert "project_db_scopes.db_connection_id" in columns
+    assert not any(key.startswith("project_db_connections.") for key in columns)

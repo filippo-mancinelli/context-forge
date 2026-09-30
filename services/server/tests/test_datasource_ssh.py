@@ -21,7 +21,9 @@ def _record(**over):
 
 def test_resolve_engine_direct_uses_record_host(monkeypatch):
     captured = {}
-    monkeypatch.setattr(engines, "get_engine", lambda cid, eng, url: captured.setdefault("url", url))
+    monkeypatch.setattr(
+        engines, "get_engine", lambda cid, eng, url, scope_key=(): captured.setdefault("url", url)
+    )
 
     asyncio.run(service._resolve_engine(_record()))
     assert captured["url"].host == "10.0.0.5"
@@ -39,7 +41,9 @@ def test_resolve_engine_ssh_routes_through_local_forward(monkeypatch):
 
     captured = {}
     monkeypatch.setattr(engines, "ensure_tunnel", fake_tunnel)
-    monkeypatch.setattr(engines, "get_engine", lambda cid, eng, url: captured.setdefault("url", url))
+    monkeypatch.setattr(
+        engines, "get_engine", lambda cid, eng, url, scope_key=(): captured.setdefault("url", url)
+    )
 
     rec = _record(
         ssh_enabled=True, ssh_host="192.168.2.39", ssh_port=22,

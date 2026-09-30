@@ -47,10 +47,12 @@ async def prepare_schema() -> None:
     """Full application schema on an empty database."""
     from src.catalog.migration import apply_catalog_migration
     from src.catalog.repo_migration import apply_repo_catalog_migration
+    from src.datasources.scope_migration import apply_db_scope_migration
 
     await db.init_db()
     await apply_catalog_migration()
     await apply_repo_catalog_migration()
+    await apply_db_scope_migration()
 
 
 async def make_legacy_schema() -> None:
@@ -88,6 +90,13 @@ async def make_legacy_schema() -> None:
             ADD CONSTRAINT db_connections_project_name_key UNIQUE (project_id, name)
         """
     )
+
+
+async def make_legacy_db_links() -> None:
+    """Bring database links back to the table used before scopes."""
+    from src.datasources.scope_migration import LEGACY_DB_LINKS_DDL
+
+    await execute(LEGACY_DB_LINKS_DDL)
 
 
 async def make_legacy_repo_schema() -> None:

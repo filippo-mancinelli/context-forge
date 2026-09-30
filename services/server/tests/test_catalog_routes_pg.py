@@ -7,7 +7,7 @@ from src.api import deps
 from src.api.routes import catalog as catalog_routes
 from src.api.routes import project_resources
 from tests.pgutil import (
-    requires_pg, run_db, seed_org, seed_project, seed_project_member, seed_user,
+    execute, requires_pg, run_db, seed_org, seed_project, seed_project_member, seed_user,
 )
 
 pytestmark = requires_pg
@@ -151,5 +151,34 @@ def test_database_catalog_round_trip(pg_database):
     assert created.status_code == 200
     assert created.json()["connection"]["ssh_machine_name"] == "astercare@10.0.0.6"
     assert bad_engine.status_code == 400
-    assert listed["connections"][0]["project_count"] == 0
+    assert listed["connections"][0]["scope_count"] == 0
     assert "mysql" in listed["engines"]
+
+
+def test_database_delete_lists_project_and_scope(pg_database):
+    ids = _seed()
+    with _client(ids["admin"]) as client:
+        created = client.post("/api/catalog/databases", json={
+            "name": "erp", "engine": "postgresql", "host": "127.0.0.1", "port": 5432,
+            "database_name": "app", "username": "reader", "password": "pw"}).json()["connection"]
+        client.post(f"/api/projects/{ids['beta']}/resources",
+                    json={"kind": "databases", "resource_id": created["id"]})
+    # Un secondo perimetro confermato della stessa connessione, in un altro progetto.
+    run_db(lambda: execute(
+        "INSERT INTO project_db_scopes (project_id, db_connection_id, database_name, schema_name, "
+        "alias, scope_inferred) VALUES ($1, $2, 'app', 'sales', 'erp-sales', false)",
+        ids["alpha"], created["id"],
+    ))
+    with _client(ids["admin"]) as client:
+        listed = client.get(f"/api/catalog/databases/{created['id']}/projects").json()["projects"]
+        refused = client.delete(f"/api/catalog/databases/{created['id']}")
+        confirmed = client.delete(f"/api/catalog/databases/{created['id']}?confirm=true")
+    # Il perimetro dedotto segue la connessione: la sua etichetta è il database corrente.
+    assert [(p["project_name"], p["alias"], p["scope_label"]) for p in listed] == [
+        ("alpha", "erp-sales", "app.sales"),
+        ("beta", "erp", "app"),
+    ]
+    assert all(isinstance(p["scope_id"], int) and isinstance(p["project_id"], int) for p in listed)
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["projects"][0]["alias"] == "erp-sales"
+    assert confirmed.status_code == 200

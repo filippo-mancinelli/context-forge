@@ -67,13 +67,23 @@ class _FakeEngine:
     dialect = _FakeDialect()
 
 
-def _patch_datasources(monkeypatch, executed, rows):
+# A project scope as service.get_scope returns it: the engine is resolved for it.
+_SCOPE = {"id": 4, "name": "erp", "engine": "postgresql", "database_name": "app",
+          "scope_id": 31, "alias": "erp-vendite", "scope_database": "app",
+          "scope_schema": "vendite", "scope_inferred": False, "scope_label": "app.vendite"}
+
+
+def _patch_datasources(monkeypatch, executed, rows, resolved=None):
     from src.datasources import service
 
     async def fake_get_connection(org_id, project_id, ref, include_secret=False):
-        return {"id": 4, "name": "erp"}
+        if resolved is not None:
+            resolved.append((ref, include_secret))
+        return dict(_SCOPE)
 
     async def fake_resolve_engine(record):
+        if resolved is not None:
+            resolved.append(record["scope_id"])
         return _FakeEngine()
 
     def fake_execute_readonly(engine, sql, max_rows):
@@ -86,13 +96,17 @@ def _patch_datasources(monkeypatch, executed, rows):
 
 
 def test_sql_preview_runs_explain_through_the_readonly_executor(monkeypatch):
-    executed = []
-    _patch_datasources(monkeypatch, executed, [{"QUERY PLAN": [{"Plan": {"Plan Rows": 9}}]}])
-
-    preview = asyncio.run(
-        write_previews.sql_preview(1, 2, "erp", "UPDATE t SET a=1 WHERE id=1")
+    executed, resolved = [], []
+    _patch_datasources(
+        monkeypatch, executed, [{"QUERY PLAN": [{"Plan": {"Plan Rows": 9}}]}], resolved
     )
 
+    preview = asyncio.run(
+        write_previews.sql_preview(1, 2, "erp-vendite", "UPDATE t SET a=1 WHERE id=1")
+    )
+
+    # The alias resolves to its scope, and the engine is the one of that scope.
+    assert resolved == [("erp-vendite", True), 31]
     assert executed == ["EXPLAIN (FORMAT JSON) UPDATE t SET a=1 WHERE id=1"]
     assert preview["statement"] == "UPDATE t SET a=1 WHERE id=1"
     assert preview["plan_rows"] == 9
@@ -104,7 +118,7 @@ def test_sql_preview_survives_an_explain_failure(monkeypatch):
     from src.datasources import service
 
     async def fake_get_connection(org_id, project_id, ref, include_secret=False):
-        return {"id": 4, "name": "erp"}
+        return dict(_SCOPE)
 
     async def fake_resolve_engine(record):
         return _FakeEngine()

@@ -28,6 +28,7 @@ async def _shape() -> dict:
         "columns": {f"{r['table_name']}.{r['column_name']}": r["is_nullable"] for r in rows},
         "constraints": {r["conname"] for r in constraints},
         "indexes": {r["indexname"] for r in indexes},
+        "legacy_links": await fetchval("SELECT to_regclass('project_db_connections') IS NOT NULL"),
     }
 
 
@@ -44,6 +45,8 @@ def _assert_catalog_shape(shape: dict) -> None:
         assert legacy not in shape["constraints"], legacy
     assert "ssh_sources_project_idx" not in shape["indexes"]
     assert {"ssh_sources_org_lower_name_idx", "db_connections_org_lower_name_idx"} <= shape["indexes"]
+    # Migration 0005 creates the legacy links; the scope conversion drops them.
+    assert shape["legacy_links"] is False
 
 
 def test_baseline_starts_from_the_project_owned_shape(baseline_database):
@@ -96,7 +99,9 @@ def test_boot_with_an_org_converts_legacy_rows(baseline_database):
             "tunnel": await fetchval("SELECT ssh_machine_id FROM db_connections WHERE id = $1", database),
             "folder_machine": await fetchval("SELECT machine_id FROM ssh_sources WHERE id = $1", source),
             "folders": await fetch("SELECT project_id, ssh_source_id FROM project_ssh_sources"),
-            "databases": await fetch("SELECT project_id, db_connection_id FROM project_db_connections"),
+            "databases": await fetch(
+                "SELECT project_id, db_connection_id, alias, scope_inferred FROM project_db_scopes"
+            ),
         }
 
     out = run_db(scenario)
@@ -105,4 +110,5 @@ def test_boot_with_an_org_converts_legacy_rows(baseline_database):
     assert [m["name"] for m in out["machines"]] == ["ops@10.0.0.6"]
     assert out["tunnel"] == out["folder_machine"] == out["machines"][0]["id"]
     assert out["folders"] == [{"project_id": out["project"], "ssh_source_id": out["source"]}]
-    assert out["databases"] == [{"project_id": out["project"], "db_connection_id": out["database"]}]
+    assert out["databases"] == [{"project_id": out["project"], "db_connection_id": out["database"],
+                                 "alias": "erp", "scope_inferred": True}]
