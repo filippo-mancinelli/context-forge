@@ -72,11 +72,11 @@ The schema migrates itself at startup. Coming from a version without projects an
 
 On the first boot after this upgrade three **one-way** conversions run:
 
-1. SSH credentials are grouped into **machines**; SSH folders and database connections move to the organization catalog, and projects keep them as selections. Duplicate names inside an organization are renamed with a numeric suffix.
-2. Repositories get numeric ids; duplicates with the same URL and branch are merged, and clone directories move to `org_<id>/repo_<id>` in the repos cache.
+1. SSH credentials are grouped into **machines**; SSH folders and database connections move to the organization catalog, and projects keep them as selections. Duplicate SSH folder and database names inside an organization are renamed by appending the slug of the project they belonged to (`name-<project-slug>`, plus a number if that is still taken); the first one keeps its name.
+2. Repositories get numeric ids; duplicates with the same URL and branch are merged into one (the duplicates' indexed chunks and clone directories are discarded), and clone directories move to `org_<id>/repo_<id>` in the repos cache.
 3. Project-to-database links become **inferred scopes** (the connection's database and schema under an alias). Confirm them from the project's data sources page.
 
-The conversions drop the legacy columns and tables and cannot be undone: **back up the database and the repos cache directory before upgrading.** A legacy SSH secret that cannot be decrypted with the current `ENCRYPTION_KEY` stops the boot; fix the key and start again.
+The conversions drop the legacy columns and tables (if some database links cannot be converted, the legacy link table is kept and the server log lists them) and cannot be undone: **back up the database and the repos cache directory before upgrading.** A legacy SSH secret that cannot be decrypted with the current `ENCRYPTION_KEY` stops the boot; fix the key and start again.
 
 Other changes to be aware of:
 
@@ -150,7 +150,7 @@ An organization can hold several projects. Connect to the organization-level end
 - **Jobs:** `job_submit`, `job_status`, `job_result`
 - **Projects:** `list_projects`, `use_project`, `current_project`; with `projects-write`: `create_project`, `rename_project`, `delete_project`, `add_project_member`
 
-Sources registered through MCP (`db_add`, `ssh_source_add`) are created without their secret and stay in a `pending_secret` state until an admin completes them from the Catalog page.
+New sources registered through MCP (`db_add`, `ssh_source_add`) are created without their secret and stay in `pending_secret` until an admin completes them from the Catalog page; selecting a machine, folder or connection that already exists in the catalog creates nothing pending.
 
 ## Agent setup
 
