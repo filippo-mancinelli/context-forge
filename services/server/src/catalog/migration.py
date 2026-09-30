@@ -18,6 +18,11 @@ from .names import machine_name, unique_name
 
 logger = logging.getLogger(__name__)
 
+# Chiave dell'advisory lock della conversione: due istanze avviate insieme si
+# mettono in fila invece di far fallire la seconda. Distinta da quelle del
+# runner delle migrazioni, della conversione dei repository e del perimetro.
+CATALOG_MIGRATION_LOCK_KEY = 0x4346434D
+
 _SSH_SOURCE_LEGACY_COLUMNS = (
     "project_id", "host", "port", "username", "auth_method", "password_enc", "private_key_enc",
 )
@@ -158,28 +163,58 @@ async def _move_to_selections(conn, table: str, link: str, column: str, report: 
     )
 
 
+async def _existing(conn, query: str, *args: Any) -> set[str]:
+    return {r[0] for r in await conn.fetch(query, *args)}
+
+
 async def _drop_legacy_columns(conn) -> None:
-    await conn.execute("ALTER TABLE ssh_sources DROP CONSTRAINT IF EXISTS ssh_sources_project_id_name_key")
-    await conn.execute("DROP INDEX IF EXISTS ssh_sources_project_idx")
+    """Toglie colonne, vincoli e indice legacy. Legge prima i cataloghi e lancia
+    un ``ALTER TABLE`` (lock esclusivo sulla tabella) solo per ciò che esiste
+    ancora: su un database già convertito non prende alcun lock di tabella."""
+    columns = {
+        (r["table_name"], r["column_name"]): r["is_nullable"] == "YES"
+        for r in await conn.fetch(
+            "SELECT table_name, column_name, is_nullable FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name IN ('ssh_sources', 'db_connections')"
+        )
+    }
+    constraints = await _existing(
+        conn,
+        "SELECT conname FROM pg_constraint WHERE conrelid IN "
+        "(to_regclass('ssh_sources'), to_regclass('db_connections'))",
+    )
+    if "ssh_sources_project_id_name_key" in constraints:
+        await conn.execute("ALTER TABLE ssh_sources DROP CONSTRAINT IF EXISTS ssh_sources_project_id_name_key")
+    if await conn.fetchval("SELECT to_regclass('ssh_sources_project_idx') IS NOT NULL"):
+        await conn.execute("DROP INDEX IF EXISTS ssh_sources_project_idx")
     for column in _SSH_SOURCE_LEGACY_COLUMNS:
-        await conn.execute(f"ALTER TABLE ssh_sources DROP COLUMN IF EXISTS {column}")
-    await conn.execute("ALTER TABLE ssh_sources ALTER COLUMN machine_id SET NOT NULL")
-    await conn.execute("ALTER TABLE db_connections DROP CONSTRAINT IF EXISTS db_connections_project_name_key")
-    await conn.execute("ALTER TABLE db_connections DROP CONSTRAINT IF EXISTS db_connections_org_id_name_key")
+        if ("ssh_sources", column) in columns:
+            await conn.execute(f"ALTER TABLE ssh_sources DROP COLUMN IF EXISTS {column}")
+    if columns.get(("ssh_sources", "machine_id")):
+        await conn.execute("ALTER TABLE ssh_sources ALTER COLUMN machine_id SET NOT NULL")
+    for constraint in ("db_connections_project_name_key", "db_connections_org_id_name_key"):
+        if constraint in constraints:
+            await conn.execute(f"ALTER TABLE db_connections DROP CONSTRAINT IF EXISTS {constraint}")
     for column in _DB_LEGACY_COLUMNS:
-        await conn.execute(f"ALTER TABLE db_connections DROP COLUMN IF EXISTS {column}")
+        if ("db_connections", column) in columns:
+            await conn.execute(f"ALTER TABLE db_connections DROP COLUMN IF EXISTS {column}")
+
+
+_UNIQUE_NAME_INDEXES = (
+    ("machines_org_lower_name_idx", "machines"),
+    ("ssh_sources_org_lower_name_idx", "ssh_sources"),
+    ("db_connections_org_lower_name_idx", "db_connections"),
+)
 
 
 async def _ensure_unique_names(conn) -> None:
-    await conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS machines_org_lower_name_idx ON machines (org_id, lower(name))"
-    )
-    await conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS ssh_sources_org_lower_name_idx ON ssh_sources (org_id, lower(name))"
-    )
-    await conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS db_connections_org_lower_name_idx ON db_connections (org_id, lower(name))"
-    )
+    # Anche con IF NOT EXISTS la CREATE INDEX blocca le scritture sulla tabella:
+    # si lancia solo per l'indice che manca.
+    for index, table in _UNIQUE_NAME_INDEXES:
+        if not await conn.fetchval("SELECT to_regclass($1) IS NOT NULL", index):
+            await conn.execute(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {index} ON {table} (org_id, lower(name))"
+            )
 
 
 async def apply_catalog_migration() -> dict[str, Any]:
@@ -190,6 +225,8 @@ async def apply_catalog_migration() -> dict[str, Any]:
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
+            # Rilasciato con la transazione: chi arriva secondo trova il lavoro fatto.
+            await conn.execute("SELECT pg_advisory_xact_lock($1)", CATALOG_MIGRATION_LOCK_KEY)
             has_sources = await _column_exists(conn, "ssh_sources", "host")
             has_databases = await _column_exists(conn, "db_connections", "ssh_host")
             if has_sources or has_databases:
@@ -204,6 +241,9 @@ async def apply_catalog_migration() -> dict[str, Any]:
                 await _move_to_selections(conn, "db_connections", "project_db_connections", "db_connection_id", report)
             await _drop_legacy_columns(conn)
             await _ensure_unique_names(conn)
-    if report["machines"] or report["secret_replaced"] or report["renamed"]:
+    if report["secret_replaced"] or report["renamed"]:
+        # Secret sostituiti o nomi cambiati: qualcuno deve verificarli.
+        logger.warning("Catalog migration: %s", report)
+    elif report["machines"]:
         logger.info("Catalog migration: %s", report)
     return report

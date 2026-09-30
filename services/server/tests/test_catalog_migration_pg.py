@@ -212,3 +212,59 @@ def test_rows_without_a_project_or_an_ssh_user_do_not_stop_the_migration(pg_data
 
 def test_fresh_schema_is_a_no_op(pg_database):
     assert run_db(migration.apply_catalog_migration) == EMPTY_REPORT
+
+
+class _RecordingPool:
+    """The real pool, with every execute() of the conversion recorded."""
+
+    def __init__(self, pool, statements):
+        self.pool, self.statements = pool, statements
+
+    def acquire(self):
+        outer = self
+
+        class _Ctx:
+            async def __aenter__(self):
+                self.cm = outer.pool.acquire()
+                conn = await self.cm.__aenter__()
+                original = conn.execute
+
+                async def execute(query, *args, **kwargs):
+                    outer.statements.append(query)
+                    return await original(query, *args, **kwargs)
+
+                class _Proxy:
+                    def __getattr__(self, name):
+                        return execute if name == "execute" else getattr(conn, name)
+
+                return _Proxy()
+
+            async def __aexit__(self, *exc):
+                return await self.cm.__aexit__(*exc)
+
+        return _Ctx()
+
+
+def test_a_converted_database_takes_no_table_lock(pg_database, monkeypatch):
+    from src import db
+
+    statements = []
+
+    async def scenario():
+        await make_legacy_schema()
+        org = await seed_org("acme")
+        project = await seed_project(org, "alpha")
+        await _legacy_source(org, project, "logs", "10.0.0.6", "astercare", key="K1")
+        await migration.apply_catalog_migration()
+        pool = await db.get_pool()
+
+        async def recording_pool():
+            return _RecordingPool(pool, statements)
+
+        monkeypatch.setattr(migration, "get_pool", recording_pool)
+        return await migration.apply_catalog_migration()
+
+    assert run_db(scenario) == EMPTY_REPORT
+    ddl = [s for s in statements if s.lstrip().upper().startswith(("ALTER", "DROP", "CREATE"))]
+    assert ddl == []
+    assert any("pg_advisory_xact_lock" in s for s in statements)
