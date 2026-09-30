@@ -90,12 +90,17 @@ async function downloadRequest(path: string): Promise<Blob> {
 }
 
 export interface Repo {
+  id: number
   name: string
   type: 'local' | 'github' | 'gitlab'
   url?: string
   path?: string
   branch: string
   language: string
+  description?: string
+  restricted: boolean
+  has_token?: boolean
+  project_count?: number
   status: 'pending' | 'indexing' | 'indexed' | 'error'
   last_indexed_at?: string
   total_chunks: number
@@ -132,13 +137,18 @@ export interface GitLabRepo {
 
 export type RemoteRepo = GitHubRepo | GitLabRepo
 
-export interface RepoCreateRequest {
-  name: string
+export interface RepoRequest {
+  // Empty: the server proposes the name from the URL, with @branch when it is already taken.
+  name?: string
   type: 'local' | 'github' | 'gitlab'
   url?: string
   path?: string
   branch: string
   language?: string
+  // Write-only: empty on update keeps the stored token.
+  token?: string
+  description?: string
+  restricted?: boolean
 }
 
 export interface RepoSearchResult {
@@ -479,7 +489,9 @@ export interface ProjectMember {
   created_at?: string
 }
 
-export interface SshSource {
+export type ResourceStatus = 'unknown' | 'ok' | 'error' | 'pending_secret'
+
+export interface Machine {
   id: number
   name: string
   host: string
@@ -487,27 +499,68 @@ export interface SshSource {
   username: string
   auth_method: 'key' | 'password'
   has_secret: boolean
-  root_path: string
-  include_globs?: string
-  exclude_globs?: string
   description?: string
-  status: 'unknown' | 'ok' | 'error'
+  status: ResourceStatus
   error_message?: string
   last_checked_at?: string
+  folder_count: number
+  database_count: number
 }
 
-export interface SshSourceRequest {
+export interface MachineRequest {
   name: string
   host: string
   port?: number
   username: string
   auth_method?: 'key' | 'password'
+  // Write-only: vuoto in modifica mantiene il segreto memorizzato.
   password?: string
   private_key?: string
+  description?: string
+}
+
+export interface SshSource {
+  id: number
+  name: string
+  machine_id: number
+  machine_name: string
+  host: string
+  port: number
+  username: string
+  has_secret: boolean
   root_path: string
   include_globs?: string
   exclude_globs?: string
   description?: string
+  restricted: boolean
+  status: ResourceStatus
+  error_message?: string
+  last_checked_at?: string
+  project_count?: number
+}
+
+export interface FolderRequest {
+  name: string
+  machine_id: number
+  root_path: string
+  include_globs?: string
+  exclude_globs?: string
+  description?: string
+  restricted?: boolean
+}
+
+export type CatalogKind = 'folders' | 'databases' | 'repos'
+
+export interface CatalogProjectRef {
+  id: number
+  name: string
+  slug: string
+}
+
+export interface ProjectResources {
+  folders: SshSource[]
+  databases: DbConnection[]
+  repos: Repo[]
 }
 
 export interface SshFile {
@@ -550,19 +603,18 @@ export interface DbConnection {
   has_password: boolean
   options: Record<string, unknown>
   description?: string
-  status: 'unknown' | 'ok' | 'error'
+  restricted: boolean
+  status: ResourceStatus
   error_message?: string
   last_checked_at?: string
   created_at?: string
   updated_at?: string
   annotation_count?: number
-  // Accesso via bastion SSH
+  project_count?: number
+  // Tunnel SSH attraverso una macchina del catalogo (null = connessione diretta)
+  ssh_machine_id?: number | null
+  ssh_machine_name?: string | null
   ssh_enabled?: boolean
-  ssh_host?: string
-  ssh_port?: number
-  ssh_username?: string
-  ssh_auth_method?: 'key' | 'password'
-  has_ssh_secret?: boolean
 }
 
 export interface DbConnectionRequest {
@@ -572,17 +624,12 @@ export interface DbConnectionRequest {
   port?: number
   database_name?: string
   username?: string
+  // Write-only: vuoto in modifica mantiene la password memorizzata.
   password?: string
   options?: Record<string, unknown>
   description?: string
-  // Accesso via bastion SSH. host/port sopra sono il DB visto dal bastion.
-  ssh_enabled?: boolean
-  ssh_host?: string
-  ssh_port?: number
-  ssh_username?: string
-  ssh_auth_method?: 'key' | 'password'
-  ssh_password?: string
-  ssh_private_key?: string
+  ssh_machine_id?: number | null
+  restricted?: boolean
 }
 
 export type EnvironmentKind = 'production' | 'staging' | 'development' | 'other'
@@ -958,25 +1005,19 @@ export const api = {
       }),
     removeMember: (id: number, userId: number) =>
       request<{ status: string }>(`/api/projects/${id}/members/${userId}`, { method: 'DELETE' }),
+    resources: (id: number) => request<ProjectResources>(`/api/projects/${id}/resources`),
+    selectResource: (id: number, kind: CatalogKind, resourceId: number) =>
+      request<{ status: string; already_selected: boolean }>(`/api/projects/${id}/resources`, {
+        method: 'POST',
+        body: JSON.stringify({ kind, resource_id: resourceId }),
+      }),
+    deselectResource: (id: number, kind: CatalogKind, resourceId: number) =>
+      request<{ status: string }>(`/api/projects/${id}/resources/${kind}/${resourceId}`, {
+        method: 'DELETE',
+      }),
   },
   sshSources: {
     list: () => request<{ sources: SshSource[] }>('/api/ssh-sources'),
-    create: (req: SshSourceRequest) =>
-      request<{ status: string; source: SshSource }>('/api/ssh-sources', {
-        method: 'POST',
-        body: JSON.stringify(req),
-      }),
-    update: (id: number, req: SshSourceRequest) =>
-      request<{ status: string; source: SshSource }>(`/api/ssh-sources/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(req),
-      }),
-    delete: (id: number) =>
-      request<{ status: string }>(`/api/ssh-sources/${id}`, { method: 'DELETE' }),
-    test: (id: number) =>
-      request<{ status: 'ok' | 'error'; error?: string }>(`/api/ssh-sources/${id}/test`, {
-        method: 'POST',
-      }),
     files: (id: number, opts?: { subpath?: string; recursive?: boolean }) => {
       const params = new URLSearchParams()
       if (opts?.subpath) params.set('subpath', opts.subpath)
@@ -990,20 +1031,99 @@ export const api = {
         { method: 'PUT', body: JSON.stringify({ path, content }) }
       ),
   },
+  catalog: {
+    machines: {
+      list: () => request<{ machines: Machine[] }>('/api/catalog/machines'),
+      create: (req: MachineRequest) =>
+        request<{ status: string; machine: Machine }>('/api/catalog/machines', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      update: (id: number, req: MachineRequest) =>
+        request<{ status: string; machine: Machine }>(`/api/catalog/machines/${id}`, {
+          method: 'PUT',
+          body: JSON.stringify(req),
+        }),
+      delete: (id: number) =>
+        request<{ status: string }>(`/api/catalog/machines/${id}`, { method: 'DELETE' }),
+      test: (id: number) =>
+        request<{ status: 'ok' | 'error'; error?: string }>(`/api/catalog/machines/${id}/test`, {
+          method: 'POST',
+        }),
+    },
+    folders: {
+      list: () => request<{ sources: SshSource[] }>('/api/catalog/folders'),
+      create: (req: FolderRequest) =>
+        request<{ status: string; source: SshSource }>('/api/catalog/folders', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      update: (id: number, req: FolderRequest) =>
+        request<{ status: string; source: SshSource }>(`/api/catalog/folders/${id}`, {
+          method: 'PUT',
+          body: JSON.stringify(req),
+        }),
+      // La UI mostra prima i progetti coinvolti e poi conferma la cancellazione.
+      delete: (id: number) =>
+        request<{ status: string }>(`/api/catalog/folders/${id}?confirm=true`, { method: 'DELETE' }),
+      test: (id: number) =>
+        request<{ status: 'ok' | 'error'; error?: string }>(`/api/catalog/folders/${id}/test`, {
+          method: 'POST',
+        }),
+      projects: (id: number) =>
+        request<{ projects: CatalogProjectRef[] }>(`/api/catalog/folders/${id}/projects`),
+    },
+    databases: {
+      list: () => request<{ connections: DbConnection[]; engines: DbEngine[] }>('/api/catalog/databases'),
+      create: (req: DbConnectionRequest) =>
+        request<{ status: string; connection: DbConnection }>('/api/catalog/databases', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      update: (id: number, req: DbConnectionRequest) =>
+        request<{ status: string; connection: DbConnection }>(`/api/catalog/databases/${id}`, {
+          method: 'PUT',
+          body: JSON.stringify(req),
+        }),
+      delete: (id: number) =>
+        request<{ status: string }>(`/api/catalog/databases/${id}?confirm=true`, { method: 'DELETE' }),
+      test: (id: number) =>
+        request<{ status: 'ok' | 'error'; error?: string; suggested_host?: string | null }>(
+          `/api/catalog/databases/${id}/test`,
+          { method: 'POST' }
+        ),
+      projects: (id: number) =>
+        request<{ projects: CatalogProjectRef[] }>(`/api/catalog/databases/${id}/projects`),
+    },
+    repos: {
+      list: () => request<{ repos: Repo[] }>('/api/catalog/repos'),
+      create: (req: RepoRequest) =>
+        request<{ status: string; repo: Repo }>('/api/catalog/repos', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      update: (id: number, req: RepoRequest) =>
+        request<{ status: string; repo: Repo }>(`/api/catalog/repos/${id}`, {
+          method: 'PUT',
+          body: JSON.stringify(req),
+        }),
+      // La UI mostra prima i progetti coinvolti e poi conferma la cancellazione.
+      delete: (id: number) =>
+        request<{ status: string }>(`/api/catalog/repos/${id}?confirm=true`, { method: 'DELETE' }),
+      index: (id: number) => request<{ status: string }>(`/api/catalog/repos/${id}/index`, { method: 'POST' }),
+      cancelIndex: (id: number) =>
+        request<{ status: string }>(`/api/catalog/repos/${id}/cancel-index`, { method: 'POST' }),
+      projects: (id: number) =>
+        request<{ projects: CatalogProjectRef[] }>(`/api/catalog/repos/${id}/projects`),
+      import: (provider: 'github' | 'gitlab', fullName: string, branch?: string) =>
+        request<{ status: string; repo: Repo }>('/api/catalog/repos/import', {
+          method: 'POST',
+          body: JSON.stringify({ provider, full_name: fullName, branch }),
+        }),
+    },
+  },
   repos: {
     list: () => request<Repo[]>('/api/repos'),
-    create: (req: RepoCreateRequest) =>
-      request<{ status: string; repo: { name: string; type: string } }>('/api/repos', {
-        method: 'POST',
-        body: JSON.stringify(req),
-      }),
-    update: (name: string, req: RepoCreateRequest) =>
-      request<{ status: string; repo: { name: string; type: string } }>(`/api/repos/${encodeURIComponent(name)}`, {
-        method: 'PUT',
-        body: JSON.stringify(req),
-      }),
-    delete: (name: string) =>
-      request<{ status: string; message: string }>(`/api/repos/${encodeURIComponent(name)}`, { method: 'DELETE' }),
     search: (query: string, repos?: string[], limit = 20) =>
       request<{ results: RepoSearchResult[]; count: number }>('/api/repos/search', {
         method: 'POST',
@@ -1031,11 +1151,6 @@ export const api = {
     listRepos: () => request<GitHubRepo[]>('/api/github/repos'),
     searchRepos: (q: string) =>
       request<{ repos: GitHubRepo[]; total_count: number }>(`/api/github/search?q=${encodeURIComponent(q)}`),
-    addRepo: (fullName: string, branch?: string) =>
-      request<{ status: string; message: string; repo: unknown }>('/api/github/repos/add', {
-        method: 'POST',
-        body: JSON.stringify({ full_name: fullName, branch }),
-      }),
     listBranches: (owner: string, repo: string) =>
       request<{ name: string; is_default: boolean }[]>(`/api/github/branches?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`),
   },
@@ -1043,11 +1158,6 @@ export const api = {
     listRepos: () => request<GitLabRepo[]>('/api/gitlab/repos'),
     searchRepos: (q: string) =>
       request<{ repos: GitLabRepo[]; total_count: number }>(`/api/gitlab/search?q=${encodeURIComponent(q)}`),
-    addRepo: (fullName: string, branch?: string) =>
-      request<{ status: string; message: string; repo: unknown }>('/api/gitlab/repos/add', {
-        method: 'POST',
-        body: JSON.stringify({ full_name: fullName, branch }),
-      }),
     listBranches: (fullName: string) =>
       request<{ name: string; is_default: boolean }[]>(`/api/gitlab/branches?full_name=${encodeURIComponent(fullName)}`),
   },
@@ -1233,22 +1343,6 @@ export const api = {
   },
   datasources: {
     list: () => request<{ connections: DbConnection[]; engines: DbEngine[] }>('/api/datasources'),
-    create: (req: DbConnectionRequest) =>
-      request<{ status: string; connection: DbConnection }>('/api/datasources', {
-        method: 'POST',
-        body: JSON.stringify(req),
-      }),
-    update: (id: number, req: DbConnectionRequest) =>
-      request<{ status: string; connection: DbConnection }>(`/api/datasources/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(req),
-      }),
-    delete: (id: number) => request<{ status: string }>(`/api/datasources/${id}`, { method: 'DELETE' }),
-    test: (id: number) =>
-      request<{ status: 'ok' | 'error'; error?: string; suggested_host?: string | null }>(
-        `/api/datasources/${id}/test`,
-        { method: 'POST' }
-      ),
     schema: (id: number, schema?: string) =>
       request<DbSchemaOverview>(
         `/api/datasources/${id}/schema${schema ? `?schema=${encodeURIComponent(schema)}` : ''}`

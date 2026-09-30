@@ -1,29 +1,29 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
-import { Plus, Server, RefreshCw, Pencil, Trash2, FolderOpen, Upload } from 'lucide-react'
-import { api, type SshSource, type SshFile } from '../lib/api'
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { FolderOpen, Plus, Server, Unlink, Upload } from 'lucide-react'
+import { api, type SshFile, type SshSource } from '../lib/api'
 import { useAppStore } from '../store'
-import SshSourceDialog from '../components/SshSourceDialog'
+import AddFromCatalogDialog from '../components/catalog/AddFromCatalogDialog'
+import RestrictedIcon from '../components/catalog/RestrictedIcon'
+import StatusBadge from '../components/catalog/StatusBadge'
+import { canSelectResources, canSelectRestricted } from '../lib/roles'
+import { useOrgRole, useProjectRole } from '../lib/useRoles'
 import {
-  Badge, Button, Dialog, DialogFooter, Input, Table, Tbody, Td, Textarea, Th, Thead, Tr,
+  Button, Dialog, DialogFooter, Input, Table, Tbody, Td, Textarea, Th, Thead, Tr,
   useConfirm, useToast,
 } from '../components/ui'
-
-function statusBadge(status: SshSource['status']) {
-  if (status === 'ok') return <Badge variant="success">Reachable</Badge>
-  if (status === 'error') return <Badge variant="danger">Error</Badge>
-  return <Badge variant="muted">Unknown</Badge>
-}
 
 export default function SshSources() {
   const toast = useToast()
   const confirm = useConfirm()
-  const role = useAppStore((s) => s.organizations.find((o) => o.id === s.activeOrgId)?.role)
-  const canWrite = role === 'owner'
+  const orgRole = useOrgRole()
+  const projectRole = useProjectRole()
+  const projectId = useAppStore((s) => s.activeProjectId)
+  const canWrite = orgRole === 'owner'
+  const canSelect = canSelectResources(projectRole) && projectId != null
   const [sources, setSources] = useState<SshSource[]>([])
+  const [catalog, setCatalog] = useState<SshSource[]>([])
   const [loading, setLoading] = useState(true)
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const [editing, setEditing] = useState<SshSource | null>(null)
-  const [testingId, setTestingId] = useState<number | null>(null)
+  const [addOpen, setAddOpen] = useState(false)
   const [browse, setBrowse] = useState<{ source: SshSource; files: SshFile[] } | null>(null)
   const [uploadOpen, setUploadOpen] = useState(false)
   const [uploadPath, setUploadPath] = useState('')
@@ -47,29 +47,20 @@ export default function SshSources() {
     void load()
   }, [load])
 
-  const openCreate = () => {
-    setEditing(null)
-    setDialogOpen(true)
-  }
-
-  const openEdit = (s: SshSource) => {
-    setEditing(s)
-    setDialogOpen(true)
-  }
-
-  const test = async (s: SshSource) => {
-    setTestingId(s.id)
+  const openAdd = async () => {
     try {
-      const res = await api.sshSources.test(s.id)
-      if (res.status === 'ok') toast.success(`${s.name} reachable`)
-      else toast.error(res.error ?? 'Connection failed')
-      await load()
+      setCatalog((await api.catalog.folders.list()).sources)
+      setAddOpen(true)
     } catch (e) {
       toast.error(String(e))
-    } finally {
-      setTestingId(null)
     }
   }
+
+  const options = useMemo(
+    () => catalog.map((s) => ({ id: s.id, name: s.name, detail: `${s.machine_name}:${s.root_path}`, restricted: s.restricted })),
+    [catalog]
+  )
+  const selectedIds = useMemo(() => new Set(sources.map((s) => s.id)), [sources])
 
   const refreshBrowse = async (s: SshSource) => {
     const res = await api.sshSources.files(s.id, { recursive: true })
@@ -111,18 +102,18 @@ export default function SshSources() {
     }
   }
 
-  const remove = (s: SshSource) => {
-    confirm({
-      title: 'Delete SSH source',
-      message: `Delete «${s.name}»? Tools will no longer be able to read from ${s.host}.`,
-      confirmLabel: 'Delete',
-      danger: true,
-      onConfirm: async () => {
-        await api.sshSources.delete(s.id)
-        await load()
-        toast.success('Source deleted')
-      },
+  const removeFromProject = async (s: SshSource) => {
+    if (projectId == null) return
+    const ok = await confirm({
+      title: 'Remove from project',
+      message: `Remove «${s.name}» from this project? It stays in the organization catalog.`,
+      confirmLabel: 'Remove',
+      onConfirm: () => api.projects.deselectResource(projectId, 'folders', s.id),
     })
+    if (ok) {
+      toast.success('Folder removed from the project')
+      await load()
+    }
   }
 
   return (
@@ -132,14 +123,16 @@ export default function SshSources() {
           <div>
             <h1>SSH Files</h1>
             <p className="text-sm text-muted">
-              Read configuration files on remote Linux hosts, confined to each source root.
+              Remote folders this project can read, chosen from the organization catalog.
             </p>
           </div>
-          <div className="page-header-actions">
-            <Button variant="primary" onClick={openCreate}>
-              <Plus className="w-4 h-4" /> Add source
-            </Button>
-          </div>
+          {canSelect && (
+            <div className="page-header-actions">
+              <Button variant="primary" onClick={openAdd}>
+                <Plus className="w-4 h-4" /> Add from catalog
+              </Button>
+            </div>
+          )}
         </div>
 
         {loading ? (
@@ -147,17 +140,19 @@ export default function SshSources() {
         ) : sources.length === 0 ? (
           <div className="rounded border border-dashed border-border p-8 text-center">
             <Server className="w-6 h-6 mx-auto text-muted" />
-            <p className="mt-2 text-sm text-muted">No SSH sources yet. Add one to read remote files.</p>
+            <p className="mt-2 text-sm text-muted">
+              No SSH folders in this project yet. Add them from the organization catalog.
+            </p>
           </div>
         ) : (
           <Table>
             <Thead>
               <Tr>
                 <Th>Name</Th>
-                <Th>Host</Th>
+                <Th>Machine</Th>
                 <Th>Root path</Th>
                 <Th>Status</Th>
-                <Th className="w-40" />
+                <Th className="w-28" />
               </Tr>
             </Thead>
             <Tbody>
@@ -165,34 +160,29 @@ export default function SshSources() {
                 <Tr key={s.id}>
                   <Td>
                     <span className="font-medium">{s.name}</span>
+                    {s.restricted && <RestrictedIcon />}
                     {s.description && <span className="text-xs text-muted ml-2">{s.description}</span>}
                   </Td>
                   <Td className="text-sm">
-                    {s.username}@{s.host}:{s.port}
+                    {s.machine_name}
+                    <span className="block text-xs text-muted font-mono">
+                      {s.username}@{s.host}:{s.port}
+                    </span>
                   </Td>
                   <Td className="text-sm font-mono">{s.root_path}</Td>
-                  <Td>{statusBadge(s.status)}</Td>
+                  <Td>
+                    <StatusBadge status={s.status} error={s.error_message} />
+                  </Td>
                   <Td>
                     <div className="flex items-center gap-1 justify-end">
                       <Button size="sm" variant="ghost" onClick={() => openBrowse(s)} aria-label="Browse files" title="Browse files">
                         <FolderOpen className="w-3.5 h-3.5" />
                       </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => test(s)}
-                        loading={testingId === s.id}
-                        aria-label="Test connection"
-                        title="Test connection"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => openEdit(s)} aria-label="Edit" title="Edit">
-                        <Pencil className="w-3.5 h-3.5" />
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => remove(s)} aria-label="Delete" title="Delete">
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </Button>
+                      {canSelect && (
+                        <Button size="sm" variant="ghost" onClick={() => removeFromProject(s)} aria-label="Remove from project" title="Remove from project">
+                          <Unlink className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
                     </div>
                   </Td>
                 </Tr>
@@ -202,19 +192,26 @@ export default function SshSources() {
         )}
       </div>
 
-      <SshSourceDialog
-        open={dialogOpen}
-        source={editing}
-        onClose={() => setDialogOpen(false)}
-        onSaved={load}
-      />
+      {projectId != null && (
+        <AddFromCatalogDialog
+          open={addOpen}
+          title="Add SSH folders"
+          kind="folders"
+          projectId={projectId}
+          options={options}
+          selectedIds={selectedIds}
+          allowRestricted={canSelectRestricted(orgRole)}
+          onClose={() => setAddOpen(false)}
+          onAdded={load}
+        />
+      )}
 
       {browse && (
         <Dialog
           open
           onOpenChange={(o) => !o && closeBrowse()}
           title={`Files — ${browse.source.name}`}
-          description={`${browse.source.root_path} (filtered by the source globs)`}
+          description={`${browse.source.root_path} (filtered by the folder globs)`}
         >
           {browse.files.length === 0 ? (
             <p className="text-sm text-muted">No matching files.</p>

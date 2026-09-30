@@ -322,7 +322,7 @@ export default function Environments() {
 
   const load = useCallback(async () => {
     try {
-      const [envs, ds] = await Promise.all([api.environments.list(), api.datasources.list()])
+      const [envs, ds] = await Promise.all([api.environments.list(), api.catalog.databases.list()])
       setEnvironments(envs)
       setConnections(ds.connections)
       setPageError(null)

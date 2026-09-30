@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertCircle, Check, Clipboard, Plus, Save, Trash2, X } from 'lucide-react'
-import { api, type Repo, type MCPApiKey, type OrgRole } from '../lib/api'
+import { api, type MCPApiKey, type OrgRole } from '../lib/api'
 import { Banner, Button, Card, Input, Textarea, Select, Tabs, TabsList, TabsTrigger, TabsContent, Badge, Dialog, DialogFooter, Table, Thead, Tbody, Tr, Th, Td, useConfirm, useToast } from '../components/ui'
 import { useAppStore } from '../store'
 import { parseRateLimit, RATE_LIMIT_HINT } from '../lib/rateLimit'
@@ -9,7 +9,6 @@ type Tab = 'access' | 'models' | 'runtime' | 'mcp_keys' | 'channels'
 
 interface SettingsData {
   forge_config: {
-    repos: Repo[]
     memory: { user_id: string }
     indexing: {
       auto: boolean
