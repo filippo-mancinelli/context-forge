@@ -15,7 +15,8 @@ stays cheap even on large databases.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+import time
+from typing import Any, Callable, Optional
 
 import sqlalchemy as sa
 from sqlalchemy.engine import Engine
@@ -174,3 +175,95 @@ def describe_table(engine: Engine, table: str, schema: Optional[str] = None) -> 
 def quote_identifier(engine: Engine, identifier: str) -> str:
     """Safely quote a table/schema identifier for the engine's dialect."""
     return engine.dialect.identifier_preparer.quote(identifier)
+
+
+# Schemi e database che non sono mai un perimetro da proporre a un progetto.
+_PG_HIDDEN_SCHEMAS = frozenset({"information_schema", "pg_catalog", "pg_toast"})
+_PG_HIDDEN_PREFIXES = ("pg_temp_", "pg_toast_temp_")
+_MYSQL_HIDDEN_DATABASES = frozenset({"information_schema", "performance_schema", "mysql", "sys"})
+
+
+def _pg_databases(engine: Engine) -> list[str]:
+    """Database del server a cui ci si può connettere, esclusi i template."""
+    with engine.connect() as conn:
+        rows = conn.execute(
+            sa.text(
+                "SELECT datname FROM pg_database "
+                "WHERE NOT datistemplate AND datallowconn ORDER BY datname"
+            )
+        ).fetchall()
+    return [r[0] for r in rows]
+
+
+def _schema_names(engine: Engine) -> list[str]:
+    return list(sa.inspect(engine).get_schema_names())
+
+
+def _mysql_databases(engine: Engine) -> list[str]:
+    with engine.connect() as conn:
+        return [r[0] for r in conn.execute(sa.text("SHOW DATABASES")).fetchall()]
+
+
+def _visible_pg_schema(schema: str) -> bool:
+    return schema not in _PG_HIDDEN_SCHEMAS and not schema.startswith(_PG_HIDDEN_PREFIXES)
+
+
+def _deadline_passed(deadline: Optional[float]) -> bool:
+    """Vero quando il tempo concesso alla lettura è finito (orologio monotono)."""
+    return deadline is not None and time.monotonic() >= deadline
+
+
+def list_scopes(
+    engine: Engine,
+    open_database: Callable[[str], Engine],
+    deadline: Optional[float] = None,
+) -> list[dict[str, Optional[str]]]:
+    """Perimetri che l'utenza della connessione può scegliere, ordinati.
+
+    Su PostgreSQL ogni database del server con i suoi schemi: il database su
+    cui l'engine è già aperto riusa l'engine, gli altri passano da
+    ``open_database`` e vengono chiusi subito dopo. Un database che l'utenza non
+    può aprire non offre perimetri e viene saltato. Su MySQL e MariaDB i
+    database visibili, che coincidono con gli schemi. SQLite non ha nulla da
+    scegliere.
+
+    ``deadline`` è un istante dell'orologio monotono: superato quell'istante non
+    si apre nessun altro database e si restituisce quello che si è già visto,
+    perché ogni database in più costa una connessione al server e un thread.
+    """
+    dialect = engine.dialect.name
+    if dialect == "postgresql":
+        current = engine.url.database
+        found: list[dict[str, Optional[str]]] = []
+        for database in _pg_databases(engine):
+            if database == current:
+                schemas = _schema_names(engine)
+            else:
+                if _deadline_passed(deadline):
+                    logger.debug("scope listing: out of time before %s", database)
+                    continue
+                try:
+                    other = open_database(database)
+                except Exception as exc:  # noqa: BLE001 - un database non apribile non offre perimetri
+                    logger.debug("scope listing: cannot open %s: %s", database, exc)
+                    continue
+                try:
+                    schemas = _schema_names(other)
+                except Exception as exc:  # noqa: BLE001 - privilegio CONNECT mancante o database in chiusura
+                    logger.debug("scope listing: cannot read schemas of %s: %s", database, exc)
+                    continue
+                finally:
+                    other.dispose()
+            found.extend(
+                {"database": database, "schema": schema}
+                for schema in sorted(schemas)
+                if _visible_pg_schema(schema)
+            )
+        return found
+    if dialect == "mysql":
+        return [
+            {"database": database, "schema": None}
+            for database in sorted(_mysql_databases(engine))
+            if database not in _MYSQL_HIDDEN_DATABASES
+        ]
+    return []

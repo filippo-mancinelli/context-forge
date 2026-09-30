@@ -7,8 +7,8 @@ from src.datasources.validator import QueryValidationError
 
 
 def _patch(monkeypatch, rowcount=3):
-    async def fake_get_connection(org_id, project_id, ref, include_secret):
-        return {"id": 4, "name": "erp"}
+    async def fake_get_scope(org_id, project_id, ref, include_secret):
+        return {"id": 4, "name": "erp", "engine": "postgresql"}
 
     async def fake_resolve_engine(record):
         return "engine"
@@ -23,7 +23,7 @@ def _patch(monkeypatch, rowcount=3):
                              rowcount_val, duration_ms):
         logged.update(source=source, sql=sql, success=success)
 
-    monkeypatch.setattr(service, "get_connection", fake_get_connection)
+    monkeypatch.setattr(service, "get_scope", fake_get_scope)
     monkeypatch.setattr(service, "_resolve_engine", fake_resolve_engine)
     monkeypatch.setattr(service, "_execute_write", fake_execute_write)
     monkeypatch.setattr(service, "_log_query", fake_log_write)
@@ -47,8 +47,8 @@ def test_run_write_rejects_readonly_statements(monkeypatch):
 def test_run_write_reports_truthful_failure_on_db_error(monkeypatch):
     """A failing write must never return a success dict (no commit-after-failure)."""
 
-    async def fake_get_connection(org_id, project_id, ref, include_secret):
-        return {"id": 4, "name": "erp"}
+    async def fake_get_scope(org_id, project_id, ref, include_secret):
+        return {"id": 4, "name": "erp", "engine": "postgresql"}
 
     async def fake_resolve_engine(record):
         return "engine"
@@ -62,7 +62,7 @@ def test_run_write_reports_truthful_failure_on_db_error(monkeypatch):
                              rowcount_val, duration_ms):
         logged.update(success=success, error=error, rowcount=rowcount_val)
 
-    monkeypatch.setattr(service, "get_connection", fake_get_connection)
+    monkeypatch.setattr(service, "get_scope", fake_get_scope)
     monkeypatch.setattr(service, "_resolve_engine", fake_resolve_engine)
     monkeypatch.setattr(service, "_execute_write", fake_execute_write)
     monkeypatch.setattr(service, "_log_query", fake_log_write)

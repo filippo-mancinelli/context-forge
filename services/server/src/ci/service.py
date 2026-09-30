@@ -33,9 +33,9 @@ def _tail(text: str, max_chars: int = LOG_TAIL_CHARS) -> str:
     return "…(truncated)…\n" + cleaned[-max_chars:]
 
 
-async def _resolve_repo(org_id: int, repo_name: str) -> dict[str, Any]:
+async def _resolve_repo(org_id: int, project_id: int, repo_name: str) -> dict[str, Any]:
     try:
-        return await resolve_repo(org_id, repo_name)
+        return await resolve_repo(org_id, project_id, repo_name)
     except GitProviderError as e:
         raise CiError(str(e)) from e
 
@@ -46,8 +46,8 @@ _headers = provider_headers
 # --------------------------------------------------------------------------- #
 # Recent runs
 # --------------------------------------------------------------------------- #
-async def recent_runs(org_id: int, repo_name: str, limit: int = 10) -> list[dict[str, Any]]:
-    target = await _resolve_repo(org_id, repo_name)
+async def recent_runs(org_id: int, project_id: int, repo_name: str, limit: int = 10) -> list[dict[str, Any]]:
+    target = await _resolve_repo(org_id, project_id, repo_name)
     limit = max(1, min(limit, 30))
     async with httpx.AsyncClient(timeout=15, headers=_headers(target)) as client:
         if target["provider"] == "github":
@@ -99,9 +99,10 @@ async def recent_runs(org_id: int, repo_name: str, limit: int = 10) -> list[dict
 # Failure detail: failed jobs + error log tail
 # --------------------------------------------------------------------------- #
 async def failure_detail(
-    org_id: int, repo_name: str, run_id: Optional[int] = None, max_log_chars: int = LOG_TAIL_CHARS
+    org_id: int, project_id: int, repo_name: str, run_id: Optional[int] = None,
+    max_log_chars: int = LOG_TAIL_CHARS
 ) -> dict[str, Any]:
-    target = await _resolve_repo(org_id, repo_name)
+    target = await _resolve_repo(org_id, project_id, repo_name)
     max_log_chars = max(500, min(max_log_chars, 20000))
     async with httpx.AsyncClient(timeout=30, headers=_headers(target), follow_redirects=True) as client:
         if target["provider"] == "github":

@@ -1,33 +1,39 @@
 import inspect
 
-from src import db
 from src.datasources import service
 
 
-def test_db_connections_unique_key_moves_to_project():
-    src_text = inspect.getsource(db.apply_project_migration)
-    assert "db_connections_project_name_key" in src_text
-
-
-def test_service_signatures_take_project():
+def test_project_views_take_org_and_project():
     for fn in (
         service.list_connections, service.get_connection, service.resolve_connection,
-        service.create_connection, service.update_connection, service.delete_connection,
-        service.test_connection, service.schema_overview, service.describe_table,
-        service.run_query, service.query_log,
+        service.schema_overview, service.describe_table, service.run_query,
+        service.run_write, service.query_log,
     ):
         assert list(inspect.signature(fn).parameters)[:2] == ["org_id", "project_id"], fn.__name__
 
 
-def test_query_log_insert_carries_project():
-    src_text = inspect.getsource(service.run_query)
-    assert "project_id" in src_text
+def test_catalog_operations_take_the_org_only():
+    for fn in (
+        service.list_catalog_connections, service.get_catalog_connection, service.find_connection,
+        service.create_connection, service.update_connection, service.delete_connection,
+        service.test_connection, service.mark_pending_secret,
+    ):
+        params = list(inspect.signature(fn).parameters)
+        assert params[0] == "org_id" and "project_id" not in params, fn.__name__
 
 
-def test_routes_and_tools_scoped():
-    import src.api.routes.datasources as ds_routes
+def test_query_log_insert_carries_the_project():
+    assert "project_id" in inspect.getsource(service.run_query)
+
+
+def test_tools_stay_project_scoped():
     import src.mcp.datasources as ds_tools
 
-    assert "get_active_project" in inspect.getsource(ds_routes)
-    assert "get_active_org" not in inspect.getsource(ds_routes)
     assert "require_project_id" in inspect.getsource(ds_tools)
+
+
+def test_scope_fields_are_additive():
+    # Le viste di progetto leggono il perimetro dal collegamento, non dalla connessione.
+    source = inspect.getsource(service)
+    assert "project_db_scopes" in source
+    assert "scope_label" in source

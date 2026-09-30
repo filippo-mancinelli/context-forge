@@ -144,10 +144,11 @@ async def delete_project(project: str) -> dict:
     """Delete an empty project. Projects holding resources are never deleted.
 
     A project can only be removed once it holds no repositories, documents, web
-    sites, databases, API contracts, SSH sources, chat sessions, jobs, API keys
-    or memories: its resources carry the project id without a foreign key, so
-    deleting a populated project would leave unreachable rows behind. The
-    organization's default project is never deleted.
+    sites, API contracts, chat sessions, jobs, API keys or memories: those carry
+    the project id without a foreign key, so deleting a populated project would
+    leave unreachable rows behind. SSH folders and databases selected from the
+    organization catalog are released automatically and stay in the catalog.
+    The organization's default project is never deleted.
 
     Args:
         project: project id or slug, among those you can access.

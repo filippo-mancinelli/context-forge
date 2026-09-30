@@ -1,6 +1,6 @@
 """Runtime settings management routes.
 
-Both ``forge_config`` (repos + indexing) and ``settings_overrides`` (providers,
+Both ``forge_config`` (memory + indexing) and ``settings_overrides`` (providers,
 models, embeddings, tokens, Telegram) are per-organization; changing
 requires admin role in active organization. Changing embeddings
 configuration requires re-embedding organization's content (see
@@ -23,7 +23,6 @@ from ...org_settings import (
     persist_org_settings_overrides,
     webhook_secret_owner,
 )
-from ...indexer.indexer import sync_repos_config
 from ...tenancy import role_at_least
 from ...mcp.memory import reset_memory_client
 from ...org_config import get_org_config, persist_org_config
@@ -88,13 +87,13 @@ async def get_runtime_settings(org: ActiveOrg = Depends(get_active_org)):
 async def update_runtime_settings(
     req: SettingsUpdateRequest, org: ActiveOrg = Depends(require_role("admin"))
 ):
-    """Update the active org's repos/indexing and per-org model/provider settings."""
+    """Update the active org's indexing/memory config and per-org model/provider settings."""
     warnings: list[str] = []
 
-    # --- Per-organization forge config (repos + indexing) ---
-    forge = ForgeConfig(**req.forge_config)
+    # --- Per-organization forge config (memory + indexing) ---
+    # I repository stanno nel catalogo: la configurazione non li porta.
+    forge = ForgeConfig(**{k: v for k, v in req.forge_config.items() if k != "repos"})
     await persist_org_config(org.org_id, forge)
-    await sync_repos_config(org.org_id)
     # Re-apply per-org schedule changes to the scheduler.
     try:
         from ...scheduler import sync_scheduler_jobs

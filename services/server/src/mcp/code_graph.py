@@ -22,29 +22,37 @@ MAX_DEFINING_FILES = 20
 MAX_EDGES = 20_000
 
 
+# Simboli dei repository selezionati dal progetto ($1), con il nome del repository nel catalogo.
+_PROJECT_SYMBOLS = (
+    "repo_symbols s "
+    "JOIN project_repos pr ON pr.repo_id = s.repo_id AND pr.project_id = $1 "
+    "JOIN repos sr ON sr.id = s.repo_id"
+)
+
+
 async def _edges_and_defs(project_id: int, repos: Optional[list[str]]):
     from ..db import get_pool
 
     pool = await get_pool()
-    repo_filter = "AND r.repo_name = ANY($2::text[])" if repos else ""
+    repo_filter = "AND sr.name = ANY($2::text[])" if repos else ""
     async with pool.acquire() as conn:
         args = [project_id] + ([repos] if repos else [])
         edge_rows = await conn.fetch(
             f"""
             WITH useful AS (
-                SELECT name
-                FROM repo_symbols
-                WHERE project_id = $1 AND kind = 'def'
-                GROUP BY name
-                HAVING COUNT(DISTINCT file_path) <= {MAX_DEFINING_FILES}
+                SELECT s.name
+                FROM {_PROJECT_SYMBOLS}
+                WHERE s.kind = 'def'
+                GROUP BY s.name
+                HAVING COUNT(DISTINCT s.file_path) <= {MAX_DEFINING_FILES}
             )
-            SELECT r.file_path AS src_file, d.file_path AS dst_file,
-                   SUM(r.occurrences) AS weight
-            FROM repo_symbols r
-            JOIN useful u ON u.name = r.name
-            JOIN repo_symbols d
-              ON d.project_id = r.project_id AND d.name = r.name AND d.kind = 'def'
-            WHERE r.project_id = $1 AND r.kind = 'ref' {repo_filter}
+            SELECT s.file_path AS src_file, d.file_path AS dst_file,
+                   SUM(s.occurrences) AS weight
+            FROM {_PROJECT_SYMBOLS}
+            JOIN useful u ON u.name = s.name
+            JOIN repo_symbols d ON d.name = s.name AND d.kind = 'def'
+            JOIN project_repos dp ON dp.repo_id = d.repo_id AND dp.project_id = $1
+            WHERE s.kind = 'ref' {repo_filter}
             GROUP BY 1, 2
             LIMIT {MAX_EDGES}
             """,
@@ -52,9 +60,9 @@ async def _edges_and_defs(project_id: int, repos: Optional[list[str]]):
         )
         def_rows = await conn.fetch(
             f"""
-            SELECT file_path, name, node_type AS kind, repo_name
-            FROM repo_symbols r
-            WHERE project_id = $1 AND kind = 'def' {repo_filter.replace('r.repo_name', 'repo_name')}
+            SELECT s.file_path, s.name, s.node_type AS kind, sr.name AS repo_name
+            FROM {_PROJECT_SYMBOLS}
+            WHERE s.kind = 'def' {repo_filter}
             """,
             *args,
         )
@@ -154,26 +162,26 @@ async def repo_neighbors(
 
     name = symbol.strip()
     pool = await get_pool()
-    repo_filter = "AND repo_name = ANY($3::text[])" if repos else ""
+    repo_filter = "AND sr.name = ANY($3::text[])" if repos else ""
     args = [project_id, name] + ([repos] if repos else [])
     try:
         async with pool.acquire() as conn:
             defined = await conn.fetch(
                 f"""
-                SELECT repo_name, file_path, node_type, line
-                FROM repo_symbols
-                WHERE project_id=$1 AND kind='def' AND lower(name)=lower($2) {repo_filter}
-                ORDER BY repo_name, file_path
+                SELECT sr.name AS repo_name, s.file_path, s.node_type, s.line
+                FROM {_PROJECT_SYMBOLS}
+                WHERE s.kind='def' AND lower(s.name)=lower($2) {repo_filter}
+                ORDER BY sr.name, s.file_path
                 LIMIT {int(limit)}
                 """,
                 *args,
             )
             referenced = await conn.fetch(
                 f"""
-                SELECT repo_name, file_path, occurrences, line
-                FROM repo_symbols
-                WHERE project_id=$1 AND kind='ref' AND lower(name)=lower($2) {repo_filter}
-                ORDER BY occurrences DESC, file_path
+                SELECT sr.name AS repo_name, s.file_path, s.occurrences, s.line
+                FROM {_PROJECT_SYMBOLS}
+                WHERE s.kind='ref' AND lower(s.name)=lower($2) {repo_filter}
+                ORDER BY s.occurrences DESC, s.file_path
                 LIMIT {int(limit)}
                 """,
                 *args,
@@ -183,11 +191,11 @@ async def repo_neighbors(
                 files = [r["file_path"] for r in defined]
                 siblings = await conn.fetch(
                     f"""
-                    SELECT file_path, name, node_type
-                    FROM repo_symbols
-                    WHERE project_id=$1 AND kind='def' AND file_path = ANY($2::text[])
-                      AND lower(name) <> lower($3)
-                    ORDER BY file_path, name
+                    SELECT s.file_path, s.name, s.node_type
+                    FROM {_PROJECT_SYMBOLS}
+                    WHERE s.kind='def' AND s.file_path = ANY($2::text[])
+                      AND lower(s.name) <> lower($3)
+                    ORDER BY s.file_path, s.name
                     LIMIT {int(limit)}
                     """,
                     project_id, files, name,

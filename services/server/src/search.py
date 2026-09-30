@@ -77,30 +77,36 @@ def _normalize_scores(rows: list[dict[str, Any]]) -> None:
 # --------------------------------------------------------------------------- #
 # Repository chunk search
 # --------------------------------------------------------------------------- #
-# Both branches keep a stable parameter layout so the optional repo filter never
-# needs dynamic placeholder renumbering:
-#   $1 embedding $2 org_id $3 candidate pool $4 query $5 repos (text[] or NULL) $6 limit $7 project (bigint or NULL)
+# Chunks belong to a catalog repository: the project reaches them through its
+# selections (project_repos) and the name filter uses the catalog name. The
+# c.org_id predicate stays in every vector CTE: the HNSW indexes are partial per
+# organization. Stable parameter layout:
+#   $1 embedding $2 org_id $3 candidate pool $4 query $5 repos (text[] or NULL) $6 limit $7 project
 @lru_cache(maxsize=8)
 def _repo_hybrid_sql(dims: int) -> str:
     d = int(dims)
-    expr = vector_expr(d)
+    expr = vector_expr(d, "c.embedding")
     return f"""
 WITH tsq AS (
     SELECT websearch_to_tsquery('{TSQUERY_CONFIG}', $4) AS query
 ),
+scope AS (
+    SELECT r.id
+    FROM repos r
+    JOIN project_repos pr ON pr.repo_id = r.id AND pr.project_id = $7
+    WHERE r.org_id = $2 AND ($5::text[] IS NULL OR r.name = ANY($5))
+),
 vec AS (
-    SELECT id, ROW_NUMBER() OVER (ORDER BY {expr} <=> $1::vector({d})) AS rank
-    FROM repo_chunks
-    WHERE org_id = $2 AND ($7::bigint IS NULL OR project_id = $7)
-      AND ($5::text[] IS NULL OR repo_name = ANY($5))
+    SELECT c.id, ROW_NUMBER() OVER (ORDER BY {expr} <=> $1::vector({d})) AS rank
+    FROM repo_chunks c
+    WHERE c.org_id = $2 AND c.repo_id IN (SELECT id FROM scope)
     ORDER BY {expr} <=> $1::vector({d})
     LIMIT $3
 ),
 kw AS (
     SELECT c.id, ROW_NUMBER() OVER (ORDER BY ts_rank_cd(c.content_tsv, tsq.query) DESC) AS rank
     FROM repo_chunks c, tsq
-    WHERE c.org_id = $2 AND ($7::bigint IS NULL OR c.project_id = $7)
-      AND ($5::text[] IS NULL OR c.repo_name = ANY($5))
+    WHERE c.org_id = $2 AND c.repo_id IN (SELECT id FROM scope)
       AND c.content_tsv @@ tsq.query
     ORDER BY ts_rank_cd(c.content_tsv, tsq.query) DESC
     LIMIT $3
@@ -112,24 +118,27 @@ fused AS (
     FROM vec v
     FULL OUTER JOIN kw k ON v.id = k.id
 )
-SELECT c.repo_name, c.file_path, c.chunk_type, c.content, c.metadata, f.score
+SELECT r.name AS repo_name, c.file_path, c.chunk_type, c.content, c.metadata, f.score
 FROM fused f
 JOIN repo_chunks c ON c.id = f.id
+JOIN repos r ON r.id = c.repo_id
 ORDER BY f.score DESC
 LIMIT $6
 """
 
 
+#   $1 embedding $2 org_id $3 repos (text[] or NULL) $4 limit $5 project
 @lru_cache(maxsize=8)
 def _repo_vector_sql(dims: int) -> str:
     d = int(dims)
-    expr = vector_expr(d)
+    expr = vector_expr(d, "c.embedding")
     return f"""
-SELECT repo_name, file_path, chunk_type, content, metadata,
+SELECT r.name AS repo_name, c.file_path, c.chunk_type, c.content, c.metadata,
        1 - ({expr} <=> $1::vector({d})) AS score
-FROM repo_chunks
-WHERE org_id = $2 AND ($5::bigint IS NULL OR project_id = $5)
-  AND ($3::text[] IS NULL OR repo_name = ANY($3))
+FROM repo_chunks c
+JOIN repos r ON r.id = c.repo_id AND r.org_id = $2
+JOIN project_repos pr ON pr.repo_id = r.id AND pr.project_id = $5
+WHERE c.org_id = $2 AND ($3::text[] IS NULL OR r.name = ANY($3))
 ORDER BY {expr} <=> $1::vector({d})
 LIMIT $4
 """
@@ -205,19 +214,19 @@ SYMBOL_CHUNK_TYPES = (
 )
 
 _SYMBOL_SEARCH_SQL = """
-SELECT repo_name, file_path, chunk_type, metadata, content
-FROM repo_chunks
-WHERE org_id = $1
-  AND ($7::bigint IS NULL OR project_id = $7)
-  AND chunk_type = ANY($2::text[])
-  AND metadata->>'name' IS NOT NULL
-  AND metadata->>'name' ILIKE $3
-  AND ($4::text[] IS NULL OR repo_name = ANY($4))
+SELECT r.name AS repo_name, c.file_path, c.chunk_type, c.metadata, c.content
+FROM repo_chunks c
+JOIN repos r ON r.id = c.repo_id AND r.org_id = $1
+JOIN project_repos pr ON pr.repo_id = r.id AND pr.project_id = $7
+WHERE c.chunk_type = ANY($2::text[])
+  AND c.metadata->>'name' IS NOT NULL
+  AND c.metadata->>'name' ILIKE $3
+  AND ($4::text[] IS NULL OR r.name = ANY($4))
 ORDER BY
-  (lower(metadata->>'name') = lower($5)) DESC,
-  (lower(metadata->>'name') LIKE lower($5) || '%') DESC,
-  length(metadata->>'name') ASC,
-  repo_name, file_path
+  (lower(c.metadata->>'name') = lower($5)) DESC,
+  (lower(c.metadata->>'name') LIKE lower($5) || '%') DESC,
+  length(c.metadata->>'name') ASC,
+  r.name, c.file_path
 LIMIT $6
 """
 

@@ -39,9 +39,6 @@ def _patch(monkeypatch, current=None, probe_dims=1536):
     async def mock_get_org_config(org_id: int):
         return ForgeConfig()
 
-    async def mock_sync_repos_config(org_id: int):
-        pass
-
     # Patch in org_settings module
     monkeypatch.setattr(org_settings, "get_org_settings", mock_get_org_settings)
     monkeypatch.setattr(
@@ -55,7 +52,6 @@ def _patch(monkeypatch, current=None, probe_dims=1536):
     )
     monkeypatch.setattr(settings_routes, "persist_org_config", mock_persist_org_config)
     monkeypatch.setattr(settings_routes, "get_org_config", mock_get_org_config)
-    monkeypatch.setattr(settings_routes, "sync_repos_config", mock_sync_repos_config)
     monkeypatch.setattr(settings_routes, "reset_embedder_clients", lambda: None)
     monkeypatch.setattr(settings_routes, "reset_memory_client", lambda: None)
 
@@ -264,3 +260,21 @@ def test_put_settings_rejects_a_non_numeric_dimension(monkeypatch):
         assert current.llm_model != "gpt-4"
 
     asyncio.run(run_test())
+
+
+def test_put_settings_never_stores_repositories(monkeypatch):
+    """Repositories live in the catalog: the saved configuration never carries them."""
+    persisted = []
+    _patch(monkeypatch)
+
+    async def capture(org_id, cfg):
+        persisted.append(cfg)
+
+    monkeypatch.setattr(settings_routes, "persist_org_config", capture)
+    req = settings_routes.SettingsUpdateRequest(
+        forge_config={"repos": [{"name": "x", "type": "local", "path": "/r"}],
+                      "indexing": {"schedule": "0 1 * * *"}},
+    )
+    asyncio.run(settings_routes.update_runtime_settings(req, org=_org("admin")))
+    assert persisted[0].repos == []
+    assert persisted[0].indexing.schedule == "0 1 * * *"

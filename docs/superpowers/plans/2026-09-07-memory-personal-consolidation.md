@@ -4,7 +4,7 @@
 
 **Goal:** Give memory a per-user personal scope alongside the project scope, track which memories are actually used, and run a daily consolidation job that de-duplicates and fades stale memories.
 
-**Architecture:** A new `memory_stats` table (migration `0005_memory_stats`) records one row per Mem0 memory id with a normalised content hash, hit counters and a `stale_at` marker. `src/mcp/context.py` learns to resolve a personal namespace (`f"{project_namespace}::u{user_id}"`) from the MCP principal, and a single scope resolver feeds the MCP tools, the REST routes and (later) `context_pack`. `src/memory_consolidation.py` holds the pure consolidation logic (exact hash dedup, token-Jaccard near-dedup, decay) and is driven both by a daily scheduler job and by an admin-only REST endpoint surfaced as a button on the Memory page.
+**Architecture:** A new `memory_stats` table (migration `0008_memory_stats`) records one row per Mem0 memory id with a normalised content hash, hit counters and a `stale_at` marker. `src/mcp/context.py` learns to resolve a personal namespace (`f"{project_namespace}::u{user_id}"`) from the MCP principal, and a single scope resolver feeds the MCP tools, the REST routes and (later) `context_pack`. `src/memory_consolidation.py` holds the pure consolidation logic (exact hash dedup, token-Jaccard near-dedup, decay) and is driven both by a daily scheduler job and by an admin-only REST endpoint surfaced as a button on the Memory page.
 
 **Tech Stack:** Python 3.11 (dev 3.14), FastMCP, FastAPI, asyncpg (raw SQL), Mem0 + pgvector, APScheduler, React 18 + TypeScript + Vite.
 
@@ -38,7 +38,7 @@ Copied verbatim from `docs/superpowers/specs/2026-09-07-platform-improvements-ro
   installed in the local venv with `uv pip install --python .venv/Scripts/python.exe -e .`
   (run from `services/server`). No new system packages unless the Dockerfile
   is updated in the same task.
-- Naming: the product is `context-forge` / `ContextForge`. Never `aster`.
+- Naming: the product is `context-forge` / `ContextForge`. Never a downstream product name.
 - Code comments: max one line, only where needed. Commit titles 3–10 words,
   English, imperative; body optional, max 20 words.
 - README: each feature updates the sections it touches (features, tools,
@@ -91,7 +91,7 @@ Copied verbatim from `docs/superpowers/specs/2026-09-07-platform-improvements-ro
 
 | File | Responsibility |
 |---|---|
-| `services/server/src/migrations/versions/0005_memory_stats.py` (create) | DDL for `memory_stats` + its index |
+| `services/server/src/migrations/versions/0008_memory_stats.py` (create) | DDL for `memory_stats` + its index |
 | `services/server/src/memory_stats.py` (create) | Text normalisation, content hash, and every `memory_stats` SQL statement |
 | `services/server/src/mcp/context.py` (modify) | Personal user id, personal namespace, scope → namespaces resolver |
 | `services/server/src/mcp/memory.py` (modify) | Tool signatures with `scope` / `include_stale`, plus the reusable `search_memories` / `list_memories` / `search_in_namespaces` / `list_in_namespaces` |
@@ -105,10 +105,10 @@ Copied verbatim from `docs/superpowers/specs/2026-09-07-platform-improvements-ro
 
 ---
 
-### Task 1: Migration `0005_memory_stats` and the stats helpers
+### Task 1: Migration `0008_memory_stats` and the stats helpers
 
 **Files:**
-- Create: `services/server/src/migrations/versions/0005_memory_stats.py`
+- Create: `services/server/src/migrations/versions/0008_memory_stats.py`
 - Create: `services/server/src/memory_stats.py`
 - Test: `services/server/tests/test_memory_stats.py`
 
@@ -210,7 +210,7 @@ def _migration():
     from src.migrations.runner import discover_versions
 
     found = [m for m in discover_versions() if getattr(m, "VERSION", None) == 5]
-    assert found, "0005_memory_stats was not discovered by the migration runner"
+    assert found, "0008_memory_stats was not discovered by the migration runner"
     return found[0]
 
 
@@ -355,13 +355,13 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'src.memory_stats'`.
 
 - [ ] **Step 3: Write the migration module**
 
-Create `services/server/src/migrations/versions/0005_memory_stats.py`:
+Create `services/server/src/migrations/versions/0008_memory_stats.py`:
 
 ```python
 """Usage counters for Mem0 memories. New schema changes go in a new version."""
 from __future__ import annotations
 
-VERSION = 5
+VERSION = 8
 NAME = "memory_stats"
 TRANSACTIONAL = True
 
@@ -639,7 +639,7 @@ Expected: PASS (baseline 530 + the new tests).
 - [ ] **Step 7: Commit**
 
 ```bash
-git add services/server/src/migrations/versions/0005_memory_stats.py services/server/src/memory_stats.py services/server/tests/test_memory_stats.py
+git add services/server/src/migrations/versions/0008_memory_stats.py services/server/src/memory_stats.py services/server/tests/test_memory_stats.py
 git commit -m "add memory_stats table and helpers"
 ```
 
@@ -3145,9 +3145,9 @@ Replace the Memory line under `## MCP tools` with:
 - [ ] **Step 5: Verify the README has no stale claims**
 
 Run: `grep -n "memory" README.md`
-Confirm nothing still describes memory as project-only, and that `aster` appears
-nowhere in the files you touched:
-Run: `grep -rn "aster" README.md .env.example docker-compose.yml`
+Confirm nothing still describes memory as project-only, and that no downstream product name
+appears in the files you touched:
+Run: `grep -rniE "<downstream product name>" README.md .env.example docker-compose.yml`
 Expected: no matches.
 
 - [ ] **Step 6: Run the full server suite**
@@ -3191,7 +3191,7 @@ git commit -m "document personal memory and consolidation"
 | `memory_list(limit=20, scope="all", include_stale=False)` | 3 |
 | `memory_delete` ownership check across both namespaces | 3 |
 | `search_memories(query, limit, scope, include_stale) -> list[dict]` exposed for `context_pack` | 3 |
-| Migration `0005_memory_stats` with the exact DDL | 1 |
+| Migration `0008_memory_stats` with the exact DDL | 1 |
 | Content hash = sha256 of lowercased, punctuation-stripped, whitespace-collapsed text | 1 |
 | Hit bump in one `UPDATE ... WHERE memory_id = ANY($1)` | 1, 3 |
 | Stale post-filter, fetch `limit * 2` from Mem0 | 3 |

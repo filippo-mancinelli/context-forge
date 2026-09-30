@@ -1,9 +1,14 @@
 """Webhook endpoint for push-triggered incremental re-indexing and auto-memory.
 
-A git host (GitHub, GitLab, or a custom caller) POSTs here on push; we match the
-pushed repository against configured repos and queue an index request for each
-match. Actual indexing runs incrementally in the scheduler loop, re-processing
-only the files changed since the last indexed commit.
+A git host (GitHub, GitLab, or a custom caller) POSTs here on push; the pushed
+repository is recognized by its normalized URL among the catalog repositories
+and one index request is queued for each match. When the payload carries a
+usable ``ref`` (``refs/heads/<branch>``, as GitHub and GitLab both send), only
+catalog repositories on that branch match, so a push to one branch does not
+reindex or auto-memorize a different branch of the same URL; without such a
+``ref`` matching stays URL-only. Actual indexing runs incrementally in the
+scheduler loop, re-processing only the files changed since the last indexed
+commit.
 
 Additionally, commit messages following Conventional Commits are automatically
 saved as persistent memories so agents can discover recent changes.
@@ -116,23 +121,31 @@ async def webhook_index(
         return {"status": "ignored", "reason": "no repository identifier in payload", "count": 0}
 
     normalized_urls = {_normalize_git_url(c) for c in candidates}
-    raw_names = set(candidates)
+    ref = payload.get("ref")
+    pushed_branch = (
+        ref[len("refs/heads/"):].strip()
+        if isinstance(ref, str) and ref.startswith("refs/heads/")
+        else None
+    ) or None
 
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT org_id, project_id, name, url FROM repos WHERE type IN ('github', 'gitlab')"
+            "SELECT id, org_id, name, url, branch FROM repos WHERE type IN ('github', 'gitlab') AND url IS NOT NULL"
         )
+        # Il riconoscimento è per URL: un nome uguale può appartenere a un altro
+        # repository. Con un ref utilizzabile si confronta anche il branch, così
+        # un push su un branch non tocca il repository di un altro branch dello
+        # stesso URL.
         matches = [
-            (r["org_id"], r["project_id"], r["name"])
+            (r["org_id"], r["id"], r["name"])
             for r in rows
-            if (r["url"] and _normalize_git_url(r["url"]) in normalized_urls)
-            or r["name"] in raw_names
+            if _normalize_git_url(r["url"]) in normalized_urls
+            and (pushed_branch is None or (r["branch"] or "main") == pushed_branch)
         ]
-        for org_id, project_id, name in matches:
+        for org_id, repo_id, _ in matches:
             await conn.execute(
-                "INSERT INTO index_requests (org_id, project_id, repo_name) VALUES ($1, $2, $3)",
-                org_id, project_id, name,
+                "INSERT INTO index_requests (org_id, repo_id) VALUES ($1, $2)", org_id, repo_id
             )
 
     if matches:
@@ -140,25 +153,28 @@ async def webhook_index(
                     len(matches), ", ".join(m[2] for m in matches))
 
     # ── Auto-memory from commit messages ──────────────────────────────
-    # Extract commits from the push payload and create memories for any
-    # Conventional Commits messages so agents discover recent changes.
-    # Memories are scoped to the memory_namespace of each matched repo's own
-    # project — never to the global default namespace. If a match's project
-    # namespace can't be resolved, that match is skipped rather than falling
-    # back to a shared namespace.
+    # Conventional Commits messages become memories in the namespace of every
+    # project that selected the pushed repository: memory search reads a single
+    # namespace, so each project needs its own copy. A match without selecting
+    # projects produces no memory; there is no fallback to a shared namespace.
+    # A project that selected more than one matched repository (e.g. two
+    # branches of the same URL before a ref narrowed the match) still gets one
+    # memory per commit: namespaces are deduped before writing.
     auto_memories = 0
     try:
         commits = payload.get("commits") or []
         if isinstance(commits, list) and commits and matches:
             from ...mcp.memory import _get_memory
 
-            project_ids = {project_id for _, project_id, _ in matches}
             async with pool.acquire() as conn:
                 ns_rows = await conn.fetch(
-                    "SELECT id, memory_namespace FROM projects WHERE id = ANY($1)",
-                    list(project_ids),
+                    "SELECT pr.repo_id, p.memory_namespace FROM project_repos pr "
+                    "JOIN projects p ON p.id = pr.project_id WHERE pr.repo_id = ANY($1::bigint[])",
+                    [repo_id for _, repo_id, _ in matches],
                 )
-            namespaces = {r["id"]: r["memory_namespace"] for r in ns_rows}
+            namespaces: dict[int, list[str]] = {}
+            for r in ns_rows:
+                namespaces.setdefault(r["repo_id"], []).append(r["memory_namespace"])
 
             # Only auto-memorize Conventional Commits
             conv_prefixes = ("feat", "fix", "docs", "style", "refactor",
@@ -178,17 +194,20 @@ async def webhook_index(
                 author = (commit.get("author") or {}).get("name", "")
                 parsed_commits.append((short, author))
 
-            for _org_id, project_id, repo_name in matches:
-                ns = namespaces.get(project_id)
-                if not ns:
-                    continue
-                mem = await _get_memory(_org_id)
-                for short, author in parsed_commits:
-                    meta = {"source": "webhook", "type": "commit", "repo": repo_name}
-                    if author:
-                        meta["author"] = author
-                    mem.add(f"COMMIT [{repo_name}]: {short}", user_id=ns, metadata=meta)
-                    auto_memories += 1
+            targets_by_ns: dict[str, tuple[int, str]] = {}
+            for org_id, repo_id, repo_name in matches:
+                for ns in namespaces.get(repo_id) or []:
+                    targets_by_ns.setdefault(ns, (org_id, repo_name))
+
+            if parsed_commits:
+                for ns, (org_id, repo_name) in targets_by_ns.items():
+                    mem = await _get_memory(org_id)
+                    for short, author in parsed_commits:
+                        meta = {"source": "webhook", "type": "commit", "repo": repo_name}
+                        if author:
+                            meta["author"] = author
+                        mem.add(f"COMMIT [{repo_name}]: {short}", user_id=ns, metadata=meta)
+                        auto_memories += 1
         if auto_memories:
             logger.info("Webhook auto-memorized %d commit(s)", auto_memories)
     except Exception:

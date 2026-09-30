@@ -12,9 +12,12 @@ import logging
 from typing import Optional
 
 from .server import mcp
-from .permissions import requires_permission
-from .context import resolve_org_id, require_project_id
+from .permissions import PermissionDenied, requires_permission
+from .context import get_current_user_id, resolve_org_id, require_project_id
+from .project_access import selection_rights
 from .source_links import ui_link
+from ..catalog import machines, selections
+from ..catalog.names import machine_name
 from ..ssh_sources import service as ssh_service
 
 logger = logging.getLogger(__name__)
@@ -33,10 +36,11 @@ async def _resolve(source: str, include_secret: bool = False) -> dict:
 @mcp.tool()
 @requires_permission("ssh-read")
 async def ssh_sources() -> dict:
-    """List the SSH file sources configured for the active project.
+    """List the SSH folders selected for the active project.
 
-    Each source points at a directory on a remote Linux host (read-only). Use
-    ssh_list_files / ssh_read_file with a source's name or id.
+    Each folder points at a directory on a machine of the organization catalog.
+    Use ssh_list_files / ssh_read_file / ssh_grep with a folder's name or id.
+    Folders not selected yet are listed by catalog_list.
     """
     from ..ssh_sources import service
 
@@ -50,6 +54,7 @@ async def ssh_sources() -> dict:
             {
                 "id": s["id"],
                 "name": s["name"],
+                "machine": s["machine_name"],
                 "host": s["host"],
                 "root_path": s["root_path"],
                 "status": s["status"],
@@ -247,13 +252,24 @@ async def _propose_ssh_write(record: dict, path: str, content: str, reason: str)
     if preview.get("read_error"):
         preview["read_error"] = scrub_text(preview["read_error"])
 
+    # The catalog record carries no project: the request belongs to the active one.
+    project_id = await require_project_id()
     kind, requester_id, label = current_requester()
     created = await write_requests.create(
         org_id=record["org_id"],
-        project_id=record["project_id"],
+        project_id=project_id,
         kind="ssh_write_file",
         target=f"{record['name']}:{path}",
-        payload={"source": record["name"], "path": path, "content": content},
+        # The folder is pinned: approval writes only if this same folder, with
+        # the same name, machine and root, is still selected by the project.
+        payload={
+            "source": record["name"],
+            "ssh_source_id": record["id"],
+            "machine_id": record["machine_id"],
+            "root_path": record["root_path"],
+            "path": path,
+            "content": content,
+        },
         preview=preview,
         reason=reason,
         requested_by_kind=kind,
@@ -267,62 +283,107 @@ async def _propose_ssh_write(record: dict, path: str, content: str, reason: str)
 @requires_permission("sources-write")
 async def ssh_source_add(
     name: str,
-    host: str,
     root_path: str,
-    username: str,
+    machine: Optional[str] = None,
+    host: Optional[str] = None,
+    username: Optional[str] = None,
     port: int = 22,
     auth_method: str = "password",
     include_globs: Optional[str] = None,
     exclude_globs: Optional[str] = None,
     description: Optional[str] = None,
 ) -> dict:
-    """Register an SSH file source for the active project, without its credential.
+    """Register an SSH folder in the organization catalog and select it for the active project.
 
-    The source is created in 'pending_secret' state: a person adds the password
-    or private key from the web UI before files can be read. This tool takes no
-    credential of any kind.
+    Pass the name of a catalog machine, or host and username. An unknown address
+    creates a machine without credential ('pending_secret'): a person adds the
+    password or key from the Catalog page before files can be read. When the
+    same machine and root are already registered, the existing folder is
+    selected instead of creating a copy. This tool takes no credential.
+    Creating a new folder on a machine already in the catalog requires an organization admin.
 
     Args:
-        name: unique source name within the project.
-        host: host to read files from.
+        name: folder name, unique in the organization.
         root_path: directory every read is confined to.
-        username: user the connection authenticates as.
-        port: SSH port. Defaults to 22.
-        auth_method: 'password' or 'key' — which credential will be added later.
+        machine: name of a machine in the catalog.
+        host: host to read files from, when no machine name is given.
+        username: user the connection authenticates as, with host.
+        port: SSH port, with host. Defaults to 22.
+        auth_method: 'password' or 'key' — the credential a person will add.
         include_globs: comma-separated patterns to include.
         exclude_globs: comma-separated patterns to exclude, e.g. secrets.
         description: optional free-text description.
 
     Returns:
-        dict with the created source and where to add its credential.
+        dict with the folder, whether it was created, and its machine.
     """
     org_id = await resolve_org_id()
     project_id = await require_project_id()
-    data = {
-        "name": name,
-        "host": host,
-        "port": port,
-        "username": username,
-        "auth_method": auth_method,
-        "root_path": root_path,
-        "include_globs": include_globs,
-        "exclude_globs": exclude_globs,
-        "description": description,
-    }
+    # Registrare equivale a selezionare: valgono gli stessi diritti di resource_select.
+    can_select, can_select_restricted = await selection_rights(org_id, project_id)
+    if not can_select:
+        raise PermissionDenied("Adding a folder to this project requires the member role on this project")
+    new_machine = False
     try:
-        source = await ssh_service.create_source(org_id, project_id, data)
-    except ValueError as exc:
-        return {"status": "error", "error": str(exc)}
+        if machine:
+            target = await machines.get_machine_by_name(org_id, machine)
+            if target is None:
+                return {"status": "error", "error": f"Machine '{machine}' is not in the catalog"}
+        elif host and username:
+            target = await machines.find_machine(org_id, host, port, username)
+            if target is None:
+                new_machine = True
+                target = await machines.create_machine(org_id, {
+                    "name": machine_name(username, host, port),
+                    "host": host,
+                    "port": port,
+                    "username": username,
+                    "auth_method": auth_method,
+                })
+                await machines.mark_pending_secret(org_id, target["id"])
+                target = {**target, "status": "pending_secret"}
+        else:
+            return {"status": "error", "error": "Pass machine, or host and username"}
+
+        source = await ssh_service.find_source(org_id, target["id"], root_path)
+        created = source is None
+        if created and not new_machine and not can_select_restricted:
+            # La credenziale sta sulla macchina: una cartella nuova su una macchina
+            # già censita sarebbe leggibile subito, senza che una persona la veda.
+            raise PermissionDenied(
+                f"Machine '{target['name']}' is already in the catalog: an organization admin "
+                "must register the new folder in the catalog, then it can be selected here"
+            )
+        if created:
+            source = await ssh_service.create_source(org_id, {
+                "name": name,
+                "machine_id": target["id"],
+                "root_path": root_path,
+                "include_globs": include_globs,
+                "exclude_globs": exclude_globs,
+                "description": description,
+            })
+        await selections.select_resource(
+            org_id, project_id, "folders", source["id"], get_current_user_id(),
+            can_select_restricted,
+        )
+    except selections.RestrictedResourceError as exc:
+        raise PermissionDenied(f"'{exc}' is restricted: only an organization admin can add it to a project")
+    except PermissionDenied:
+        raise
     except Exception as exc:  # noqa: BLE001 — vincoli di unicità e errori del driver
         return {"status": "error", "error": str(exc)}
 
-    await ssh_service.mark_pending_secret(org_id, project_id, source["id"])
-    return {
+    result = {
         "status": "ok",
-        "source": {**source, "status": "pending_secret"},
-        "next_step": (
-            f"Source '{name}' has no credential yet. Add the password or key from "
-            "the SSH Files page in the web UI; reads fail until then."
-        ),
-        "ui_url": ui_link("/ssh-sources"),
+        "created": created,
+        "source": source,
+        "machine": {"name": target["name"], "status": target.get("status")},
     }
+    if target.get("status") == "pending_secret":
+        result["next_step"] = (
+            f"Machine '{target['name']}' has no credential yet. Add the password or key "
+            "from the Catalog page in the web UI; reads fail until then."
+        )
+        result["ui_url"] = ui_link("/catalog")
+    return result

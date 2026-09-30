@@ -84,8 +84,8 @@ def test_repo_search_orders_by_the_indexed_expression(monkeypatch, hybrid):
     asyncio.run(search.search_repo_chunks(42, "q", project_id=7))
 
     sql = conn.fetched[0]
-    assert "ORDER BY (embedding::vector(1536)) <=> $1::vector(1536)" in sql
-    assert "WHERE org_id = $2" in sql
+    assert "ORDER BY (c.embedding::vector(1536)) <=> $1::vector(1536)" in sql
+    assert "WHERE c.org_id = $2" in sql
     assert "embedding <=> $1::vector)" not in sql
 
 
@@ -145,4 +145,38 @@ def test_hybrid_sql_keeps_the_lexical_half_and_the_parameter_layout(monkeypatch)
     assert "websearch_to_tsquery('english', $4)" in sql
     assert "ts_rank_cd(c.content_tsv, tsq.query)" in sql
     assert "LIMIT $6" in sql
-    assert "($7::bigint IS NULL OR project_id = $7)" in sql
+    assert "JOIN project_repos pr ON pr.repo_id = r.id AND pr.project_id = $7" in sql
+    assert "($5::text[] IS NULL OR r.name = ANY($5))" in sql
+
+
+def _cte(sql, name):
+    """Body of the CTE ``name`` (up to its closing parenthesis at line start)."""
+    return sql.split(f"{name} AS (", 1)[1].split("\n)", 1)[0]
+
+
+def _vector_ctes(sql):
+    """Each statement reading an embedding: the vec CTE, or the whole vector-only query."""
+    return [_cte(sql, "vec")] if "vec AS (" in sql else [sql]
+
+
+@pytest.mark.parametrize("dims", [384, 768, 1024, 1536, 3072])
+@pytest.mark.parametrize(
+    "builder",
+    [
+        search._repo_hybrid_sql, search._repo_vector_sql,
+        search._kb_hybrid_sql, search._kb_vector_sql,
+        search._web_hybrid_sql, search._web_vector_sql,
+    ],
+)
+def test_every_vector_cte_keeps_the_org_predicate(builder, dims):
+    """The HNSW indexes are partial per organization: without it the planner cannot use them."""
+    sql = builder(dims)
+    for cte in _vector_ctes(sql):
+        assert f"(c.embedding::vector({dims})) <=> $1::vector({dims})" in cte
+        assert "c.org_id = $2" in cte
+
+
+def test_repo_lexical_half_keeps_the_org_predicate():
+    kw = _cte(search._repo_hybrid_sql(1536), "kw")
+    assert "c.org_id = $2" in kw
+    assert "c.repo_id IN (SELECT id FROM scope)" in kw

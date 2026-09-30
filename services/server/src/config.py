@@ -25,6 +25,15 @@ class RepoConfig(BaseModel):
     token: Optional[str] = None      # per-repo token override
 
 
+class RepoRecord(RepoConfig):
+    """Catalog repository, with the id that keys the index, the local clone and selections."""
+
+    id: int
+    org_id: int
+    description: Optional[str] = None
+    restricted: bool = False
+
+
 class MemoryConfig(BaseModel):
     user_id: str = "default"
 
@@ -51,6 +60,8 @@ class IndexingConfig(BaseModel):
 
 
 class ForgeConfig(BaseModel):
+    # Repositories to register in the catalog: imported into the repos table at
+    # boot and removed from here (YAML bootstrap and initial setup).
     repos: list[RepoConfig] = Field(default_factory=list)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     indexing: IndexingConfig = Field(default_factory=IndexingConfig)

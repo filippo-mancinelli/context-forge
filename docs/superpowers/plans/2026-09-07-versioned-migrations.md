@@ -38,7 +38,7 @@ Copied verbatim from `docs/superpowers/specs/2026-09-07-platform-improvements-ro
   installed in the local venv with `uv pip install --python .venv/Scripts/python.exe -e .`
   (run from `services/server`). No new system packages unless the Dockerfile
   is updated in the same task.
-- Naming: the product is `context-forge` / `ContextForge`. Never `aster`.
+- Naming: the product is `context-forge` / `ContextForge`. Never a downstream product name.
 - Code comments: max one line, only where needed. Commit titles 3–10 words,
   English, imperative; body optional, max 20 words.
 - README: each feature updates the sections it touches (features, tools,
@@ -998,7 +998,7 @@ git commit -m "add forge-cli migrate and migrate --status"
 
 **Context you need (do not go looking for it):**
 - `README.md` is 147 lines. Its headings in order are: `# context-forge`, `## Features`, `## Architecture`, `## Quick start`, `### Upgrading an existing installation`, `## Projects and the MCP endpoint`, `## MCP tools`, `## Agent setup`, `### Claude Code with OIDC (browser login)`, `## Security`, `### MCP permissions`, `## License`.
-- README copy is English. The product is `context-forge` / `ContextForge`, never `aster`.
+- README copy is English. The product is `context-forge` / `ContextForge`, never a downstream product name.
 - The `### Upgrading an existing installation` section ends with the bullet about embedding columns losing their fixed dimension. Insert the new section right after that bullet list, before the `## Projects and the MCP endpoint` heading.
 
 - [ ] **Step 1: Insert the `## Development` section into `README.md`**

@@ -1,582 +1,33 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import {
-  RefreshCw,
-  Github,
-  GitlabIcon,
-  GitBranch,
-  HardDrive,
-  ExternalLink,
-  Pencil,
-  Plus,
-  Square,
-  Trash2,
-} from 'lucide-react'
+import { GitBranch, Plus, RefreshCw, Square, Unlink } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { api, type GitHubRepo, type GitLabRepo, type RemoteRepo, type Repo, type RepoCreateRequest } from '../lib/api'
-import { Banner, Button, Card, Input, Badge, Dialog, DialogFooter, Select, useConfirm, useToast } from '../components/ui'
-
-type Provider = 'github' | 'gitlab'
-
-function repoBadgeVariant(status: Repo['status']) {
-  const map: Record<Repo['status'], 'success' | 'accent' | 'warning' | 'danger'> = {
-    indexed: 'success',
-    indexing: 'accent',
-    pending: 'warning',
-    error: 'danger',
-  }
-  return map[status] ?? 'warning'
-}
-
-function TypeIcon({ type }: { type: Repo['type'] }) {
-  if (type === 'github') return <Github className="w-3.5 h-3.5 text-muted" />
-  if (type === 'gitlab') return <GitlabIcon className="w-3.5 h-3.5 text-warning" />
-  return <HardDrive className="w-3.5 h-3.5 text-muted" />
-}
-
-function getStars(repo: RemoteRepo, provider: Provider) {
-  return provider === 'github'
-    ? (repo as GitHubRepo).stargazers_count
-    : (repo as GitLabRepo).star_count
-}
-
-function getFork(repo: RemoteRepo, provider: Provider) {
-  return provider === 'github'
-    ? (repo as GitHubRepo).fork
-    : (repo as GitLabRepo).forked_from_project
-}
-
-function formatDate(iso?: string) {
-  if (!iso) return '—'
-  return new Date(iso).toLocaleString(undefined, {
-    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
-  })
-}
-
-function ImportDialog({
-  open,
-  provider,
-  existingRepos,
-  onClose,
-  onAdded,
-}: {
-  open: boolean
-  provider: Provider
-  existingRepos: Repo[]
-  onClose: () => void
-  onAdded: () => void
-}) {
-  const [repos, setRepos] = useState<RemoteRepo[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [search, setSearch] = useState('')
-  const [selected, setSelected] = useState<Record<string, boolean>>({})
-  const [adding, setAdding] = useState(false)
-  const toast = useToast()
-
-  const title = provider === 'github' ? 'GitHub' : 'GitLab'
-
-  const configuredNames = useMemo(
-    () => new Set(existingRepos.map(repo => repo.name)),
-    [existingRepos]
-  )
-
-  const loadRepos = useCallback(async () => {
-    try {
-      setLoading(true)
-      setError(null)
-      const data = provider === 'github'
-        ? await api.github.listRepos()
-        : await api.gitlab.listRepos()
-      setRepos(data)
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setLoading(false)
-    }
-  }, [provider])
-
-  useEffect(() => {
-    if (open) loadRepos()
-  }, [open, loadRepos])
-
-  const filteredRepos = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return repos
-    return repos.filter(repo =>
-      repo.name.toLowerCase().includes(q) ||
-      repo.full_name.toLowerCase().includes(q) ||
-      (repo.description || '').toLowerCase().includes(q)
-    )
-  }, [repos, search])
-
-  const selectableRepos = filteredRepos.filter(repo => !configuredNames.has(repo.full_name.replace('/', '-')))
-  const selectedRepos = selectableRepos.filter(repo => selected[repo.full_name])
-
-  const toggleSelected = (fullName: string) => {
-    setSelected(prev => ({ ...prev, [fullName]: !prev[fullName] }))
-  }
-
-  const handleAdd = async () => {
-    if (!selectedRepos.length) return
-    setAdding(true)
-    setError(null)
-    try {
-      for (const repo of selectedRepos) {
-        if (provider === 'github') {
-          await api.github.addRepo(repo.full_name, repo.default_branch)
-        } else {
-          await api.gitlab.addRepo(repo.full_name, repo.default_branch)
-        }
-      }
-      toast.success(
-        selectedRepos.length === 1
-          ? `Repository "${selectedRepos[0].full_name}" added`
-          : `${selectedRepos.length} repositories added`
-      )
-      onAdded()
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setAdding(false)
-    }
-  }
-
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={open => { if (!open) onClose() }}
-      title={`Browse ${title} repositories`}
-      description="Select repositories to add to ContextForge."
-      maxWidth="720px"
-    >
-      <div className="space-y-4">
-        <div className="flex gap-2">
-          <Input
-            className="flex-1"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder={`Filter ${title} repositories...`}
-          />
-          <Button variant="ghost" onClick={loadRepos} disabled={loading} size="sm">
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          </Button>
-        </div>
-
-        {error && <Banner variant="danger">{error}</Banner>}
-
-        {loading ? (
-          <p className="text-sm text-muted py-4">Loading repositories...</p>
-        ) : filteredRepos.length === 0 ? (
-          <p className="text-sm text-muted py-4">No repositories found.</p>
-        ) : (
-          <Card className="overflow-y-auto scrollbar-thin max-h-[360px]">
-            {filteredRepos.map(repo => {
-              const alreadyAdded = configuredNames.has(repo.full_name.replace('/', '-'))
-              return (
-                <label
-                  key={repo.id}
-                  className={[
-                    'border-b border-border flex items-start gap-3 px-3 py-2.5 cursor-pointer last:border-b-0',
-                    alreadyAdded ? 'opacity-50 cursor-not-allowed bg-surface' : 'hover:bg-surface',
-                    selected[repo.full_name] && !alreadyAdded ? 'bg-primary-light' : '',
-                  ].join(' ')}
-                >
-                  <input
-                    type="checkbox"
-                    checked={alreadyAdded ? true : !!selected[repo.full_name]}
-                    disabled={alreadyAdded}
-                    onChange={() => toggleSelected(repo.full_name)}
-                    className="mt-0.5 h-3.5 w-3.5"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-medium">{repo.full_name}</span>
-                      {repo.private && <Badge variant="warning">Private</Badge>}
-                      {getFork(repo, provider) && <Badge>Fork</Badge>}
-                      {alreadyAdded && <Badge variant="success">Added</Badge>}
-                    </div>
-                    {repo.description && (
-                      <p className="text-xs text-muted mt-0.5 truncate">{repo.description}</p>
-                    )}
-                    <div className="flex gap-3 mt-1 text-xs text-muted">
-                      {repo.language && <span>{repo.language}</span>}
-                      <span>{getStars(repo, provider).toLocaleString()} stars</span>
-                      <span>{repo.default_branch}</span>
-                    </div>
-                  </div>
-                  <a
-                    href={repo.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={e => e.stopPropagation()}
-                    className="text-muted hover:text-accent transition-colors flex-shrink-0 mt-0.5"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </a>
-                </label>
-              )
-            })}
-          </Card>
-        )}
-      </div>
-
-      <DialogFooter>
-        <Button variant="ghost" onClick={onClose}>Cancel</Button>
-        <Button
-          variant="primary"
-          onClick={handleAdd}
-          disabled={!selectedRepos.length || adding}
-          loading={adding}
-        >
-          Add {selectedRepos.length > 0 ? selectedRepos.length : ''} {selectedRepos.length === 1 ? 'repository' : 'repositories'}
-        </Button>
-      </DialogFooter>
-    </Dialog>
-  )
-}
-
-const EMPTY_REPO_FORM: RepoCreateRequest = {
-  name: '',
-  type: 'local',
-  url: '',
-  path: '',
-  branch: 'main',
-  language: 'auto',
-}
-
-function RepoDialog({
-  open,
-  repo,
-  onClose,
-  onSaved,
-}: {
-  open: boolean
-  repo: Repo | null
-  onClose: () => void
-  onSaved: () => void
-}) {
-  const [form, setForm] = useState<RepoCreateRequest>(EMPTY_REPO_FORM)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const toast = useToast()
-
-  // Re-seed the form each time the dialog opens: state initializers only run
-  // on first mount, so without this an edit shows stale/empty fields.
-  useEffect(() => {
-    if (!open) return
-    setError(null)
-    setForm(
-      repo
-        ? {
-            name: repo.name,
-            type: repo.type,
-            url: repo.url || '',
-            path: repo.path || '',
-            branch: repo.branch || 'main',
-            language: repo.language || 'auto',
-          }
-        : EMPTY_REPO_FORM
-    )
-  }, [open, repo])
-
-  const set = (patch: Partial<RepoCreateRequest>) => setForm(f => ({ ...f, ...patch }))
-  const isLocal = form.type === 'local'
-
-  const submit = async () => {
-    setSaving(true)
-    setError(null)
-    const payload: RepoCreateRequest = {
-      ...form,
-      url: isLocal ? undefined : form.url || undefined,
-      path: isLocal ? form.path || undefined : undefined,
-    }
-    try {
-      if (repo) await api.repos.update(repo.name, payload)
-      else await api.repos.create(payload)
-      toast.success(repo ? `Repository "${form.name}" updated` : `Repository "${form.name}" added`)
-      onClose()
-      onSaved()
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={o => { if (!o) onClose() }}
-      title={repo ? `Edit ${repo.name}` : 'Add repository'}
-    >
-      <div className="space-y-3">
-        {error && <p className="text-xs text-danger break-words">{error}</p>}
-        <div className="grid gap-3 md:grid-cols-2">
-          <Input
-            label="Name"
-            value={form.name}
-            onChange={e => set({ name: e.target.value })}
-            placeholder="my-repo"
-          />
-          <Select
-            label="Type"
-            value={form.type}
-            onValueChange={v => set({ type: v as Repo['type'] })}
-            options={[
-              { value: 'local', label: 'Local' },
-              { value: 'github', label: 'GitHub' },
-              { value: 'gitlab', label: 'GitLab' },
-            ]}
-          />
-        </div>
-        {isLocal ? (
-          <Input
-            label="Local path"
-            value={form.path ?? ''}
-            onChange={e => set({ path: e.target.value })}
-            placeholder="/repos/project (path inside the container)"
-          />
-        ) : (
-          <Input
-            label="Repository URL"
-            value={form.url ?? ''}
-            onChange={e => set({ url: e.target.value })}
-            placeholder={`https://${form.type}.com/owner/repo`}
-          />
-        )}
-        <div className="grid gap-3 md:grid-cols-2">
-          {!isLocal && (
-            <Input
-              label="Branch"
-              value={form.branch}
-              onChange={e => set({ branch: e.target.value })}
-              placeholder="main"
-            />
-          )}
-          <Input
-            label="Language"
-            value={form.language ?? ''}
-            onChange={e => set({ language: e.target.value })}
-            placeholder="auto"
-          />
-        </div>
-        {isLocal && (
-          <p className="text-xs text-muted">
-            Local repos index the mounted working tree as-is (whatever branch is checked out).
-          </p>
-        )}
-      </div>
-      <DialogFooter>
-        <Button variant="ghost" onClick={onClose}>Cancel</Button>
-        <Button
-          variant="primary"
-          onClick={submit}
-          loading={saving}
-          disabled={!form.name || (isLocal ? !form.path : !form.url)}
-        >
-          {repo ? 'Save changes' : 'Add repository'}
-        </Button>
-      </DialogFooter>
-    </Dialog>
-  )
-}
-
-function AddBranchDialog({
-  repo,
-  existingRepos,
-  onClose,
-  onSaved,
-}: {
-  repo: Repo | null
-  existingRepos: Repo[]
-  onClose: () => void
-  onSaved: () => void
-}) {
-  const [branch, setBranch] = useState('')
-  const [branches, setBranches] = useState<{ name: string; is_default: boolean }[]>([])
-  const [loadingBranches, setLoadingBranches] = useState(false)
-  const [branchSearch, setBranchSearch] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const toast = useToast()
-
-  const baseName = repo ? repo.name.split('@')[0] : ''
-
-  // Fetch branches from the provider when dialog opens
-  useEffect(() => {
-    if (!repo) return
-    setBranch('')
-    setBranchSearch('')
-    setError(null)
-    setBranches([])
-
-    setLoadingBranches(true)
-    const fetchBranches = async () => {
-      try {
-        let data: { name: string; is_default: boolean }[] = []
-        if (repo.type === 'github') {
-          const match = repo.url?.match(/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/)
-          if (match) {
-            data = await api.github.listBranches(match[1], match[2])
-          }
-        } else if (repo.type === 'gitlab') {
-          // Derive the GitLab project path (group[/subgroup]/repo) from the repo URL,
-          // for any host: gitlab.com, self-hosted, custom port, nested groups, ssh.
-          let projectPath = ''
-          try {
-            projectPath = new URL(repo.url!).pathname.replace(/^\/+/, '').replace(/\.git$/, '')
-          } catch {
-            // scp-like ssh remote: git@host:group/repo.git
-            const m = repo.url?.match(/:(?:\d+\/)?(.+?)(?:\.git)?$/)
-            projectPath = m ? m[1].replace(/^\/+/, '') : ''
-          }
-          if (projectPath) {
-            data = await api.gitlab.listBranches(projectPath)
-          }
-        }
-        // Mark the repo's current/default branch
-        const defaultBranch = repo.branch || 'main'
-        setBranches(data.map(b => ({ ...b, is_default: b.name === defaultBranch })))
-      } catch (e) {
-        setError('Failed to load branches: ' + String(e))
-      } finally {
-        setLoadingBranches(false)
-      }
-    }
-    fetchBranches()
-  }, [repo])
-
-  // Filter branches client-side for quick search
-  const filteredBranches = useMemo(() => {
-    const q = branchSearch.toLowerCase().trim()
-    if (!q) return branches
-    return branches.filter(b => b.name.toLowerCase().includes(q))
-  }, [branches, branchSearch])
-
-  // Repos can have thousands of branches; cap how many options we render so
-  // the dropdown stays responsive and prompt the user to narrow the filter.
-  const MAX_BRANCH_OPTIONS = 200
-  const shownBranches = filteredBranches.slice(0, MAX_BRANCH_OPTIONS)
-  const hiddenBranchCount = filteredBranches.length - shownBranches.length
-
-  // Exclude branches already indexed (named baseName@branch)
-  const alreadyIndexed = useMemo(
-    () => new Set(existingRepos.filter(r => r.name.startsWith(baseName + '@')).map(r => r.branch)),
-    [existingRepos, baseName]
-  )
-
-  const newName = branch ? `${baseName}@${branch}` : ''
-
-  const submit = async () => {
-    if (!repo || !branch) return
-    setSaving(true)
-    setError(null)
-    try {
-      await api.repos.create({
-        name: newName,
-        type: repo.type,
-        url: repo.url || undefined,
-        branch,
-        language: repo.language || 'auto',
-      })
-      await api.repos.index(newName)
-      toast.success(`Branch "${branch}" added and queued for indexing`)
-      onClose()
-      onSaved()
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Dialog
-      open={!!repo}
-      onOpenChange={o => { if (!o) onClose() }}
-      title={`Index another branch of ${baseName}`}
-      description="Adds a separate index for this branch — searchable on its own, embeddings are reused for unchanged files."
-    >
-      <div className="space-y-3">
-        {error && <p className="text-xs text-danger break-words">{error}</p>}
-
-        {loadingBranches ? (
-          <p className="text-sm text-muted py-2">Loading branches...</p>
-        ) : branches.length === 0 && !error ? (
-          <>
-            <p className="text-xs text-muted">Could not fetch branches. Enter manually:</p>
-            <Input
-              label="Branch"
-              value={branch}
-              onChange={e => setBranch(e.target.value)}
-              placeholder="develop"
-            />
-          </>
-        ) : (
-          <>
-            {branches.length > 15 && (
-              <Input
-                value={branchSearch}
-                onChange={e => setBranchSearch(e.target.value)}
-                placeholder="Filter branches..."
-              />
-            )}
-            <Select
-              label="Branch"
-              value={branch}
-              onValueChange={setBranch}
-              options={shownBranches.map(b => ({
-                value: b.name,
-                label: b.is_default
-                  ? `${b.name} (default)`
-                  : alreadyIndexed.has(b.name)
-                    ? `${b.name} (already indexed)`
-                    : b.name,
-              }))}
-            />
-            {hiddenBranchCount > 0 && (
-              <p className="text-xs text-muted">
-                Showing first {MAX_BRANCH_OPTIONS} of {filteredBranches.length} branches — refine the filter to narrow the list.
-              </p>
-            )}
-          </>
-        )}
-
-        {newName && branch && (
-          <p className="text-xs text-muted">
-            Will be indexed as <code className="font-mono text-text">{newName}</code>.
-          </p>
-        )}
-      </div>
-      <DialogFooter>
-        <Button variant="ghost" onClick={onClose}>Cancel</Button>
-        <Button variant="primary" onClick={submit} loading={saving} disabled={!branch}>
-          Add & index
-        </Button>
-      </DialogFooter>
-    </Dialog>
-  )
-}
+import { api, type Repo } from '../lib/api'
+import { useAppStore } from '../store'
+import AddFromCatalogDialog from '../components/catalog/AddFromCatalogDialog'
+import RestrictedIcon from '../components/catalog/RestrictedIcon'
+import { RepoSource, RepoStatusBadge, RepoTypeIcon, formatIndexedAt } from '../components/catalog/RepoBadges'
+import { canSelectResources, canSelectRestricted } from '../lib/roles'
+import { useOrgRole, useProjectRole } from '../lib/useRoles'
+import { Banner, Button, Card, Table, Tbody, Td, Th, Thead, Tr, useConfirm, useToast } from '../components/ui'
 
 export default function Repos() {
-  const [repos, setRepos] = useState<Repo[]>([])
-  const [loading, setLoading] = useState(true)
-  const [indexingRepo, setIndexingRepo] = useState<string | null>(null)
-  const [stoppingRepo, setStoppingRepo] = useState<string | null>(null)
-  const [syncing, setSyncing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [showImport, setShowImport] = useState(false)
-  const [provider, setProvider] = useState<Provider>('github')
-  const [showRepoDialog, setShowRepoDialog] = useState(false)
-  const [editingRepo, setEditingRepo] = useState<Repo | null>(null)
-  const [branchRepo, setBranchRepo] = useState<Repo | null>(null)
-  const confirm = useConfirm()
   const toast = useToast()
+  const confirm = useConfirm()
+  const orgRole = useOrgRole()
+  const projectRole = useProjectRole()
+  const projectId = useAppStore((s) => s.activeProjectId)
+  const canSelect = canSelectResources(projectRole) && projectId != null
+  const [repos, setRepos] = useState<Repo[]>([])
+  const [catalog, setCatalog] = useState<Repo[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [addOpen, setAddOpen] = useState(false)
+  const [busy, setBusy] = useState<number | null>(null)
+  const [indexingAll, setIndexingAll] = useState(false)
 
   const load = useCallback(async () => {
     try {
-      const data = await api.repos.list()
-      setRepos(data)
+      setRepos(await api.repos.list())
       setError(null)
     } catch (e) {
       setError(String(e))
@@ -586,344 +37,226 @@ export default function Repos() {
   }, [])
 
   useEffect(() => {
-    load()
+    void load()
+    // Lo stato di indicizzazione cambia in background.
     const interval = setInterval(load, 5000)
     return () => clearInterval(interval)
-  }, [load])
+  }, [load, projectId])
 
-  const handleIndex = async (name: string) => {
-    setIndexingRepo(name)
+  const openAdd = async () => {
     try {
-      await api.repos.index(name)
-      toast.success(`Indexing queued for ${name}`)
+      setCatalog((await api.catalog.repos.list()).repos)
+      setAddOpen(true)
+    } catch (e) {
+      toast.error(String(e))
+    }
+  }
+
+  const options = useMemo(
+    () =>
+      catalog.map((r) => ({
+        id: r.id,
+        name: r.name,
+        detail: r.type === 'local' ? r.path ?? '' : `${r.url ?? ''} · ${r.branch}`,
+        restricted: r.restricted,
+      })),
+    [catalog]
+  )
+  const selectedIds = useMemo(() => new Set(repos.map((r) => r.id)), [repos])
+
+  const act = async (repo: Repo, action: () => Promise<unknown>, message: string) => {
+    setBusy(repo.id)
+    try {
+      await action()
+      toast.success(message)
       await load()
     } catch (e) {
       toast.error(String(e))
     } finally {
-      setIndexingRepo(null)
+      setBusy(null)
     }
   }
 
-  const handleStop = async (name: string) => {
-    setStoppingRepo(name)
-    try {
-      await api.repos.cancelIndex(name)
-      toast.success(`Indexing stopped for ${name}`)
-      await load()
-    } catch (e) {
-      toast.error(String(e))
-    } finally {
-      setStoppingRepo(null)
-    }
-  }
-
-  const handleIndexAll = async () => {
-    setSyncing(true)
+  const indexAll = async () => {
+    setIndexingAll(true)
     try {
       await api.repos.indexAll()
-      toast.success('All repositories queued for indexing')
+      toast.success('All repositories of the project queued for indexing')
       await load()
     } catch (e) {
       toast.error(String(e))
     } finally {
-      setSyncing(false)
+      setIndexingAll(false)
     }
   }
 
-  const handleDelete = async (repo: Repo) => {
+  const removeFromProject = async (repo: Repo) => {
+    if (projectId == null) return
     const ok = await confirm({
-      title: 'Remove repository',
-      message: `Remove repository "${repo.name}"? Its indexed chunks are deleted too.`,
+      title: 'Remove from project',
+      message: `Remove «${repo.name}» from this project? It stays in the organization catalog with its index.`,
       confirmLabel: 'Remove',
-      danger: true,
-      onConfirm: () => api.repos.delete(repo.name),
+      onConfirm: () => api.projects.deselectResource(projectId, 'repos', repo.id),
     })
-    if (!ok) return
-    toast.success(`Repository "${repo.name}" removed`)
-    await load()
+    if (ok) {
+      toast.success('Repository removed from the project')
+      await load()
+    }
   }
 
-  const openEdit = (repo: Repo) => {
-    setEditingRepo(repo)
-    setShowRepoDialog(true)
-  }
-
-  const openAdd = () => {
-    setEditingRepo(null)
-    setShowRepoDialog(true)
-  }
+  const actions = (repo: Repo) => (
+    <div className="flex items-center gap-1 justify-end whitespace-nowrap">
+      {canSelect &&
+        (repo.status === 'indexing' ? (
+          <Button size="sm" variant="ghost" loading={busy === repo.id} title="Stop indexing" aria-label="Stop indexing"
+            onClick={() => act(repo, () => api.repos.cancelIndex(repo.name), `Indexing stopped for ${repo.name}`)}>
+            <Square className="w-3 h-3" />
+          </Button>
+        ) : (
+          <Button size="sm" variant="ghost" loading={busy === repo.id} title="Re-index" aria-label="Re-index"
+            onClick={() => act(repo, () => api.repos.index(repo.name), `Indexing queued for ${repo.name}`)}>
+            <RefreshCw className="w-3 h-3" />
+          </Button>
+        ))}
+      <Link to={`/repos/${encodeURIComponent(repo.name)}`} className="text-xs text-accent hover:underline mx-1">
+        Open
+      </Link>
+      {canSelect && (
+        <Button size="sm" variant="ghost" onClick={() => removeFromProject(repo)} title="Remove from project" aria-label="Remove from project">
+          <Unlink className="w-3 h-3" />
+        </Button>
+      )}
+    </div>
+  )
 
   const totalChunks = repos.reduce((sum, repo) => sum + repo.total_chunks, 0)
-  const indexedCount = repos.filter(r => r.status === 'indexed').length
+  const indexedCount = repos.filter((r) => r.status === 'indexed').length
 
   return (
     <div className="p-4 sm:p-8">
-      <div className="page-wide">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between mb-6">
+      <div className="page-wide space-y-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h1>Repositories</h1>
             <p className="text-muted text-sm">
-              {repos.length} configured &middot; {indexedCount} indexed &middot; {totalChunks.toLocaleString()} chunks
+              {repos.length} in this project &middot; {indexedCount} indexed &middot; {totalChunks.toLocaleString()} chunks.
+              Repositories are registered once in the organization catalog.
             </p>
           </div>
-          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap sm:mt-1">
-            <Select
-              options={[
-                { value: 'github', label: 'GitHub' },
-                { value: 'gitlab', label: 'GitLab' },
-              ]}
-              value={provider}
-              onValueChange={v => setProvider(v as Provider)}
-            />
-            <Button variant="secondary" onClick={() => setShowImport(true)}>
-              Import
-            </Button>
-            <Button variant="primary" onClick={openAdd}>
-              <Plus className="w-3.5 h-3.5" />
-              Add
-            </Button>
-            <Button
-              variant="secondary"
-              onClick={handleIndexAll}
-              disabled={syncing}
-              loading={syncing}
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              Re-index all
-            </Button>
-          </div>
+          {canSelect && (
+            <div className="page-header-actions">
+              <Button variant="secondary" onClick={indexAll} loading={indexingAll} disabled={repos.length === 0}>
+                <RefreshCw className="w-3.5 h-3.5" /> Re-index all
+              </Button>
+              <Button variant="primary" onClick={openAdd}>
+                <Plus className="w-4 h-4" /> Add from catalog
+              </Button>
+            </div>
+          )}
         </div>
 
-        {error && <Banner variant="danger" className="mb-4">{error}</Banner>}
+        {error && <Banner variant="danger">{error}</Banner>}
 
         {loading ? (
-          <p className="text-muted text-sm">Loading...</p>
+          <p className="text-sm text-muted">Loading…</p>
         ) : repos.length === 0 ? (
-          <div className="border border-dashed border-border py-12 text-center">
-            <p className="text-muted text-sm">No repositories configured.</p>
-            <p className="text-muted text-xs mt-1">
-              Import from a provider or add a local/remote repo with the buttons above.
-            </p>
+          <div className="rounded border border-dashed border-border p-8 text-center">
+            <GitBranch className="w-6 h-6 mx-auto text-muted" />
+            <p className="mt-2 text-sm text-muted">No repositories in this project yet. Add them from the organization catalog.</p>
           </div>
         ) : (
           <>
-          {/* Mobile: stacked cards use the full width instead of a squished table */}
-          <div className="space-y-3 md:hidden">
-            {repos.map(repo => (
-              <Card
-                key={repo.name}
-                className="p-3"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-start gap-2 min-w-0">
-                    <span className="mt-0.5 flex-shrink-0"><TypeIcon type={repo.type} /></span>
-                    <div className="min-w-0">
-                      <Link
-                        to={`/repos/${encodeURIComponent(repo.name)}`}
-                        className="text-sm font-medium text-text hover:text-accent break-words"
-                      >
-                        {repo.name}
-                      </Link>
-                      <div className="text-xs text-muted font-mono break-all">
-                        {repo.url || repo.path || '—'}
-                      </div>
-                    </div>
-                  </div>
-                  <Badge variant={repoBadgeVariant(repo.status)}>{repo.status}</Badge>
-                </div>
-                {repo.error_message && (
-                  <p className="text-xs text-danger mt-2 break-words" title={repo.error_message}>
-                    {repo.error_message}
-                  </p>
-                )}
-                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs text-muted">
-                  <span>branch <code className="font-mono text-text">{repo.branch}</code></span>
-                  <span>{repo.total_chunks > 0 ? `${repo.total_chunks.toLocaleString()} chunks` : 'no chunks'}</span>
-                  <span>{formatDate(repo.last_indexed_at)}</span>
-                </div>
-                <div className="border-t border-border flex items-center gap-2 mt-3 pt-3 flex-wrap">
-                  {repo.status === 'indexing' ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => handleStop(repo.name)}
-                      disabled={stoppingRepo === repo.name}
-                      loading={stoppingRepo === repo.name}
-                    >
-                      <Square className="w-3 h-3" />
-                      Stop
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => handleIndex(repo.name)}
-                      disabled={indexingRepo === repo.name}
-                      loading={indexingRepo === repo.name}
-                    >
-                      <RefreshCw className="w-3 h-3" />
-                      Index
-                    </Button>
-                  )}
-                  {repo.type !== 'local' && (
-                    <Button size="sm" variant="ghost" onClick={() => setBranchRepo(repo)} title="Index another branch">
-                      <GitBranch className="w-3 h-3" />
-                    </Button>
-                  )}
-                  <Button size="sm" variant="ghost" onClick={() => openEdit(repo)} title="Edit">
-                    <Pencil className="w-3 h-3" />
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => handleDelete(repo)} title="Delete">
-                    <Trash2 className="w-3 h-3" />
-                  </Button>
-                  <Link
-                    to={`/repos/${encodeURIComponent(repo.name)}`}
-                    className="text-xs text-accent hover:underline"
-                  >
-                    Open
-                  </Link>
-                </div>
-              </Card>
-            ))}
-          </div>
-
-          {/* Desktop: full table */}
-          <Card className="hidden md:block overflow-x-auto max-w-5xl">
-            <table className="w-full table-fixed min-w-[520px]">
-              <colgroup>
-                <col className="w-[36%]" />
-                <col className="w-[12%]" />
-                <col className="w-[10%]" />
-                <col className="w-[10%]" />
-                <col className="w-[16%]" />
-                <col className="w-[16%]" />
-              </colgroup>
-              <thead>
-                <tr className="border-b-2 border-border">
-                  <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-4 py-2">Repository</th>
-                  <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2 whitespace-nowrap">Branch</th>
-                  <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2 whitespace-nowrap">Status</th>
-                  <th className="text-right text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2 whitespace-nowrap">Chunks</th>
-                  <th className="text-left text-xs font-semibold uppercase tracking-wide text-muted px-3 py-2 whitespace-nowrap">Last indexed</th>
-                  <th className="px-3 py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {repos.map(repo => (
-                  <tr
-                    key={repo.name}
-                    className="border-b border-border last:border-b-0 hover:bg-surface transition-colors"
-                  >
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <TypeIcon type={repo.type} />
-                        <div className="min-w-0">
-                          <Link
-                            to={`/repos/${encodeURIComponent(repo.name)}`}
-                            className="text-sm font-medium text-text hover:text-accent"
-                          >
-                            {repo.name}
-                          </Link>
-                          <div className="text-xs text-muted font-mono truncate">
-                            {repo.url || repo.path || '—'}
-                          </div>
+            {/* Mobile: schede impilate invece di una tabella compressa */}
+            <div className="space-y-3 md:hidden">
+              {repos.map((repo) => (
+                <Card key={repo.id} className="p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-start gap-2 min-w-0">
+                      <span className="mt-0.5 flex-shrink-0">
+                        <RepoTypeIcon type={repo.type} />
+                      </span>
+                      <div className="min-w-0">
+                        <span className="text-sm font-medium break-words">{repo.name}</span>
+                        {repo.restricted && <RestrictedIcon />}
+                        <div className="text-xs text-muted">
+                          <RepoSource repo={repo} />
                         </div>
                       </div>
-                    </td>
-                    <td className="px-3 py-3">
-                      <code className="font-mono text-xs text-muted">{repo.branch}</code>
-                    </td>
-                    <td className="px-3 py-3">
-                      <Badge variant={repoBadgeVariant(repo.status)}>{repo.status}</Badge>
-                      {repo.error_message && (
-                        <p className="text-xs text-danger mt-1 max-w-xs break-words" title={repo.error_message}>
-                          {repo.error_message}
-                        </p>
-                      )}
-                    </td>
-                    <td className="px-3 py-3 text-right">
-                      <span className="font-mono text-xs text-muted">
+                    </div>
+                    <RepoStatusBadge repo={repo} />
+                  </div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs text-muted">
+                    <span>
+                      branch <code className="font-mono text-text">{repo.branch}</code>
+                    </span>
+                    <span>{repo.total_chunks > 0 ? `${repo.total_chunks.toLocaleString()} chunks` : 'no chunks'}</span>
+                    <span>{formatIndexedAt(repo.last_indexed_at)}</span>
+                  </div>
+                  <div className="border-t border-border mt-3 pt-3">{actions(repo)}</div>
+                </Card>
+              ))}
+            </div>
+
+            <Card className="hidden md:block overflow-x-auto">
+              <Table>
+                <Thead>
+                  <Tr>
+                    <Th>Repository</Th>
+                    <Th>Branch</Th>
+                    <Th>Status</Th>
+                    <Th className="text-right">Chunks</Th>
+                    <Th>Last indexed</Th>
+                    <Th className="w-36" />
+                  </Tr>
+                </Thead>
+                <Tbody>
+                  {repos.map((repo) => (
+                    <Tr key={repo.id}>
+                      <Td>
+                        <div className="flex items-center gap-2">
+                          <RepoTypeIcon type={repo.type} />
+                          <div className="min-w-0">
+                            <span className="text-sm font-medium">{repo.name}</span>
+                            {repo.restricted && <RestrictedIcon />}
+                            <div className="text-xs text-muted">
+                              <RepoSource repo={repo} />
+                            </div>
+                          </div>
+                        </div>
+                      </Td>
+                      <Td>
+                        <code className="font-mono text-xs text-muted">{repo.branch}</code>
+                      </Td>
+                      <Td>
+                        <RepoStatusBadge repo={repo} />
+                      </Td>
+                      <Td className="text-right font-mono text-xs text-muted">
                         {repo.total_chunks > 0 ? repo.total_chunks.toLocaleString() : '—'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3 text-xs text-muted whitespace-nowrap">{formatDate(repo.last_indexed_at)}</td>
-                    <td className="px-3 py-3">
-                      <div className="flex items-center gap-1 justify-end whitespace-nowrap">
-                        {repo.status === 'indexing' ? (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleStop(repo.name)}
-                            disabled={stoppingRepo === repo.name}
-                            loading={stoppingRepo === repo.name}
-                            title="Stop indexing"
-                          >
-                            <Square className="w-3 h-3" />
-                          </Button>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleIndex(repo.name)}
-                            disabled={indexingRepo === repo.name}
-                            loading={indexingRepo === repo.name}
-                            title="Re-index"
-                          >
-                            <RefreshCw className="w-3 h-3" />
-                          </Button>
-                        )}
-                        {repo.type !== 'local' && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => setBranchRepo(repo)}
-                            title="Index another branch"
-                          >
-                            <GitBranch className="w-3 h-3" />
-                          </Button>
-                        )}
-                        <Button size="sm" variant="ghost" onClick={() => openEdit(repo)} title="Edit">
-                          <Pencil className="w-3 h-3" />
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => handleDelete(repo)} title="Delete">
-                          <Trash2 className="w-3 h-3" />
-                        </Button>
-                        <Link
-                          to={`/repos/${encodeURIComponent(repo.name)}`}
-                          className="text-xs text-accent hover:underline ml-1"
-                        >
-                          Open
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </Card>
+                      </Td>
+                      <Td className="text-xs text-muted whitespace-nowrap">{formatIndexedAt(repo.last_indexed_at)}</Td>
+                      <Td>{actions(repo)}</Td>
+                    </Tr>
+                  ))}
+                </Tbody>
+              </Table>
+            </Card>
           </>
         )}
       </div>
 
-      <ImportDialog
-        open={showImport}
-        provider={provider}
-        existingRepos={repos}
-        onClose={() => setShowImport(false)}
-        onAdded={() => { setShowImport(false); load() }}
-      />
-      <RepoDialog
-        open={showRepoDialog}
-        repo={editingRepo}
-        onClose={() => setShowRepoDialog(false)}
-        onSaved={load}
-      />
-      <AddBranchDialog
-        repo={branchRepo}
-        existingRepos={repos}
-        onClose={() => setBranchRepo(null)}
-        onSaved={load}
-      />
+      {projectId != null && (
+        <AddFromCatalogDialog
+          open={addOpen}
+          title="Add repositories"
+          kind="repos"
+          projectId={projectId}
+          options={options}
+          selectedIds={selectedIds}
+          allowRestricted={canSelectRestricted(orgRole)}
+          onClose={() => setAddOpen(false)}
+          onAdded={load}
+        />
+      )}
     </div>
   )
 }

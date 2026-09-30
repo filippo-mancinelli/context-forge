@@ -38,7 +38,7 @@ Copied verbatim from `docs/superpowers/specs/2026-09-07-platform-improvements-ro
   installed in the local venv with `uv pip install --python .venv/Scripts/python.exe -e .`
   (run from `services/server`). No new system packages unless the Dockerfile
   is updated in the same task.
-- Naming: the product is `context-forge` / `ContextForge`. Never `aster`.
+- Naming: the product is `context-forge` / `ContextForge`. Never a downstream product name.
 - Code comments: max one line, only where needed. Commit titles 3–10 words,
   English, imperative; body optional, max 20 words.
 - README: each feature updates the sections it touches (features, tools,

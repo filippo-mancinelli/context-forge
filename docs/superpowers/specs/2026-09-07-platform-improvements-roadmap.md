@@ -12,9 +12,11 @@ has its own spec (this directory) and plan (`docs/superpowers/plans/`).
 | 4 | MCP tool audit and per-key rate limits | `2026-09-07-mcp-audit-ratelimit-design.md` | `0003_mcp_tool_calls` |
 | 5 | Human approvals for write tools | `2026-09-07-write-approvals-design.md` | `0004_write_requests` |
 | 6 | More languages in the symbol graph | `2026-09-07-symbol-languages-design.md` | none |
-| 7 | Personal memory and consolidation | `2026-09-07-memory-personal-consolidation-design.md` | `0005_memory_stats` |
+| 7 | Personal memory and consolidation | `2026-09-07-memory-personal-consolidation-design.md` | `0008_memory_stats` |
 | 8 | `context_pack` tool | `2026-09-07-context-pack-design.md` | none |
-| 9 | Retrieval evaluation and reranker | `2026-09-07-retrieval-eval-reranker-design.md` | `0006_eval` |
+| 9 | Retrieval evaluation and reranker | `2026-09-07-retrieval-eval-reranker-design.md` | `0009_eval` |
+
+Migration slots `0005`–`0007` are taken by the organization catalog, the repository catalog and the database scopes, so features 7 and 9 use `0008` and `0009`.
 
 Execution order is the table order. Feature 1 must land first: every later
 schema change is a migration module, never an edit to the inline DDL string.
@@ -45,7 +47,7 @@ schema change is a migration module, never an edit to the inline DDL string.
   installed in the local venv with `uv pip install --python .venv/Scripts/python.exe -e .`
   (run from `services/server`). No new system packages unless the Dockerfile
   is updated in the same task.
-- Naming: the product is `context-forge` / `ContextForge`. Never `aster`.
+- Naming: the product is `context-forge` / `ContextForge`. Never a downstream product name.
 - Code comments: short, one line where possible, only where needed. Commit titles 3–10 words,
   English, imperative; body optional, max 20 words.
 - README: each feature updates the sections it touches (features, tools,

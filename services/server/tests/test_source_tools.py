@@ -2,6 +2,9 @@ import asyncio
 
 import pytest
 
+from src import projects as projects_module
+from src import tenancy as tenancy_module
+from src.catalog import selections as selections_module
 from src.mcp import context as mcp_context
 from src.mcp import permissions as perms
 
@@ -11,19 +14,44 @@ def _underlying(tool):
 
 
 class _SourceIdentity:
-    """Identità con il permesso sources-write e un progetto selezionato."""
+    """Identità con il permesso sources-write e un progetto selezionato.
+
+    Senza ``user_id`` è una API key: impersonale, mai admin dell'organizzazione.
+    """
+
+    def __init__(self, user_id=None):
+        self.user_id = user_id
 
     def __enter__(self):
         perms.set_current_permissions(frozenset({"sources-write"}))
         mcp_context.set_current_org_id(1)
         mcp_context.set_current_project_id(4)
+        mcp_context.set_current_user_id(self.user_id)
+        if self.user_id is None:
+            principal = mcp_context.Principal(kind="api_key", id=9, label="key")
+        else:
+            principal = mcp_context.Principal(kind="user", id=self.user_id, label=f"user-{self.user_id}")
+        mcp_context.set_current_principal(principal)
         return self
 
     def __exit__(self, *exc):
         perms.set_current_permissions(None)
         mcp_context.set_current_org_id(None)
         mcp_context.set_current_project_id(None)
+        mcp_context.set_current_user_id(None)
+        mcp_context.set_current_principal(None)
         return False
+
+
+def _roles(monkeypatch, project_role, org_role="member"):
+    async def fake_project_access(org_id, user_id, project_id):
+        return project_role
+
+    async def fake_membership(org_id, user_id):
+        return org_role
+
+    monkeypatch.setattr(projects_module, "resolve_project_access", fake_project_access)
+    monkeypatch.setattr(tenancy_module, "get_membership_role", fake_membership)
 
 
 def test_repo_add_requires_the_sources_write_permission():
@@ -36,74 +64,144 @@ def test_repo_add_requires_the_sources_write_permission():
         perms.set_current_permissions(None)
 
 
-def test_repo_add_registers_and_queues_indexing(monkeypatch):
+def _no_existing_repo(monkeypatch, module):
+    async def no_existing(org_id, url, branch):
+        return None
+
+    monkeypatch.setattr(module.repo_catalog, "find_repo", no_existing)
+
+
+def _capture_queue(monkeypatch, module, calls):
+    async def fake_queue(org_id, repo_id, project_id):
+        calls.append((org_id, repo_id, project_id))
+
+    monkeypatch.setattr(module.repo_catalog, "queue_index", fake_queue)
+
+
+def test_repo_add_registers_selects_and_queues_indexing(monkeypatch):
     from src.mcp import repos
 
-    added = []
-    queued = []
+    created, queued, selected = [], [], []
 
-    async def fake_add(**kwargs):
-        added.append(kwargs)
-        return {"name": kwargs["name"], "type": kwargs["type"], "branch": kwargs["branch"],
-                "language": "auto"}
+    async def fake_create(org_id, data):
+        created.append((org_id, data))
+        return {"id": 12, "name": data["name"], "type": data["type"], "url": data["url"],
+                "path": None, "branch": data["branch"], "status": "pending"}
 
-    async def fake_queue(org_id, project_id, repo_name):
-        queued.append((org_id, project_id, repo_name))
-
-    monkeypatch.setattr(repos.repo_registry, "add_repo", fake_add)
-    monkeypatch.setattr(repos.repo_registry, "queue_index", fake_queue)
+    _no_existing_repo(monkeypatch, repos)
+    monkeypatch.setattr(repos.repo_catalog, "create_repo", fake_create)
+    _capture_queue(monkeypatch, repos, queued)
+    _capture_selection(monkeypatch, repos, selected)
 
     with _SourceIdentity():
         result = asyncio.run(
-            _underlying(repos.repo_add)(
-                "asterai-v2", "gitlab", url="https://git.example.org/aster/asterai-v2"
-            )
+            _underlying(repos.repo_add)("asterai-v2", "gitlab", url="https://git.example.org/aster/asterai-v2")
         )
 
-    assert result["status"] == "ok"
-    assert result["indexing"] is True
-    assert added[0]["org_id"] == 1 and added[0]["project_id"] == 4
-    assert queued == [(1, 4, "asterai-v2")]
+    assert result["status"] == "ok" and result["created"] is True and result["indexing"] is True
+    assert "token" not in created[0][1]
+    assert selected == [(1, 4, "repos", 12)]
+    assert queued == [(1, 12, 4)]
+
+
+def test_repo_add_selects_an_indexed_repository_without_registering_a_copy(monkeypatch):
+    from src.mcp import repos
+
+    queued, selected = [], []
+
+    async def existing(org_id, url, branch):
+        return {"id": 3, "name": "aster-desk", "type": "gitlab", "url": url, "path": None,
+                "branch": branch, "status": "indexed"}
+
+    async def must_not_create(*args):
+        raise AssertionError("create_repo must not be called")
+
+    monkeypatch.setattr(repos.repo_catalog, "find_repo", existing)
+    monkeypatch.setattr(repos.repo_catalog, "create_repo", must_not_create)
+    _capture_queue(monkeypatch, repos, queued)
+    _capture_selection(monkeypatch, repos, selected)
+
+    with _SourceIdentity():
+        result = asyncio.run(
+            _underlying(repos.repo_add)("desk", "gitlab", url="https://git.example.org/aster/aster-desk.git")
+        )
+
+    assert result["status"] == "ok" and result["created"] is False and result["indexing"] is False
+    assert selected == [(1, 4, "repos", 3)]
+    assert queued == []
 
 
 def test_repo_add_can_skip_indexing(monkeypatch):
     from src.mcp import repos
 
-    queued = []
+    queued, selected = [], []
 
-    async def fake_add(**kwargs):
-        return {"name": kwargs["name"], "type": kwargs["type"], "branch": kwargs["branch"],
-                "language": "auto"}
+    async def fake_create(org_id, data):
+        return {"id": 5, "name": data["name"], "type": data["type"], "url": None,
+                "path": data["path"], "branch": "main", "status": "pending"}
 
-    async def fake_queue(org_id, project_id, repo_name):
-        queued.append(repo_name)
-
-    monkeypatch.setattr(repos.repo_registry, "add_repo", fake_add)
-    monkeypatch.setattr(repos.repo_registry, "queue_index", fake_queue)
+    _no_existing_repo(monkeypatch, repos)
+    monkeypatch.setattr(repos.repo_catalog, "create_repo", fake_create)
+    _capture_queue(monkeypatch, repos, queued)
+    _capture_selection(monkeypatch, repos, selected)
 
     with _SourceIdentity():
-        result = asyncio.run(
-            _underlying(repos.repo_add)("asterai-v2", "gitlab", index=False)
-        )
+        result = asyncio.run(_underlying(repos.repo_add)("local-tools", "local", path="/repos/tools", index=False))
 
-    assert result["indexing"] is False
+    assert result["status"] == "ok" and result["indexing"] is False
     assert queued == []
 
 
-def test_repo_add_reports_a_duplicate_name(monkeypatch):
+def test_repo_add_reports_a_name_already_in_the_catalog(monkeypatch):
     from src.mcp import repos
-    from src import repo_registry
 
-    async def fake_add(**kwargs):
-        raise repo_registry.RepoAlreadyExistsError("Repository 'asterai-v2' already exists")
+    async def conflicting(org_id, data):
+        raise repos.repo_catalog.RepoConflictError({"name": "asterai-v2"})
 
-    monkeypatch.setattr(repos.repo_registry, "add_repo", fake_add)
+    _no_existing_repo(monkeypatch, repos)
+    monkeypatch.setattr(repos.repo_catalog, "create_repo", conflicting)
 
     with _SourceIdentity():
-        result = asyncio.run(_underlying(repos.repo_add)("asterai-v2", "gitlab"))
+        result = asyncio.run(_underlying(repos.repo_add)("asterai-v2", "local", path="/repos/other"))
 
-    assert result["status"] == "error"
-    assert "already exists" in result["error"]
+    assert result["status"] == "error" and "asterai-v2" in result["error"]
+
+
+def test_repo_add_refuses_a_role_below_member(monkeypatch):
+    from src.mcp import repos
+
+    _roles(monkeypatch, "viewer")
+
+    async def must_not_look_up(*args):
+        raise AssertionError("the catalog must not be touched")
+
+    monkeypatch.setattr(repos.repo_catalog, "find_repo", must_not_look_up)
+
+    with _SourceIdentity(user_id=7):
+        with pytest.raises(perms.PermissionDenied, match="member role"):
+            asyncio.run(_underlying(repos.repo_add)("desk", "gitlab", url="https://git.example.org/a/desk"))
+
+
+def test_repo_add_does_not_hand_a_restricted_repository_to_an_api_key(monkeypatch):
+    from src.mcp import repos
+
+    rights = []
+
+    async def existing(org_id, url, branch):
+        return {"id": 3, "name": "payroll-app", "type": "gitlab", "url": url, "status": "indexed"}
+
+    async def must_not_create(*args):
+        raise AssertionError("create_repo must not be called")
+
+    monkeypatch.setattr(repos.repo_catalog, "find_repo", existing)
+    monkeypatch.setattr(repos.repo_catalog, "create_repo", must_not_create)
+    _refuse_restricted(monkeypatch, repos, rights, "payroll-app")
+
+    with _SourceIdentity():
+        with pytest.raises(perms.PermissionDenied, match="restricted"):
+            asyncio.run(_underlying(repos.repo_add)("x", "gitlab", url="https://git.example.com/a/payroll"))
+
+    assert rights == [False]
 
 
 def test_api_add_requires_a_source(monkeypatch):
@@ -262,36 +360,177 @@ def test_ui_link_joins_base_and_path(monkeypatch):
 SECRET_KEYS = ("password", "private_key", "ssh_password", "ssh_private_key")
 
 
-def test_db_add_never_passes_a_secret_and_marks_pending(monkeypatch):
+def _capture_selection(monkeypatch, module, calls):
+    async def fake_select(org_id, project_id, kind, resource_id, user_id, can_select_restricted):
+        calls.append((org_id, project_id, kind, resource_id))
+        return {"kind": kind, "resource_id": resource_id, "name": "x", "already_selected": False}
+
+    monkeypatch.setattr(module.selections, "select_resource", fake_select)
+
+
+def _capture_scope(monkeypatch, module, calls, restricted_name=None):
+    """create_scope finto con lo stesso comportamento del database: registra il
+    perimetro e rifiuta una connessione riservata a chi non può sceglierla."""
+    linked = {}
+
+    async def fake_find(org_id, project_id, connection_id, database, schema):
+        return linked.get(connection_id)
+
+    async def fake_create(org_id, project_id, connection_id, database, schema, alias,
+                          user_id, can_select_restricted):
+        calls.append((org_id, project_id, connection_id, database, schema, can_select_restricted))
+        if restricted_name and not can_select_restricted:
+            raise selections_module.RestrictedResourceError(restricted_name)
+        label = f"{database}.{schema}" if schema else str(database)
+        linked[connection_id] = {"scope_id": 50, "alias": "x", "scope_label": label,
+                                 "scope_inferred": False}
+        return {"id": 50}
+
+    monkeypatch.setattr(module.service, "find_project_scope", fake_find)
+    monkeypatch.setattr(module.project_scopes, "create_scope", fake_create)
+
+
+def test_db_add_never_passes_a_secret_marks_pending_and_links_the_scope(monkeypatch):
     from src.mcp import datasources
 
-    created = []
-    marked = []
+    created, marked, scoped = [], [], []
 
-    async def fake_create(org_id, project_id, data):
-        created.append((org_id, project_id, data))
+    async def no_existing(org_id, machine_id, host, port, username, engine):
+        return None
+
+    async def fake_create(org_id, data):
+        created.append((org_id, data))
         return {"id": 9, "name": data["name"], "engine": data["engine"], "status": "unknown"}
 
-    async def fake_mark(org_id, project_id, connection_id):
-        marked.append((org_id, project_id, connection_id))
+    async def fake_mark(org_id, connection_id):
+        marked.append((org_id, connection_id))
 
+    monkeypatch.setattr(datasources.service, "find_connection", no_existing)
     monkeypatch.setattr(datasources.service, "create_connection", fake_create)
     monkeypatch.setattr(datasources.service, "mark_pending_secret", fake_mark)
+    _capture_scope(monkeypatch, datasources, scoped)
 
     with _SourceIdentity():
         result = asyncio.run(
             _underlying(datasources.db_add)(
-                "asterai-v2-collaudo", "postgres", host="192.168.2.39", port=5440,
+                "asterai-v2-collaudo", "postgresql", host="192.168.2.39", port=5440,
                 database_name="asterai_v2", username="asterai",
             )
         )
 
-    assert result["status"] == "ok"
-    org_id, project_id, data = created[0]
-    assert (org_id, project_id) == (1, 4)
+    assert result["status"] == "ok" and result["created"] is True
+    org_id, data = created[0]
+    assert org_id == 1
     assert not any(key in data for key in SECRET_KEYS)
-    assert marked == [(1, 4, 9)]
+    assert data["database_name"] == "asterai_v2"
+    assert marked == [(1, 9)]
+    assert scoped == [(1, 4, 9, "asterai_v2", None, False)]
+    assert result["scope"] == {"alias": "x", "scope": "asterai_v2", "inferred": False}
     assert "next_step" in result
+
+
+def test_db_add_reuses_an_existing_connection_instead_of_duplicating(monkeypatch):
+    from src.mcp import datasources
+
+    scoped, looked_up = [], []
+
+    async def fake_machine(org_id, name):
+        return {"id": 5, "name": name}
+
+    async def existing(org_id, machine_id, host, port, username, engine):
+        looked_up.append((machine_id, username, engine))
+        return {"id": 3, "name": "chat-db", "engine": "mysql", "database_name": "asterchat",
+                "status": "ok"}
+
+    async def must_not_create(*args):
+        raise AssertionError("create_connection must not be called")
+
+    monkeypatch.setattr(datasources.machines, "get_machine_by_name", fake_machine)
+    monkeypatch.setattr(datasources.service, "find_connection", existing)
+    monkeypatch.setattr(datasources.service, "create_connection", must_not_create)
+    _capture_scope(monkeypatch, datasources, scoped)
+
+    with _SourceIdentity():
+        result = asyncio.run(
+            _underlying(datasources.db_add)(
+                "chat-db", "mysql", host="127.0.0.1", port=3306, database_name="asterchat",
+                username="astercare", ssh_machine="astercare@192.168.0.206",
+            )
+        )
+
+    assert result["status"] == "ok" and result["created"] is False
+    assert looked_up == [(5, "astercare", "mysql")]
+    assert scoped == [(1, 4, 3, "asterchat", None, False)]
+    assert "next_step" not in result
+
+
+def test_db_add_does_not_reuse_a_connection_of_another_engine(monkeypatch):
+    """Il motore fa parte dell'identità della connessione: db_add non può
+    attaccarsi a un server dello stesso indirizzo con un motore diverso, altrimenti
+    normalizzerebbe il perimetro sulla forma sbagliata e direbbe di non aver creato
+    nulla parlando di un'altra connessione."""
+    from src.mcp import datasources
+
+    created, scoped, looked_up = [], [], []
+    rows = [{"id": 3, "name": "erp", "engine": "postgresql", "database_name": "app",
+             "status": "ok"}]
+
+    async def by_engine(org_id, machine_id, host, port, username, engine):
+        looked_up.append(engine)
+        return next((r for r in rows if r["engine"] == engine), None)
+
+    async def fake_create(org_id, data):
+        created.append(data)
+        return {"id": 9, "name": data["name"], "engine": data["engine"], "status": "unknown"}
+
+    async def fake_mark(org_id, connection_id):
+        return None
+
+    monkeypatch.setattr(datasources.service, "find_connection", by_engine)
+    monkeypatch.setattr(datasources.service, "create_connection", fake_create)
+    monkeypatch.setattr(datasources.service, "mark_pending_secret", fake_mark)
+    _capture_scope(monkeypatch, datasources, scoped)
+
+    with _SourceIdentity():
+        result = asyncio.run(
+            _underlying(datasources.db_add)(
+                "erp-mysql", "mysql", host="10.0.0.8", port=3306,
+                database_name="app", username="reader",
+            )
+        )
+
+    assert looked_up == ["mysql"]
+    assert result["created"] is True and [d["engine"] for d in created] == ["mysql"]
+    assert scoped == [(1, 4, 9, "app", None, False)]
+
+
+def test_db_add_links_a_second_schema_on_the_same_server(monkeypatch):
+    from src.mcp import datasources
+
+    scoped = []
+
+    async def existing(org_id, machine_id, host, port, username, engine):
+        return {"id": 3, "name": "erp", "engine": "postgresql", "database_name": "app",
+                "status": "ok"}
+
+    async def must_not_create(*args):
+        raise AssertionError("create_connection must not be called")
+
+    monkeypatch.setattr(datasources.service, "find_connection", existing)
+    monkeypatch.setattr(datasources.service, "create_connection", must_not_create)
+    _capture_scope(monkeypatch, datasources, scoped)
+
+    with _SourceIdentity():
+        result = asyncio.run(
+            _underlying(datasources.db_add)(
+                "erp-vendite", "postgresql", host="10.0.0.8", port=5432, schema="vendite",
+                username="reader",
+            )
+        )
+
+    # Senza database esplicito vale il database predefinito della connessione riusata.
+    assert scoped == [(1, 4, 3, "app", "vendite", False)]
+    assert result["scope"]["scope"] == "app.vendite"
 
 
 def test_db_add_has_no_secret_parameter():
@@ -307,9 +546,13 @@ def test_db_add_has_no_secret_parameter():
 def test_db_add_reports_an_unsupported_engine(monkeypatch):
     from src.mcp import datasources
 
-    async def fake_create(org_id, project_id, data):
-        raise ValueError("Unsupported engine 'oracle'. Supported: postgres, mysql")
+    async def no_existing(*args):
+        return None
 
+    async def fake_create(org_id, data):
+        raise ValueError("Unsupported engine 'oracle'. Supported: postgresql, mysql")
+
+    monkeypatch.setattr(datasources.service, "find_connection", no_existing)
     monkeypatch.setattr(datasources.service, "create_connection", fake_create)
 
     with _SourceIdentity():
@@ -319,35 +562,92 @@ def test_db_add_reports_an_unsupported_engine(monkeypatch):
     assert "Unsupported engine" in result["error"]
 
 
-def test_ssh_source_add_never_passes_a_secret_and_marks_pending(monkeypatch):
+def test_ssh_source_add_creates_a_pending_machine_and_selects_the_folder(monkeypatch):
     from src.mcp import ssh_files
 
-    created = []
-    marked = []
+    machines_created, pending, sources_created, selected = [], [], [], []
 
-    async def fake_create(org_id, project_id, data):
-        created.append((org_id, project_id, data))
-        return {"id": 3, "name": data["name"], "host": data["host"], "status": "unknown"}
+    async def no_machine(org_id, host, port, username):
+        return None
 
-    async def fake_mark(org_id, project_id, source_id):
-        marked.append((org_id, project_id, source_id))
+    async def fake_create_machine(org_id, data):
+        machines_created.append((org_id, data))
+        return {"id": 5, "name": data["name"], "status": "unknown"}
 
-    monkeypatch.setattr(ssh_files.ssh_service, "create_source", fake_create)
-    monkeypatch.setattr(ssh_files.ssh_service, "mark_pending_secret", fake_mark)
+    async def fake_pending(org_id, machine_id):
+        pending.append((org_id, machine_id))
+
+    async def no_source(org_id, machine_id, root_path):
+        return None
+
+    async def fake_create_source(org_id, data):
+        sources_created.append((org_id, data))
+        return {"id": 3, "name": data["name"], "machine_id": data["machine_id"]}
+
+    monkeypatch.setattr(ssh_files.machines, "find_machine", no_machine)
+    monkeypatch.setattr(ssh_files.machines, "create_machine", fake_create_machine)
+    monkeypatch.setattr(ssh_files.machines, "mark_pending_secret", fake_pending)
+    monkeypatch.setattr(ssh_files.ssh_service, "find_source", no_source)
+    monkeypatch.setattr(ssh_files.ssh_service, "create_source", fake_create_source)
+    _capture_selection(monkeypatch, ssh_files, selected)
 
     with _SourceIdentity():
         result = asyncio.run(
             _underlying(ssh_files.ssh_source_add)(
-                "asterai-v2-env", "192.168.2.39", "/var/lib/compose/asterai-v2", "larkin"
+                "asterai-v2-env", "/var/lib/compose/asterai-v2", host="192.168.2.39", username="larkin"
             )
         )
 
-    assert result["status"] == "ok"
-    org_id, project_id, data = created[0]
-    assert (org_id, project_id) == (1, 4)
-    assert not any(key in data for key in SECRET_KEYS)
-    assert data["root_path"] == "/var/lib/compose/asterai-v2"
-    assert marked == [(1, 4, 3)]
+    assert result["status"] == "ok" and result["created"] is True
+    org_id, machine_data = machines_created[0]
+    assert org_id == 1
+    assert machine_data["name"] == "larkin@192.168.2.39"
+    assert not any(key in machine_data for key in SECRET_KEYS)
+    assert pending == [(1, 5)]
+    assert sources_created[0][1]["machine_id"] == 5
+    assert sources_created[0][1]["root_path"] == "/var/lib/compose/asterai-v2"
+    assert selected == [(1, 4, "folders", 3)]
+    assert "next_step" in result
+
+
+def test_ssh_source_add_selects_an_existing_folder(monkeypatch):
+    from src.mcp import ssh_files
+
+    selected = []
+
+    async def fake_machine(org_id, name):
+        return {"id": 5, "name": name, "status": "ok"}
+
+    async def existing(org_id, machine_id, root_path):
+        return {"id": 8, "name": "asterchat-home", "machine_id": machine_id}
+
+    async def must_not_create(*args):
+        raise AssertionError("create_source must not be called")
+
+    monkeypatch.setattr(ssh_files.machines, "get_machine_by_name", fake_machine)
+    monkeypatch.setattr(ssh_files.ssh_service, "find_source", existing)
+    monkeypatch.setattr(ssh_files.ssh_service, "create_source", must_not_create)
+    _capture_selection(monkeypatch, ssh_files, selected)
+
+    with _SourceIdentity():
+        result = asyncio.run(
+            _underlying(ssh_files.ssh_source_add)(
+                "chat-home", "/var/lib/asterchat/data", machine="astercare@192.168.0.206"
+            )
+        )
+
+    assert result["status"] == "ok" and result["created"] is False
+    assert selected == [(1, 4, "folders", 8)]
+    assert "next_step" not in result
+
+
+def test_ssh_source_add_needs_a_machine_or_an_address():
+    from src.mcp import ssh_files
+
+    with _SourceIdentity():
+        result = asyncio.run(_underlying(ssh_files.ssh_source_add)("x", "/srv"))
+
+    assert result["status"] == "error"
 
 
 def test_ssh_source_add_has_no_secret_parameter():
@@ -357,3 +657,279 @@ def test_ssh_source_add_has_no_secret_parameter():
 
     params = inspect.signature(_underlying(ssh_files.ssh_source_add)).parameters
     assert not any(key in params for key in SECRET_KEYS)
+
+
+def _refuse_restricted(monkeypatch, module, rights, name):
+    """select_resource si comporta come sul database: rifiuta una risorsa
+    riservata a chi non ha il diritto di sceglierla."""
+
+    async def fake_select(org_id, project_id, kind, resource_id, user_id, can_select_restricted):
+        rights.append(can_select_restricted)
+        if not can_select_restricted:
+            raise selections_module.RestrictedResourceError(name)
+        return {"kind": kind, "resource_id": resource_id, "name": name, "already_selected": False}
+
+    monkeypatch.setattr(module.selections, "select_resource", fake_select)
+
+
+def test_db_add_does_not_hand_a_restricted_connection_to_an_api_key(monkeypatch):
+    """sources-write non è un diritto da admin: una API key non può prendersi
+    una connessione riservata registrandola di nuovo."""
+    from src.mcp import datasources
+
+    scoped = []
+
+    async def existing(org_id, machine_id, host, port, username, engine):
+        return {"id": 3, "name": "payroll", "engine": "mysql", "database_name": "payroll",
+                "status": "ok"}
+
+    async def must_not_create(*args):
+        raise AssertionError("create_connection must not be called")
+
+    monkeypatch.setattr(datasources.service, "find_connection", existing)
+    monkeypatch.setattr(datasources.service, "create_connection", must_not_create)
+    _capture_scope(monkeypatch, datasources, scoped, restricted_name="payroll")
+
+    with _SourceIdentity():
+        with pytest.raises(perms.PermissionDenied, match="restricted"):
+            asyncio.run(
+                _underlying(datasources.db_add)(
+                    "payroll", "mysql", host="10.0.0.8", port=3306, database_name="payroll"
+                )
+            )
+
+    assert [call[-1] for call in scoped] == [False]
+
+
+def test_db_add_refuses_a_role_below_member(monkeypatch):
+    from src.mcp import datasources
+
+    _roles(monkeypatch, "viewer")
+
+    async def must_not_find(*args):
+        raise AssertionError("find_connection must not be called")
+
+    async def must_not_link(*args):
+        raise AssertionError("create_scope must not be called")
+
+    monkeypatch.setattr(datasources.service, "find_connection", must_not_find)
+    monkeypatch.setattr(datasources.project_scopes, "create_scope", must_not_link)
+
+    with _SourceIdentity(user_id=42):
+        with pytest.raises(perms.PermissionDenied, match="member role"):
+            asyncio.run(
+                _underlying(datasources.db_add)("erp", "mysql", host="10.0.0.8", database_name="erp")
+            )
+
+
+def test_ssh_source_add_does_not_hand_a_restricted_folder_to_an_api_key(monkeypatch):
+    from src.mcp import ssh_files
+
+    rights = []
+
+    async def fake_machine(org_id, name):
+        return {"id": 5, "name": name, "status": "ok"}
+
+    async def existing(org_id, machine_id, root_path):
+        return {"id": 8, "name": "payroll-home", "machine_id": machine_id}
+
+    async def must_not_create(*args):
+        raise AssertionError("create_source must not be called")
+
+    monkeypatch.setattr(ssh_files.machines, "get_machine_by_name", fake_machine)
+    monkeypatch.setattr(ssh_files.ssh_service, "find_source", existing)
+    monkeypatch.setattr(ssh_files.ssh_service, "create_source", must_not_create)
+    _refuse_restricted(monkeypatch, ssh_files, rights, "payroll-home")
+
+    with _SourceIdentity():
+        with pytest.raises(perms.PermissionDenied, match="restricted"):
+            asyncio.run(
+                _underlying(ssh_files.ssh_source_add)(
+                    "payroll-home", "/srv/payroll", machine="astercare@192.168.0.206"
+                )
+            )
+
+    assert rights == [False]
+
+
+def test_ssh_source_add_refuses_a_role_below_member(monkeypatch):
+    from src.mcp import ssh_files
+
+    _roles(monkeypatch, "viewer")
+
+    async def must_not_look_up(*args):
+        raise AssertionError("the catalog must not be touched")
+
+    async def must_not_select(*args):
+        raise AssertionError("select_resource must not be called")
+
+    monkeypatch.setattr(ssh_files.machines, "get_machine_by_name", must_not_look_up)
+    monkeypatch.setattr(ssh_files.ssh_service, "find_source", must_not_look_up)
+    monkeypatch.setattr(ssh_files.selections, "select_resource", must_not_select)
+
+    with _SourceIdentity(user_id=42):
+        with pytest.raises(perms.PermissionDenied, match="member role"):
+            asyncio.run(
+                _underlying(ssh_files.ssh_source_add)(
+                    "chat-home", "/var/lib/asterchat", machine="astercare@192.168.0.206"
+                )
+            )
+
+
+# ===== nuove risorse su credenziali già censite =====
+
+
+def _existing_machine_no_folder(monkeypatch, ssh_files, created):
+    async def by_name(org_id, name):
+        return {"id": 5, "name": name, "status": "ok"}
+
+    async def by_address(org_id, host, port, username):
+        return {"id": 5, "name": f"{username}@{host}", "status": "ok"}
+
+    async def must_not_create_machine(*args):
+        raise AssertionError("an existing machine must not be created again")
+
+    async def no_source(org_id, machine_id, root_path):
+        return None
+
+    async def fake_create_source(org_id, data):
+        created.append(data)
+        return {"id": 3, "name": data["name"], "machine_id": data["machine_id"]}
+
+    monkeypatch.setattr(ssh_files.machines, "get_machine_by_name", by_name)
+    monkeypatch.setattr(ssh_files.machines, "find_machine", by_address)
+    monkeypatch.setattr(ssh_files.machines, "create_machine", must_not_create_machine)
+    monkeypatch.setattr(ssh_files.ssh_service, "find_source", no_source)
+    monkeypatch.setattr(ssh_files.ssh_service, "create_source", fake_create_source)
+
+
+@pytest.mark.parametrize("where", [
+    {"machine": "deploy@10.0.0.6"},
+    {"host": "10.0.0.6", "username": "deploy"},
+], ids=["by-machine-name", "by-address"])
+def test_ssh_source_add_refuses_a_new_folder_on_an_existing_machine_to_a_non_admin(monkeypatch, where):
+    """The credential lives on the machine: a new folder there would be readable at once."""
+    from src.mcp import ssh_files
+
+    created, selected = [], []
+    _existing_machine_no_folder(monkeypatch, ssh_files, created)
+    _capture_selection(monkeypatch, ssh_files, selected)
+
+    with _SourceIdentity():
+        with pytest.raises(perms.PermissionDenied, match="organization admin must register"):
+            asyncio.run(_underlying(ssh_files.ssh_source_add)("etc", "/etc", **where))
+
+    assert created == [] and selected == []
+
+
+def test_ssh_source_add_refuses_an_anonymous_caller_when_mcp_auth_is_off(monkeypatch):
+    """With MCP auth disabled the caller is anonymous, never an organization admin."""
+    from src.mcp import ssh_files
+
+    created, selected = [], []
+    _existing_machine_no_folder(monkeypatch, ssh_files, created)
+    _capture_selection(monkeypatch, ssh_files, selected)
+    mcp_context.set_current_org_id(1)
+    mcp_context.set_current_project_id(4)
+    try:
+        assert mcp_context.get_current_principal().kind == "anonymous"
+        with pytest.raises(perms.PermissionDenied, match="organization admin must register"):
+            asyncio.run(_underlying(ssh_files.ssh_source_add)("etc", "/etc", machine="deploy@10.0.0.6"))
+    finally:
+        mcp_context.set_current_org_id(None)
+        mcp_context.set_current_project_id(None)
+
+    assert created == [] and selected == []
+
+
+def test_ssh_source_add_lets_an_org_admin_register_a_folder_on_an_existing_machine(monkeypatch):
+    from src.mcp import ssh_files
+
+    created, selected = [], []
+    _existing_machine_no_folder(monkeypatch, ssh_files, created)
+    _capture_selection(monkeypatch, ssh_files, selected)
+    _roles(monkeypatch, "member", org_role="admin")
+
+    with _SourceIdentity(user_id=42):
+        result = asyncio.run(
+            _underlying(ssh_files.ssh_source_add)("etc", "/etc", machine="deploy@10.0.0.6")
+        )
+
+    assert result["status"] == "ok" and result["created"] is True
+    assert created[0]["machine_id"] == 5 and selected == [(1, 4, "folders", 3)]
+
+
+def test_ssh_source_add_refuses_a_project_member_who_is_not_an_org_admin(monkeypatch):
+    from src.mcp import ssh_files
+
+    created = []
+    _existing_machine_no_folder(monkeypatch, ssh_files, created)
+    _roles(monkeypatch, "member", org_role="member")
+
+    with _SourceIdentity(user_id=42):
+        with pytest.raises(perms.PermissionDenied, match="organization admin"):
+            asyncio.run(
+                _underlying(ssh_files.ssh_source_add)("etc", "/etc", machine="deploy@10.0.0.6")
+            )
+
+    assert created == []
+
+
+def _new_connection(monkeypatch, datasources, created):
+    async def fake_machine(org_id, name):
+        return {"id": 5, "name": name}
+
+    async def no_existing(org_id, machine_id, host, port, username, engine):
+        return None
+
+    async def fake_create(org_id, data):
+        created.append(data)
+        return {"id": 9, "name": data["name"], "engine": data["engine"], "status": "unknown"}
+
+    async def fake_mark(org_id, connection_id):
+        pass
+
+    monkeypatch.setattr(datasources.machines, "get_machine_by_name", fake_machine)
+    monkeypatch.setattr(datasources.service, "find_connection", no_existing)
+    monkeypatch.setattr(datasources.service, "create_connection", fake_create)
+    monkeypatch.setattr(datasources.service, "mark_pending_secret", fake_mark)
+
+
+@pytest.mark.parametrize("args", [
+    ("tunnelled", "postgresql"),
+    ("local-file", "sqlite"),
+], ids=["through-a-catalog-machine", "sqlite"])
+def test_db_add_refuses_a_new_connection_usable_without_a_password_to_a_non_admin(monkeypatch, args):
+    from src.mcp import datasources
+
+    created, scoped = [], []
+    _new_connection(monkeypatch, datasources, created)
+    _capture_scope(monkeypatch, datasources, scoped)
+    name, engine = args
+    kwargs = ({"host": "127.0.0.1", "port": 5432, "database_name": "app", "username": "app",
+               "ssh_machine": "deploy@10.0.0.6"} if engine == "postgresql"
+              else {"database_name": "/var/lib/app/app.db"})
+
+    with _SourceIdentity():
+        with pytest.raises(perms.PermissionDenied, match="organization admin must register"):
+            asyncio.run(_underlying(datasources.db_add)(name, engine, **kwargs))
+
+    assert created == [] and scoped == []
+
+
+def test_db_add_lets_an_org_admin_create_a_tunnelled_connection(monkeypatch):
+    from src.mcp import datasources
+
+    created, scoped = [], []
+    _new_connection(monkeypatch, datasources, created)
+    _capture_scope(monkeypatch, datasources, scoped)
+    _roles(monkeypatch, "member", org_role="admin")
+
+    with _SourceIdentity(user_id=42):
+        result = asyncio.run(_underlying(datasources.db_add)(
+            "tunnelled", "postgresql", host="127.0.0.1", port=5432, database_name="app",
+            username="app", ssh_machine="deploy@10.0.0.6",
+        ))
+
+    assert result["status"] == "ok" and result["created"] is True
+    assert created[0]["ssh_machine_id"] == 5

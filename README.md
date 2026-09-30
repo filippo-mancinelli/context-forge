@@ -6,10 +6,11 @@ Self-hosted context infrastructure for AI coding agents. Exposes a single MCP en
 
 - **Persistent memory** — long-term memory with Mem0 + pgvector, scoped per organization and project.
 - **Knowledge base** — upload documents (PDF, Word, Excel, PowerPoint, images with OCR, text, and more) via drag-and-drop, or fetch them from a URL (with SSRF guards); they're extracted, chunked, embedded, and made semantically searchable.
-- **Hybrid repository search** — index and query local, GitHub, and GitLab repos (gitlab.com or self-hosted via `GITLAB_URL`) using tree-sitter parsing. Retrieval fuses dense vector embeddings with lexical full-text ranking (Reciprocal Rank Fusion) so exact identifiers, error strings, and rare tokens surface alongside semantic matches. Set `SEARCH_HYBRID=false` to fall back to vector-only.
+- **Organization catalog** — the organization owns its resources and each project selects what it uses. **Machines** hold SSH credentials once per organization; **SSH folders**, **databases** and **repositories** are registered in the catalog (by org admins from the UI, or through the `*_add` MCP tools) and then selected per project. A resource marked `restricted` can only be selected by an org admin. Deleting a catalog entry removes it from every project that selected it.
+- **Hybrid repository search** — index and query local, GitHub, and GitLab repos (gitlab.com or self-hosted via `GITLAB_URL`) using tree-sitter parsing. Retrieval fuses dense vector embeddings with lexical full-text ranking (Reciprocal Rank Fusion) so exact identifiers, error strings, and rare tokens surface alongside semantic matches. Repositories live in the organization catalog and each project selects the ones it searches. Set `SEARCH_HYBRID=false` to fall back to vector-only.
 - **Code intelligence** — a symbol graph (definitions, references, imports) built at index time powers `repo_map` (ranked file overview for a query, definitions first), `repo_neighbors` (callers, callees, and related files) and `repo_symbols`; `repo_get_file` reads by line window so agents pull only the lines they need.
-- **Data sources** — connect external databases (PostgreSQL, MySQL, MariaDB, SQLite) directly or through an SSH tunnel. Agents get live schema context (tables, columns, keys, indexes, row estimates) enriched by a human-curated **data dictionary** (per-table and per-column descriptions edited in the UI), and can run validated read-only SQL (single SELECT/SHOW/EXPLAIN statement, enforced LIMIT, timeouts, full audit log). With the `db-write` permission, `db_execute` runs a single validated DML statement (real top-level WHERE required) inside a transaction with a DB-side timeout; without it, a caller holding `context-write` gets a **proposal** instead — the statement is stored with an `EXPLAIN` preview for an admin to approve from the Approvals page. Credentials are encrypted at rest when `ENCRYPTION_KEY` is set.
-- **SSH file sources** — register a host and a root directory reachable over SSH; agents list, read (head/tail/offset windows), and grep files there, and with `ssh-write` can atomically write files confined to that root. Without `ssh-write`, a caller holding `context-write` proposes the write instead: the content is stored with a size/hash preview for an admin to approve.
+- **Data sources and database scopes** — register database connections (PostgreSQL, MySQL, MariaDB, SQLite) in the catalog, directly or through an SSH machine tunnel. A project links a connection on a **scope** — a database and, on PostgreSQL, a schema — under an **alias**; the same connection can be linked on several scopes. Agents address data sources by alias, and queries and writes are confined to the scope's schema. Agents get live schema context (tables, columns, keys, indexes, row estimates) enriched by a human-curated **data dictionary** (per-table and per-column descriptions edited in the UI), and can run validated read-only SQL (single SELECT/SHOW/EXPLAIN statement, enforced LIMIT, timeouts, full audit log). With the `db-write` permission, `db_execute` runs a single validated DML statement (real top-level WHERE required) inside a transaction with a DB-side timeout; without it, a caller holding `context-write` gets a **proposal** instead — the statement is stored with an `EXPLAIN` preview for an admin to approve from the Approvals page, pinned to the scope it was previewed on: approval fails if that scope was renamed, removed or re-pointed in the meantime. Credentials are encrypted at rest when `ENCRYPTION_KEY` is set.
+- **SSH file sources** — register an SSH folder (a catalog machine plus a root directory) and select it in the projects that need it; agents list, read (head/tail/offset windows), and grep files there, and with `ssh-write` can atomically write files confined to that root. Without `ssh-write`, a caller holding `context-write` proposes the write instead: the content is stored with a size/hash preview for an admin to approve, pinned to the folder it was previewed on: approval fails if that folder was renamed, removed, or moved to another machine or root in the meantime.
 - **Code changes** — `repo_commit_files` and `repo_open_pr` clone a scratch workspace, commit agent-proposed changes on a branch, push, and open a GitHub PR / GitLab MR for human review.
 - **API contracts** — ingest OpenAPI/Swagger specs (URL or pasted JSON/YAML) and GraphQL schemas (live introspection or pasted result). Every operation becomes individually listable and searchable, with `$ref`-resolved request/response schemas, so agents know exactly which endpoints exist and with what payloads.
 - **CI/CD context** — live view of recent GitHub Actions / GitLab CI runs for configured repos, and a "why is the pipeline red" tool that returns the failed jobs/steps with the ANSI-stripped tail of their error logs. Uses the tokens already configured for indexing; nothing extra to set up.
@@ -17,7 +18,7 @@ Self-hosted context infrastructure for AI coding agents. Exposes a single MCP en
 - **Agent chat** — a built-in chat page where a tool-using agent searches your repos, memory, knowledge base, and connected databases, showing every retrieval inline so you can verify context is surfaced correctly. Streams responses (and model reasoning when available), switches models on the fly across the providers you have keys for (OpenAI, Anthropic, DeepSeek), keeps a per-user chat history, and can publish a conversation snapshot as a public share link.
 - **Multi-tenancy** — organizations as isolation boundaries with `owner / admin / member / viewer` roles. Each organization holds one or more **projects** that scope every source, search, and memory namespace; users are created by org admins with per-project visibility. Provider keys, embedding model, git tokens, and the Telegram capture bot can all be overridden per organization. Every MCP tool call is audited per organization, and API keys can carry a per-minute rate limit.
 - **Authentication** — local admin login, or any OIDC provider (Keycloak, Authentik, Entra ID, ...) with just-in-time user provisioning. The MCP endpoint accepts API keys with granular permissions or OIDC bearer tokens, and can act as an OAuth authorization server so MCP clients log in from the browser without an API key.
-- **Runtime-first config** — manage repositories, providers, tokens, and indexing from the UI; `.env` and YAML are only for bootstrap.
+- **Runtime-first config** — manage the catalog, providers, tokens, and indexing from the UI; `.env` and YAML are only for bootstrap.
 - **Pluggable providers** — OpenAI, Jina, OpenAI-compatible, or fully local embeddings.
 
 ## Architecture
@@ -67,6 +68,23 @@ The schema migrates itself at startup. Coming from a version without projects an
 - async jobs the previous fire-and-forget executor left `running` are marked `dead` on the first start after this upgrade: it may already have delivered them, so they are not re-fired; jobs still `pending` never ran and are executed normally under the new retry policy;
 - on the first start after this upgrade the server records the existing schema as migration version 1 (the frozen baseline is replayed once; it is idempotent), and later changes apply as numbered migrations; `python -m src.cli migrate --status` shows the current version.
 
+#### Upgrading to the organization catalog and database scopes
+
+On the first boot after this upgrade three **one-way** conversions run:
+
+1. SSH credentials are grouped into **machines**; SSH folders and database connections move to the organization catalog, and projects keep them as selections. Duplicate SSH folder and database names inside an organization are renamed by appending the slug of the project they belonged to (`name-<project-slug>`, plus a number if that is still taken); the first one keeps its name.
+2. Repositories get numeric ids; duplicates with the same URL and branch are merged into one (the duplicates' indexed chunks and clone directories are discarded), and clone directories move to `org_<id>/repo_<id>` in the repos cache.
+3. Project-to-database links become **inferred scopes** (the connection's database and schema under an alias). Confirm them from the project's data sources page.
+
+The conversions drop the legacy columns and tables (if some database links cannot be converted, the legacy link table is kept and the server log lists them) and cannot be undone: **back up the database and the repos cache directory before upgrading.** A legacy SSH secret that cannot be decrypted with the current `ENCRYPTION_KEY` stops the boot; fix the key and start again.
+
+Other changes to be aware of:
+
+- The REST endpoints that created, updated or deleted resources per project are gone: writes on `/api/repos`, `/api/ssh-sources` and `/api/datasources`, and `/api/github/repos/add` / `/api/gitlab/repos/add`. Use `/api/catalog/*` (machines, folders, databases, repos) instead; the read, index, file and query endpoints remain, and the data-source endpoints take a scope id.
+- Agents can no longer query `information_schema` or `pg_*` through `db_query`; use `db_schema` and `db_describe` to learn the structure.
+- `ssh_source_add`, `db_add` and `repo_add` register in the catalog and select for the active project; a resource that exists in the catalog but not in the project is found with `catalog_list` and added with `resource_select`.
+- Write proposals (`db_execute`, `ssh_write_file`) still pending before the upgrade fail on approval and must be proposed again.
+
 ## Development
 
 ### Schema migrations
@@ -101,7 +119,16 @@ From `services/server`:
 .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider
 ```
 
-Both `migrate` forms connect with `DATABASE_URL`, the same setting the server uses.
+Both `migrate` forms connect with `DATABASE_URL`, the same setting the server uses. The CLI applies the versioned schema modules only; the data conversions described in the upgrade notes run at server boot.
+
+### Tests against PostgreSQL
+
+Tests that need a real PostgreSQL are skipped unless `TEST_DATABASE_URL` points at a PostgreSQL 16 server with the pgvector extension (for example the `postgres` service of `docker-compose.yml`). Each test creates and drops its own throwaway database on that server, so the URL only needs an account allowed to create databases:
+
+```bash
+TEST_DATABASE_URL=postgresql://context_forge:<password>@localhost:5440/postgres \
+  .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider
+```
 
 ## Projects and the MCP endpoint
 
@@ -111,11 +138,12 @@ An organization can hold several projects. Connect to the organization-level end
 
 - **Memory:** `memory_add`, `memory_search`, `memory_list`, `memory_delete`
 - **Knowledge base:** `kb_search`, `kb_list`, `kb_get_document`, `kb_add_url`
-- **Repositories:** `repo_list`, `repo_search`, `repo_symbols`, `repo_get_file`, `repo_index`, `repo_relationships`, `repo_add`
+- **Catalog:** `catalog_list` (`context-read`) lists the organization's SSH folders, databases and repositories and whether the active project selected each; `resource_select` and `resource_deselect` (`context-write` plus membership of the project; restricted resources need an org admin) add or remove a resource from the project. For databases, `resource_select` takes `database`, `schema` and `alias` to link a scope.
+- **Repositories:** `repo_list`, `repo_search`, `repo_symbols`, `repo_get_file`, `repo_index`, `repo_relationships`, `repo_add` (`sources-write`; registers the repository in the catalog if needed and selects it, reusing one with the same URL and branch)
 - **Code intelligence:** `repo_references`, `code_explain`, `repo_annotate`, `repo_annotations`, `repo_map`, `repo_neighbors`
 - **Code changes:** `repo_commit_files`, `repo_open_pr` — create a branch, push agent-proposed file changes, and open a GitHub PR / GitLab MR for human review (requires the `repo-write` permission; git tokens need write scope)
-- **Data sources:** `db_list`, `db_schema`, `db_describe`, `db_query`, `db_execute` (`db-write`, otherwise a proposal), `db_add` (`sources-write`)
-- **SSH files:** `ssh_sources`, `ssh_list_files`, `ssh_read_file`, `ssh_grep`, `ssh_write_file` (`ssh-write`, otherwise a proposal), `ssh_source_add` (`sources-write`)
+- **Data sources:** `db_list`, `db_schema`, `db_describe`, `db_query`, `db_execute` (`db-write`, otherwise a proposal), `db_add` (`sources-write`; registers a catalog connection, optionally through an SSH machine, or reuses one to the same server, and links a database/schema scope; a new connection through a catalog machine, or on SQLite, requires an organization admin). The `db_*` tools take the scope alias as `connection` (a scope id also works); `db_list` shows the aliases.
+- **SSH files:** `ssh_sources`, `ssh_list_files`, `ssh_read_file`, `ssh_grep`, `ssh_write_file` (`ssh-write`, otherwise a proposal), `ssh_source_add` (`sources-write`; takes a catalog `machine`, or `host` and `username` for a new one, plus the root path; creating a new folder on a machine already in the catalog requires an organization admin; API keys and, with MCP auth disabled, anonymous callers never count as one, so they register such folders and connections from the Catalog page)
 - **Write approvals:** `write_request_status` — check whether a proposed write was approved, rejected, or executed
 - **Web pages:** `web_search`, `web_list`, `web_get_page`, `web_add`, `web_refetch`, `web_list_sites`, `web_crawl`, `web_delete`, `web_delete_site`
 - **API contracts:** `api_list`, `api_endpoints`, `api_get_endpoint`, `api_add`
@@ -123,7 +151,7 @@ An organization can hold several projects. Connect to the organization-level end
 - **Jobs:** `job_submit`, `job_status`, `job_result`
 - **Projects:** `list_projects`, `use_project`, `current_project`; with `projects-write`: `create_project`, `rename_project`, `delete_project`, `add_project_member`
 
-Sources registered through MCP (`db_add`, `ssh_source_add`) are created without their secret and stay in a `pending_secret` state until an admin completes them from the UI.
+New sources registered through MCP (`db_add`, `ssh_source_add`) are created without their secret and stay in `pending_secret` until an admin completes them from the Catalog page; selecting a machine, folder or connection that already exists in the catalog creates nothing pending.
 
 ## Agent setup
 
@@ -166,6 +194,10 @@ Expose the MCP port only behind TLS with `MCP_AUTH_MODE=enabled`. Data-source an
 
 Every MCP tool call is recorded: who called it (OIDC user, API key, or anonymous), the tool, the project, the outcome (`ok`, `denied`, `error`, `rate_limited`), the duration, and a redacted summary of the arguments — credentials, tokens, secrets and payloads are redacted; URLs are stored without userinfo or query strings, while audited SQL is kept truncated. A tool that answers with an error instead of raising is recorded as `error` too, so the **Errors** tile counts every call that reported one. Org admins and owners read the trail under **Organization → Tool activity**, with a 24h/7d stats strip and filters by tool, by outcome, and by principal (substring match). History is pruned daily according to `MCP_AUDIT_RETENTION_DAYS` (default 90).
 
+### SQL validation and scopes
+
+Every statement sent to a data source goes through a validator before it reaches the database. Besides the single-statement rules (read-only, or a single DML statement with a real `WHERE`), it rejects the system catalogs (`information_schema`, `pg_catalog`, relations named `pg_*`), `SELECT ... INTO`, and file, session, large-object and `dblink` functions, and it confines qualified names to the scope's schema. Agents learn the structure of a data source with `db_schema` and `db_describe`, not from the catalogs. Pooled connections are reset when they return to the pool, so session state set by one call never reaches the next.
+
 ### Human approvals for writes
 
 `db_execute` and `ssh_write_file` execute immediately only for a caller holding
@@ -188,17 +220,17 @@ The identity provider only authenticates. Authorization of MCP tools is managed 
 | Permission | Grants |
 |---|---|
 | `context-read` | search and read memory, repositories, knowledge base, web pages, API contracts, CI runs, database schemas |
-| `context-write` | add or delete memories, annotate code, add and refetch web pages; also propose `db_execute` / `ssh_write_file` writes for an admin to approve |
+| `context-write` | add or delete memories, annotate code, add and refetch web pages, select and deselect catalog resources (`resource_select`, `resource_deselect`; requires membership of the project, and restricted resources need an org admin); also propose `db_execute` / `ssh_write_file` writes for an admin to approve |
 | `db-query` | read-only SQL on connected databases |
 | `db-write` | `db_execute` (validated single-statement DML) and approving SQL write requests |
 | `repo-write` | `repo_commit_files`, `repo_open_pr` |
 | `jobs` | submit and read async jobs |
 | `ssh-read` / `ssh-write` | read / write files on SSH sources; `ssh-write` also approves file write requests |
 | `projects-write` | create, rename, delete projects and manage their members |
-| `sources-write` | register repositories, API contracts, knowledge-base URLs, databases, and SSH sources |
+| `sources-write` | register repositories, API contracts, knowledge-base URLs, databases, and SSH folders in the catalog |
 | `*` | everything, including re-indexing and web crawling/deletion |
 
-Defaults: viewer → `context-read`; member → `context-read`, `context-write`, `db-query`, `ssh-read`; admin → the member set plus `jobs`, `projects-write`, `sources-write`; owner → `*`. Write capabilities (`db-write`, `ssh-write`, `repo-write`) are owner-only until granted explicitly. Members holding `context-write` can still *propose* SQL and file writes; an admin with the matching write permission approves them under **Approvals**.
+`catalog_list` needs `context-read`; no permission names were added with the catalog. Defaults: viewer → `context-read`; member → `context-read`, `context-write`, `db-query`, `ssh-read`; admin → the member set plus `jobs`, `projects-write`, `sources-write`; owner → `*`. Write capabilities (`db-write`, `ssh-write`, `repo-write`) are owner-only until granted explicitly. Members holding `context-write` can still *propose* SQL and file writes; an admin with the matching write permission approves them under **Approvals**.
 
 API keys get granular permissions chosen at creation (**Settings → MCP keys**), never more than the creator's own role allows, plus an optional rate limit in calls per minute (empty = unlimited; enforced per server process), editable afterwards from the key list. OIDC groups under `OIDC_GROUP_PREFIX` are only used to suggest the initial role when a user first logs in.
 

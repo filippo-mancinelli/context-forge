@@ -3,6 +3,7 @@ import asyncio
 
 from src import db
 from src.db import DDL
+from src.migrations.runner import discover_versions
 from tests.fake_db import FakeConn, FakePool
 
 
@@ -91,3 +92,35 @@ def test_vector_columns_are_untyped():
     assert "ivfflat" not in DDL.replace("-- Bump maintenance_work_mem", "")
     # Migrazione guardata per i DB esistenti (evita rewrite a ogni bootstrap).
     assert DDL.count("atttypmod") >= 3
+
+
+# The inline DDL is frozen: database scopes live in migration 0007.
+SCOPES = next(m for m in discover_versions() if m.NAME == "db_scopes")
+SCOPES_SQL = SCOPES.SQL
+
+
+def test_db_scopes_migration_is_version_7_and_transactional():
+    assert SCOPES.VERSION == 7
+    assert SCOPES.TRANSACTIONAL is True
+
+
+def test_project_db_scopes_table_present():
+    assert "CREATE TABLE IF NOT EXISTS project_db_scopes" in SCOPES_SQL
+    # Il perimetro è una coppia: entrambe le parti sono opzionali perché la
+    # forma dipende dal motore.
+    assert "database_name  TEXT" in SCOPES_SQL
+    assert "scope_inferred BOOLEAN NOT NULL DEFAULT false" in SCOPES_SQL
+    # L'unicità normalizza i nulli, altrimenti due perimetri vuoti convivrebbero.
+    assert "project_db_scopes_unique_idx" in SCOPES_SQL
+    assert "coalesce(database_name, '')" in SCOPES_SQL
+    assert "project_db_scopes_alias_idx" in SCOPES_SQL
+    assert "lower(alias)" in SCOPES_SQL
+
+
+def test_connection_keeps_the_scopes_seen_at_the_last_check():
+    assert "ALTER TABLE db_connections ADD COLUMN IF NOT EXISTS available_scopes" in SCOPES_SQL
+    assert "ALTER TABLE db_connections ADD COLUMN IF NOT EXISTS scopes_checked_at" in SCOPES_SQL
+
+
+def test_query_log_records_the_schema():
+    assert "ALTER TABLE db_query_log ADD COLUMN IF NOT EXISTS schema_name TEXT" in SCOPES_SQL

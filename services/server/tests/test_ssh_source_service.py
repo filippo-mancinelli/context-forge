@@ -3,12 +3,12 @@ from src.ssh_sources import service
 
 def _row(**over):
     base = {
-        "id": 1, "org_id": 1, "project_id": 2, "name": "prod", "host": "h",
-        "port": 22, "username": "u", "auth_method": "key",
-        "password_enc": "", "private_key_enc": "enc:blob", "root_path": "/etc/aster",
-        "include_globs": "*.conf", "exclude_globs": "secrets*", "description": None,
-        "status": "unknown", "error_message": None, "last_checked_at": None,
-        "created_at": None, "updated_at": None,
+        "id": 1, "org_id": 1, "name": "prod", "machine_id": 5, "machine_name": "u@h",
+        "host": "h", "port": 22, "username": "u", "auth_method": "key",
+        "password_enc": "", "private_key_enc": "enc:blob", "machine_status": "ok",
+        "root_path": "/etc/aster", "include_globs": "*.conf", "exclude_globs": "secrets*",
+        "description": None, "restricted": False, "status": "unknown", "error_message": None,
+        "last_checked_at": None, "created_at": None, "updated_at": None,
     }
     base.update(over)
     return base

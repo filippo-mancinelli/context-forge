@@ -90,12 +90,17 @@ async function downloadRequest(path: string): Promise<Blob> {
 }
 
 export interface Repo {
+  id: number
   name: string
   type: 'local' | 'github' | 'gitlab'
   url?: string
   path?: string
   branch: string
   language: string
+  description?: string
+  restricted: boolean
+  has_token?: boolean
+  project_count?: number
   status: 'pending' | 'indexing' | 'indexed' | 'error'
   last_indexed_at?: string
   total_chunks: number
@@ -132,13 +137,18 @@ export interface GitLabRepo {
 
 export type RemoteRepo = GitHubRepo | GitLabRepo
 
-export interface RepoCreateRequest {
-  name: string
+export interface RepoRequest {
+  // Empty: the server proposes the name from the URL, with @branch when it is already taken.
+  name?: string
   type: 'local' | 'github' | 'gitlab'
   url?: string
   path?: string
   branch: string
   language?: string
+  // Write-only: empty on update keeps the stored token.
+  token?: string
+  description?: string
+  restricted?: boolean
 }
 
 export interface RepoSearchResult {
@@ -479,7 +489,9 @@ export interface ProjectMember {
   created_at?: string
 }
 
-export interface SshSource {
+export type ResourceStatus = 'unknown' | 'ok' | 'error' | 'pending_secret'
+
+export interface Machine {
   id: number
   name: string
   host: string
@@ -487,27 +499,78 @@ export interface SshSource {
   username: string
   auth_method: 'key' | 'password'
   has_secret: boolean
-  root_path: string
-  include_globs?: string
-  exclude_globs?: string
   description?: string
-  status: 'unknown' | 'ok' | 'error'
+  status: ResourceStatus
   error_message?: string
   last_checked_at?: string
+  folder_count: number
+  database_count: number
 }
 
-export interface SshSourceRequest {
+export interface MachineRequest {
   name: string
   host: string
   port?: number
   username: string
   auth_method?: 'key' | 'password'
+  // Write-only: vuoto in modifica mantiene il segreto memorizzato.
   password?: string
   private_key?: string
+  description?: string
+}
+
+export interface SshSource {
+  id: number
+  name: string
+  machine_id: number
+  machine_name: string
+  host: string
+  port: number
+  username: string
+  has_secret: boolean
   root_path: string
   include_globs?: string
   exclude_globs?: string
   description?: string
+  restricted: boolean
+  status: ResourceStatus
+  error_message?: string
+  last_checked_at?: string
+  project_count?: number
+}
+
+export interface FolderRequest {
+  name: string
+  machine_id: number
+  root_path: string
+  include_globs?: string
+  exclude_globs?: string
+  description?: string
+  restricted?: boolean
+}
+
+export type CatalogKind = 'folders' | 'databases' | 'repos'
+
+export interface CatalogProjectRef {
+  id: number
+  name: string
+  slug: string
+}
+
+// A project scope on a catalog connection: the delete confirmation lists
+// project and scope, one per line.
+export interface CatalogDatabaseScopeRef {
+  project_id: number
+  project_name: string
+  scope_id: number
+  alias: string
+  scope_label: string
+}
+
+export interface ProjectResources {
+  folders: SshSource[]
+  databases: DbConnection[]
+  repos: Repo[]
 }
 
 export interface SshFile {
@@ -550,19 +613,30 @@ export interface DbConnection {
   has_password: boolean
   options: Record<string, unknown>
   description?: string
-  status: 'unknown' | 'ok' | 'error'
+  restricted: boolean
+  status: ResourceStatus
   error_message?: string
   last_checked_at?: string
   created_at?: string
   updated_at?: string
   annotation_count?: number
-  // Accesso via bastion SSH
+  // Scopes that projects linked on this connection (catalog view)
+  scope_count?: number
+  // Scopes seen at the last successful check of the connection
+  available_scopes?: DbScopeOption[]
+  scopes_checked_at?: string | null
+  // Tunnel SSH attraverso una macchina del catalogo (null = connessione diretta)
+  ssh_machine_id?: number | null
+  ssh_machine_name?: string | null
   ssh_enabled?: boolean
-  ssh_host?: string
-  ssh_port?: number
-  ssh_username?: string
-  ssh_auth_method?: 'key' | 'password'
-  has_ssh_secret?: boolean
+  // Project link: present only in project views (/api/datasources).
+  scope_id?: number
+  alias?: string
+  scope_database?: string | null
+  scope_schema?: string | null
+  scope_label?: string
+  // Scope inferred from the connection and not yet confirmed by a person.
+  scope_inferred?: boolean
 }
 
 export interface DbConnectionRequest {
@@ -572,17 +646,34 @@ export interface DbConnectionRequest {
   port?: number
   database_name?: string
   username?: string
+  // Write-only: vuoto in modifica mantiene la password memorizzata.
   password?: string
   options?: Record<string, unknown>
   description?: string
-  // Accesso via bastion SSH. host/port sopra sono il DB visto dal bastion.
-  ssh_enabled?: boolean
-  ssh_host?: string
-  ssh_port?: number
-  ssh_username?: string
-  ssh_auth_method?: 'key' | 'password'
-  ssh_password?: string
-  ssh_private_key?: string
+  ssh_machine_id?: number | null
+  restricted?: boolean
+}
+
+// A scope seen on a connection: database and schema in the engine's form.
+export interface DbScopeOption {
+  database: string | null
+  schema: string | null
+  label: string
+}
+
+export interface DbAvailableScopes {
+  scopes: DbScopeOption[]
+  checked_at: string | null
+  // false: list saved at the last successful check, not read from the server now.
+  live: boolean
+  error: string | null
+}
+
+// Scope and alias of a project link; no alias when adding = proposed by the server.
+export interface DbProjectScopeRequest {
+  database: string | null
+  schema: string | null
+  alias?: string
 }
 
 export type EnvironmentKind = 'production' | 'staging' | 'development' | 'other'
@@ -628,6 +719,9 @@ export interface DbSchemaTable {
 export interface DbSchemaOverview {
   connection: string
   connection_id: number
+  alias?: string
+  scope_label?: string
+  scope_inferred?: boolean
   dialect: string
   default_schema?: string
   schema?: string
@@ -688,6 +782,8 @@ export interface DbQueryLogEntry {
   error_message?: string
   rows_returned: number
   duration_ms: number
+  // Schema the query ran on; empty for an inferred scope.
+  schema_name?: string | null
   created_at?: string
 }
 
@@ -958,25 +1054,31 @@ export const api = {
       }),
     removeMember: (id: number, userId: number) =>
       request<{ status: string }>(`/api/projects/${id}/members/${userId}`, { method: 'DELETE' }),
-  },
-  sshSources: {
-    list: () => request<{ sources: SshSource[] }>('/api/ssh-sources'),
-    create: (req: SshSourceRequest) =>
-      request<{ status: string; source: SshSource }>('/api/ssh-sources', {
+    resources: (id: number) => request<ProjectResources>(`/api/projects/${id}/resources`),
+    selectResource: (id: number, kind: CatalogKind, resourceId: number) =>
+      request<{ status: string; already_selected: boolean }>(`/api/projects/${id}/resources`, {
         method: 'POST',
-        body: JSON.stringify(req),
+        body: JSON.stringify({ kind, resource_id: resourceId }),
       }),
-    update: (id: number, req: SshSourceRequest) =>
-      request<{ status: string; source: SshSource }>(`/api/ssh-sources/${id}`, {
+    deselectResource: (id: number, kind: CatalogKind, resourceId: number) =>
+      request<{ status: string }>(`/api/projects/${id}/resources/${kind}/${resourceId}`, {
+        method: 'DELETE',
+      }),
+    addDatabase: (id: number, connectionId: number, req: DbProjectScopeRequest) =>
+      request<{ status: string; scope: DbConnection }>(`/api/projects/${id}/databases`, {
+        method: 'POST',
+        body: JSON.stringify({ connection_id: connectionId, ...req }),
+      }),
+    updateDatabase: (id: number, scopeId: number, req: DbProjectScopeRequest) =>
+      request<{ status: string; scope: DbConnection }>(`/api/projects/${id}/databases/${scopeId}`, {
         method: 'PUT',
         body: JSON.stringify(req),
       }),
-    delete: (id: number) =>
-      request<{ status: string }>(`/api/ssh-sources/${id}`, { method: 'DELETE' }),
-    test: (id: number) =>
-      request<{ status: 'ok' | 'error'; error?: string }>(`/api/ssh-sources/${id}/test`, {
-        method: 'POST',
-      }),
+    removeDatabase: (id: number, scopeId: number) =>
+      request<{ status: string }>(`/api/projects/${id}/databases/${scopeId}`, { method: 'DELETE' }),
+  },
+  sshSources: {
+    list: () => request<{ sources: SshSource[] }>('/api/ssh-sources'),
     files: (id: number, opts?: { subpath?: string; recursive?: boolean }) => {
       const params = new URLSearchParams()
       if (opts?.subpath) params.set('subpath', opts.subpath)
@@ -990,20 +1092,101 @@ export const api = {
         { method: 'PUT', body: JSON.stringify({ path, content }) }
       ),
   },
+  catalog: {
+    machines: {
+      list: () => request<{ machines: Machine[] }>('/api/catalog/machines'),
+      create: (req: MachineRequest) =>
+        request<{ status: string; machine: Machine }>('/api/catalog/machines', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      update: (id: number, req: MachineRequest) =>
+        request<{ status: string; machine: Machine }>(`/api/catalog/machines/${id}`, {
+          method: 'PUT',
+          body: JSON.stringify(req),
+        }),
+      delete: (id: number) =>
+        request<{ status: string }>(`/api/catalog/machines/${id}`, { method: 'DELETE' }),
+      test: (id: number) =>
+        request<{ status: 'ok' | 'error'; error?: string }>(`/api/catalog/machines/${id}/test`, {
+          method: 'POST',
+        }),
+    },
+    folders: {
+      list: () => request<{ sources: SshSource[] }>('/api/catalog/folders'),
+      create: (req: FolderRequest) =>
+        request<{ status: string; source: SshSource }>('/api/catalog/folders', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      update: (id: number, req: FolderRequest) =>
+        request<{ status: string; source: SshSource }>(`/api/catalog/folders/${id}`, {
+          method: 'PUT',
+          body: JSON.stringify(req),
+        }),
+      // La UI mostra prima i progetti coinvolti e poi conferma la cancellazione.
+      delete: (id: number) =>
+        request<{ status: string }>(`/api/catalog/folders/${id}?confirm=true`, { method: 'DELETE' }),
+      test: (id: number) =>
+        request<{ status: 'ok' | 'error'; error?: string }>(`/api/catalog/folders/${id}/test`, {
+          method: 'POST',
+        }),
+      projects: (id: number) =>
+        request<{ projects: CatalogProjectRef[] }>(`/api/catalog/folders/${id}/projects`),
+    },
+    databases: {
+      list: () => request<{ connections: DbConnection[]; engines: DbEngine[] }>('/api/catalog/databases'),
+      create: (req: DbConnectionRequest) =>
+        request<{ status: string; connection: DbConnection }>('/api/catalog/databases', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      update: (id: number, req: DbConnectionRequest) =>
+        request<{ status: string; connection: DbConnection }>(`/api/catalog/databases/${id}`, {
+          method: 'PUT',
+          body: JSON.stringify(req),
+        }),
+      delete: (id: number) =>
+        request<{ status: string }>(`/api/catalog/databases/${id}?confirm=true`, { method: 'DELETE' }),
+      test: (id: number) =>
+        request<{ status: 'ok' | 'error'; error?: string; suggested_host?: string | null }>(
+          `/api/catalog/databases/${id}/test`,
+          { method: 'POST' }
+        ),
+      projects: (id: number) =>
+        request<{ projects: CatalogDatabaseScopeRef[] }>(`/api/catalog/databases/${id}/projects`),
+      scopes: (id: number, refresh = false) =>
+        request<DbAvailableScopes>(`/api/catalog/databases/${id}/scopes${refresh ? '?refresh=true' : ''}`),
+    },
+    repos: {
+      list: () => request<{ repos: Repo[] }>('/api/catalog/repos'),
+      create: (req: RepoRequest) =>
+        request<{ status: string; repo: Repo }>('/api/catalog/repos', {
+          method: 'POST',
+          body: JSON.stringify(req),
+        }),
+      update: (id: number, req: RepoRequest) =>
+        request<{ status: string; repo: Repo }>(`/api/catalog/repos/${id}`, {
+          method: 'PUT',
+          body: JSON.stringify(req),
+        }),
+      // La UI mostra prima i progetti coinvolti e poi conferma la cancellazione.
+      delete: (id: number) =>
+        request<{ status: string }>(`/api/catalog/repos/${id}?confirm=true`, { method: 'DELETE' }),
+      index: (id: number) => request<{ status: string }>(`/api/catalog/repos/${id}/index`, { method: 'POST' }),
+      cancelIndex: (id: number) =>
+        request<{ status: string }>(`/api/catalog/repos/${id}/cancel-index`, { method: 'POST' }),
+      projects: (id: number) =>
+        request<{ projects: CatalogProjectRef[] }>(`/api/catalog/repos/${id}/projects`),
+      import: (provider: 'github' | 'gitlab', fullName: string, branch?: string) =>
+        request<{ status: string; repo: Repo }>('/api/catalog/repos/import', {
+          method: 'POST',
+          body: JSON.stringify({ provider, full_name: fullName, branch }),
+        }),
+    },
+  },
   repos: {
     list: () => request<Repo[]>('/api/repos'),
-    create: (req: RepoCreateRequest) =>
-      request<{ status: string; repo: { name: string; type: string } }>('/api/repos', {
-        method: 'POST',
-        body: JSON.stringify(req),
-      }),
-    update: (name: string, req: RepoCreateRequest) =>
-      request<{ status: string; repo: { name: string; type: string } }>(`/api/repos/${encodeURIComponent(name)}`, {
-        method: 'PUT',
-        body: JSON.stringify(req),
-      }),
-    delete: (name: string) =>
-      request<{ status: string; message: string }>(`/api/repos/${encodeURIComponent(name)}`, { method: 'DELETE' }),
     search: (query: string, repos?: string[], limit = 20) =>
       request<{ results: RepoSearchResult[]; count: number }>('/api/repos/search', {
         method: 'POST',
@@ -1031,11 +1214,6 @@ export const api = {
     listRepos: () => request<GitHubRepo[]>('/api/github/repos'),
     searchRepos: (q: string) =>
       request<{ repos: GitHubRepo[]; total_count: number }>(`/api/github/search?q=${encodeURIComponent(q)}`),
-    addRepo: (fullName: string, branch?: string) =>
-      request<{ status: string; message: string; repo: unknown }>('/api/github/repos/add', {
-        method: 'POST',
-        body: JSON.stringify({ full_name: fullName, branch }),
-      }),
     listBranches: (owner: string, repo: string) =>
       request<{ name: string; is_default: boolean }[]>(`/api/github/branches?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`),
   },
@@ -1043,11 +1221,6 @@ export const api = {
     listRepos: () => request<GitLabRepo[]>('/api/gitlab/repos'),
     searchRepos: (q: string) =>
       request<{ repos: GitLabRepo[]; total_count: number }>(`/api/gitlab/search?q=${encodeURIComponent(q)}`),
-    addRepo: (fullName: string, branch?: string) =>
-      request<{ status: string; message: string; repo: unknown }>('/api/gitlab/repos/add', {
-        method: 'POST',
-        body: JSON.stringify({ full_name: fullName, branch }),
-      }),
     listBranches: (fullName: string) =>
       request<{ name: string; is_default: boolean }[]>(`/api/gitlab/branches?full_name=${encodeURIComponent(fullName)}`),
   },
@@ -1231,51 +1404,30 @@ export const api = {
     reembed: () =>
       request<{ status: string; job_id: string }>('/api/settings/reembed', { method: 'POST' }),
   },
+  // Detail routes take the scope id; the scope sets the schema.
   datasources: {
     list: () => request<{ connections: DbConnection[]; engines: DbEngine[] }>('/api/datasources'),
-    create: (req: DbConnectionRequest) =>
-      request<{ status: string; connection: DbConnection }>('/api/datasources', {
-        method: 'POST',
-        body: JSON.stringify(req),
-      }),
-    update: (id: number, req: DbConnectionRequest) =>
-      request<{ status: string; connection: DbConnection }>(`/api/datasources/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(req),
-      }),
-    delete: (id: number) => request<{ status: string }>(`/api/datasources/${id}`, { method: 'DELETE' }),
-    test: (id: number) =>
-      request<{ status: 'ok' | 'error'; error?: string; suggested_host?: string | null }>(
-        `/api/datasources/${id}/test`,
-        { method: 'POST' }
+    schema: (sourceId: number) => request<DbSchemaOverview>(`/api/datasources/${sourceId}/schema`),
+    table: (sourceId: number, table: string, opts?: { sampleRows?: number }) =>
+      request<DbTableDetail>(
+        `/api/datasources/${sourceId}/tables/${encodeURIComponent(table)}${
+          opts?.sampleRows ? `?sample_rows=${opts.sampleRows}` : ''
+        }`
       ),
-    schema: (id: number, schema?: string) =>
-      request<DbSchemaOverview>(
-        `/api/datasources/${id}/schema${schema ? `?schema=${encodeURIComponent(schema)}` : ''}`
-      ),
-    table: (id: number, table: string, opts?: { schema?: string; sampleRows?: number }) => {
-      const params = new URLSearchParams()
-      if (opts?.schema) params.set('schema', opts.schema)
-      if (opts?.sampleRows) params.set('sample_rows', String(opts.sampleRows))
-      const qs = params.toString()
-      return request<DbTableDetail>(
-        `/api/datasources/${id}/tables/${encodeURIComponent(table)}${qs ? `?${qs}` : ''}`
-      )
-    },
-    annotations: (id: number) =>
-      request<{ annotations: DbAnnotation[]; count: number }>(`/api/datasources/${id}/annotations`),
-    saveAnnotations: (id: number, annotations: DbAnnotation[]) =>
-      request<{ status: string; written: number }>(`/api/datasources/${id}/annotations`, {
+    annotations: (sourceId: number) =>
+      request<{ annotations: DbAnnotation[]; count: number }>(`/api/datasources/${sourceId}/annotations`),
+    saveAnnotations: (sourceId: number, annotations: DbAnnotation[]) =>
+      request<{ status: string; written: number }>(`/api/datasources/${sourceId}/annotations`, {
         method: 'PUT',
         body: JSON.stringify({ annotations }),
       }),
-    query: (id: number, sql: string, maxRows = 100) =>
-      request<DbQueryResult>(`/api/datasources/${id}/query`, {
+    query: (sourceId: number, sql: string, maxRows = 100) =>
+      request<DbQueryResult>(`/api/datasources/${sourceId}/query`, {
         method: 'POST',
         body: JSON.stringify({ sql, max_rows: maxRows }),
       }),
-    log: (id: number, limit = 50) =>
-      request<{ log: DbQueryLogEntry[]; count: number }>(`/api/datasources/${id}/log?limit=${limit}`),
+    log: (sourceId: number, limit = 50) =>
+      request<{ log: DbQueryLogEntry[]; count: number }>(`/api/datasources/${sourceId}/log?limit=${limit}`),
   },
   environments: {
     list: () => request<Environment[]>('/api/environments'),

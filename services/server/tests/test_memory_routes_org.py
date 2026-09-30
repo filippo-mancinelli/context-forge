@@ -112,9 +112,9 @@ def test_webhook_auto_memory_resolves_client_per_match_org(monkeypatch):
     import src.api.routes.webhooks as webhooks
 
     source = inspect.getsource(webhooks.webhook_index)
-    for_loop_idx = source.index("for _org_id, project_id, repo_name in matches:")
+    for_loop_idx = source.index("for org_id, repo_id, repo_name in matches:")
     pre_loop = source[:for_loop_idx]
     loop_body = source[for_loop_idx:]
 
     assert "_get_memory()" not in pre_loop
-    assert "await _get_memory(_org_id)" in loop_body
+    assert "await _get_memory(org_id)" in loop_body

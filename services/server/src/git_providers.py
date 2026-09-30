@@ -1,4 +1,4 @@
-"""Shared GitHub/GitLab helpers: resolve a configured repo to its API target.
+"""Shared GitHub/GitLab helpers: resolve a repository selected by a project to its API target.
 
 Used by CI read operations (``ci.service``) and by git-write operations
 (branch/PR tools). Tokens resolve per organization: an explicit per-repo
@@ -12,7 +12,7 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
-from .org_config import get_org_config
+from .catalog import repos as repo_catalog
 from .org_settings import get_org_settings
 
 
@@ -20,16 +20,16 @@ class GitProviderError(Exception):
     pass
 
 
-async def resolve_repo(org_id: int, repo_name: str) -> dict[str, Any]:
-    """Resolve a configured repo to its provider, API base, project path, and token.
+async def resolve_repo(org_id: int, project_id: int, repo_name: str) -> dict[str, Any]:
+    """Resolve a repository selected by the project to its provider, API base, project path, and token.
 
-    Raises GitProviderError if the repo is unknown, is a local repo (no
-    remote provider), or has no URL to derive an API target from.
+    Raises GitProviderError if the project does not reach the repo, the repo is
+    local (no remote provider), or it has no URL to derive an API target from.
     """
-    cfg = await get_org_config(org_id)
-    repo = next((r for r in cfg.repos if r.name == repo_name), None)
-    if repo is None:
-        raise GitProviderError(f"Repository '{repo_name}' not found")
+    try:
+        repo = await repo_catalog.resolve_project_repo(org_id, project_id, repo_name)
+    except (repo_catalog.RepoNotFoundError, repo_catalog.RepoNotAvailableError) as e:
+        raise GitProviderError(str(e)) from e
     if repo.type not in ("github", "gitlab") or not repo.url:
         raise GitProviderError(
             f"Repository '{repo_name}' has no git provider (type '{repo.type}'); "

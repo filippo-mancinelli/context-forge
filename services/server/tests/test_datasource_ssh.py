@@ -21,7 +21,9 @@ def _record(**over):
 
 def test_resolve_engine_direct_uses_record_host(monkeypatch):
     captured = {}
-    monkeypatch.setattr(engines, "get_engine", lambda cid, eng, url: captured.setdefault("url", url))
+    monkeypatch.setattr(
+        engines, "get_engine", lambda cid, eng, url, scope_key=(): captured.setdefault("url", url)
+    )
 
     asyncio.run(service._resolve_engine(_record()))
     assert captured["url"].host == "10.0.0.5"
@@ -39,7 +41,9 @@ def test_resolve_engine_ssh_routes_through_local_forward(monkeypatch):
 
     captured = {}
     monkeypatch.setattr(engines, "ensure_tunnel", fake_tunnel)
-    monkeypatch.setattr(engines, "get_engine", lambda cid, eng, url: captured.setdefault("url", url))
+    monkeypatch.setattr(
+        engines, "get_engine", lambda cid, eng, url, scope_key=(): captured.setdefault("url", url)
+    )
 
     rec = _record(
         ssh_enabled=True, ssh_host="192.168.2.39", ssh_port=22,
@@ -113,8 +117,8 @@ def test_mark_pending_secret_updates_status(monkeypatch):
         return FakePool()
 
     monkeypatch.setattr(ds_service, "get_pool", fake_pool)
-    asyncio.run(ds_service.mark_pending_secret(1, 4, 9))
+    asyncio.run(ds_service.mark_pending_secret(1, 9))
 
     query, args = executed[0]
     assert "UPDATE db_connections" in query and "pending_secret" in query
-    assert args == (1, 4, 9)
+    assert args == (1, 9)

@@ -33,6 +33,8 @@ mcp = FastMCP(
         "match them to the project under discussion. Never pass placeholder "
         "values like __list__ — omit connection or use the hint parameter instead\n"
         "- API contracts (OpenAPI/GraphQL) -> api_list / api_endpoints / api_get_endpoint\n"
+        "- SSH folders, databases and repositories the organization registered but "
+        "this project cannot reach yet -> catalog_list, then resource_select\n"
         "- Recent CI runs and failure logs -> ci_runs / ci_failure\n"
         "- Long-running HTTP calls without timeouts -> job_submit / job_status / job_result\n"
         "\n"

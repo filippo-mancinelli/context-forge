@@ -4,7 +4,7 @@
 
 **Goal:** Measure retrieval quality with a golden-query evaluation harness, then add an optional cross-encoder reranker whose effect the harness can prove.
 
-**Architecture:** A new `src/eval/` package holds pure metric maths (`metrics.py`) and a runner (`runner.py`) that replays stored golden queries through the existing repo and knowledge-base search, storing runs in two new tables created by migration `0006_eval`. A REST area (`src/api/routes/eval.py`) and a UI page (`pages/RetrievalEval.tsx`) manage queries and runs. A separate `src/reranker.py` reorders the fused candidate list of `search_repo_chunks` / `search_kb_chunks` using a per-organization provider (`none` / `jina` / `local`), failing open to the fused order.
+**Architecture:** A new `src/eval/` package holds pure metric maths (`metrics.py`) and a runner (`runner.py`) that replays stored golden queries through the existing repo and knowledge-base search, storing runs in two new tables created by migration `0009_eval`. A REST area (`src/api/routes/eval.py`) and a UI page (`pages/RetrievalEval.tsx`) manage queries and runs. A separate `src/reranker.py` reorders the fused candidate list of `search_repo_chunks` / `search_kb_chunks` using a per-organization provider (`none` / `jina` / `local`), failing open to the fused order.
 
 **Tech Stack:** Python 3.11 (FastAPI, asyncpg raw SQL, httpx), React 18 + TypeScript (Vite, Tailwind), PostgreSQL 16 + pgvector.
 
@@ -38,7 +38,7 @@ Copied verbatim from `docs/superpowers/specs/2026-09-07-platform-improvements-ro
   installed in the local venv with `uv pip install --python .venv/Scripts/python.exe -e .`
   (run from `services/server`). No new system packages unless the Dockerfile
   is updated in the same task.
-- Naming: the product is `context-forge` / `ContextForge`. Never `aster`.
+- Naming: the product is `context-forge` / `ContextForge`. Never a downstream product name.
 - Code comments: max one line, only where needed. Commit titles 3–10 words,
   English, imperative; body optional, max 20 words.
 - README: each feature updates the sections it touches (features, tools,
@@ -59,7 +59,7 @@ Copied verbatim from `docs/superpowers/specs/2026-09-07-platform-improvements-ro
 ## File Structure
 
 **Created:**
-- `services/server/src/migrations/versions/0006_eval.py` — `eval_queries` + `eval_runs` DDL
+- `services/server/src/migrations/versions/0009_eval.py` — `eval_queries` + `eval_runs` DDL
 - `services/server/src/eval/__init__.py` — package marker
 - `services/server/src/eval/metrics.py` — pure metric maths, no I/O
 - `services/server/src/eval/runner.py` — replays golden queries, stores runs
@@ -81,10 +81,10 @@ Copied verbatim from `docs/superpowers/specs/2026-09-07-platform-improvements-ro
 
 ---
 
-### Task 1: Migration `0006_eval` and the pure metrics module
+### Task 1: Migration `0009_eval` and the pure metrics module
 
 **Files:**
-- Create: `services/server/src/migrations/versions/0006_eval.py`
+- Create: `services/server/src/migrations/versions/0009_eval.py`
 - Create: `services/server/src/eval/__init__.py`
 - Create: `services/server/src/eval/metrics.py`
 - Test: `services/server/tests/test_eval_migration.py`
@@ -103,12 +103,12 @@ Copied verbatim from `docs/superpowers/specs/2026-09-07-platform-improvements-ro
 Create `services/server/tests/test_eval_migration.py`:
 
 ```python
-"""Migration 0006 follows the version-module contract and creates the eval tables."""
+"""Migration 0009 follows the version-module contract and creates the eval tables."""
 import asyncio
 import importlib
 
 
-MODULE = "src.migrations.versions.0006_eval"
+MODULE = "src.migrations.versions.0009_eval"
 
 
 class _FakeConn:
@@ -163,11 +163,11 @@ From `services/server`:
 .venv/Scripts/python.exe -m pytest -q -p no:cacheprovider tests/test_eval_migration.py
 ```
 
-Expected: FAIL with `ModuleNotFoundError: No module named 'src.migrations.versions.0006_eval'`.
+Expected: FAIL with `ModuleNotFoundError: No module named 'src.migrations.versions.0009_eval'`.
 
 - [ ] **Step 3: Write the migration module**
 
-Create `services/server/src/migrations/versions/0006_eval.py`:
+Create `services/server/src/migrations/versions/0009_eval.py`:
 
 ```python
 """Golden queries and evaluation runs for the retrieval harness.
@@ -176,7 +176,7 @@ New schema changes go in a new version module, never in this one.
 """
 from __future__ import annotations
 
-VERSION = 6
+VERSION = 9
 NAME = "eval"
 TRANSACTIONAL = True
 
@@ -381,7 +381,7 @@ Expected: PASS (13 tests).
 - [ ] **Step 9: Commit**
 
 ```bash
-git add services/server/src/migrations/versions/0006_eval.py services/server/src/eval services/server/tests/test_eval_migration.py services/server/tests/test_eval_metrics.py
+git add services/server/src/migrations/versions/0009_eval.py services/server/src/eval services/server/tests/test_eval_migration.py services/server/tests/test_eval_metrics.py
 git commit -m "add eval schema and retrieval metrics"
 ```
 
@@ -2942,7 +2942,7 @@ git commit -m "rerank fused search candidates"
   - Per-organization settings, editable in Settings → Models → **Search**: `reranker_provider` (`none` | `jina` | `local`, default `none`), `reranker_model` (default empty = `jina-reranker-v2-base-multilingual` for Jina, `cross-encoder/ms-marco-MiniLM-L-6-v2` for local), `reranker_top_n` (default `30`).
   - Env-only variable `RERANKER_API_KEY`, falling back to the organization's embeddings API key.
   - UI page **Retrieval Eval** at `/eval`, admin/owner only.
-  - Migration `0006_eval` creating `eval_queries` and `eval_runs`.
+  - Migration `0009_eval` creating `eval_queries` and `eval_runs`.
   - The MCP tool list is unchanged; no new permission is introduced.
 - Produces: documentation and deployment configuration; a green server suite and green UI checks.
 
@@ -3040,7 +3040,7 @@ git commit -m "document retrieval eval and reranker"
 
 | Spec requirement | Task |
 |---|---|
-| Migration `0006_eval` with `eval_queries` / `eval_runs` / `eval_runs_project_idx` | 1 |
+| Migration `0009_eval` with `eval_queries` / `eval_runs` / `eval_runs_project_idx` | 1 |
 | `recall_at_5`, `recall_at_10`, `rr`, macro averages | 1 (`metrics.py`, pure) |
 | `run_eval(org_id, project_id, k=10) -> run_id`, repo vs kb expectations, `limit=k` | 2 |
 | Row created immediately with `finished_at = NULL`; work in `asyncio.create_task` | 2 (`run_eval`) |

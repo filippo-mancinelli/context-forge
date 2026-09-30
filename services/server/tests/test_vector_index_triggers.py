@@ -184,9 +184,6 @@ def _patch_settings(monkeypatch, current, calls):
     async def mock_get_org_config(org_id):
         return ForgeConfig()
 
-    async def mock_sync_repos_config(org_id):
-        pass
-
     async def fake_ensure(org_id, dims):
         calls.append((org_id, dims))
         return []
@@ -200,7 +197,6 @@ def _patch_settings(monkeypatch, current, calls):
     monkeypatch.setattr(settings_routes, "persist_org_settings_overrides", mock_persist_overrides)
     monkeypatch.setattr(settings_routes, "persist_org_config", mock_persist_org_config)
     monkeypatch.setattr(settings_routes, "get_org_config", mock_get_org_config)
-    monkeypatch.setattr(settings_routes, "sync_repos_config", mock_sync_repos_config)
     monkeypatch.setattr(settings_routes, "reset_embedder_clients", lambda: None)
     monkeypatch.setattr(settings_routes, "reset_memory_client", lambda: None)
     monkeypatch.setattr(settings_routes, "ensure_org_indexes", fake_ensure)

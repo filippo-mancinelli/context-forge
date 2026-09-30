@@ -7,17 +7,17 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
-from ..config import RepoConfig, get_settings
+from ..config import RepoConfig, RepoRecord, get_settings
 from ..org_settings import get_org_settings
 
 logger = logging.getLogger(__name__)
 
 
-def get_repo_local_path(repo: RepoConfig, org_id: int | None = None) -> str:
+def get_repo_local_path(repo: RepoRecord, org_id: int | None = None) -> str:
     """Return the local filesystem path for a repo (inside the container).
 
-    Remote repos are cached under a per-organization subdirectory so the same
-    repository name can be reused across organizations without colliding.
+    Remote repos are cached per organization under their catalog id, so renaming
+    a repository never moves or re-clones its working tree.
     """
     if repo.type == "local":
         return repo.path or f"/repos/{repo.name}"
@@ -25,7 +25,7 @@ def get_repo_local_path(repo: RepoConfig, org_id: int | None = None) -> str:
     base = Path(settings.repos_cache_dir)
     if org_id is not None:
         base = base / f"org_{org_id}"
-    return str(base / repo.name)
+    return str(base / f"repo_{repo.id}")
 
 
 def _inject_token(url: str, token: str) -> str:
@@ -144,7 +144,7 @@ async def _resolve_repo_token(repo: RepoConfig, org_id: int | None) -> str | Non
     return None
 
 
-async def ensure_repo_cloned(repo: RepoConfig, org_id: int | None = None) -> str:
+async def ensure_repo_cloned(repo: RepoRecord, org_id: int | None = None) -> str:
     """Clone a remote repo if not already present. Returns local path."""
     if repo.type == "local":
         return get_repo_local_path(repo, org_id)
@@ -202,7 +202,7 @@ async def ensure_repo_cloned(repo: RepoConfig, org_id: int | None = None) -> str
     return local_path
 
 
-async def pull_all_repos(repos: list[RepoConfig], org_id: int | None = None) -> None:
+async def pull_all_repos(repos: list[RepoRecord], org_id: int | None = None) -> None:
     """Pull updates for all remote repos concurrently."""
     remote_repos = [r for r in repos if r.type != "local"]
     if not remote_repos:

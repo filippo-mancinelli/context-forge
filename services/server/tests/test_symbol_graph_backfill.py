@@ -49,7 +49,7 @@ def _run(pool, monkeypatch, only_if_missing):
     monkeypatch.setattr(indexer, "_store_symbols", _store)
     asyncio.run(
         indexer._index_symbols(
-            pool, 1, 18, "aster-desk", "/tmp/repo", object(), None,
+            pool, 1, 7, "aster-desk", "/tmp/repo", object(), None,
             only_if_missing=only_if_missing,
         )
     )
@@ -61,7 +61,7 @@ def test_graph_is_built_when_the_repo_has_none(monkeypatch):
     built = _run(_FakePool(conn), monkeypatch, only_if_missing=True)
     assert built == {"collected": True, "stored": True}
     assert "repo_symbols" in conn.calls[0][0]
-    assert conn.calls[0][1] == (18, "aster-desk")
+    assert conn.calls[0][1] == (7,)
 
 
 def test_existing_graph_is_not_rebuilt(monkeypatch):
@@ -87,7 +87,7 @@ def test_a_failure_does_not_propagate(monkeypatch):
     # costruisce non deve marcare il repository come fallito.
     asyncio.run(
         indexer._index_symbols(
-            _FakePool(_FakeConn(existing=None)), 1, 18, "aster-desk", "/tmp/repo",
+            _FakePool(_FakeConn(existing=None)), 1, 7, "aster-desk", "/tmp/repo",
             object(), None,
         )
     )

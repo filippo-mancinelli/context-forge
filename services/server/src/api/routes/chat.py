@@ -125,11 +125,14 @@ async def _build_system_prompt(org: ActiveProject, messages: list[ChatMessage]) 
     if connections:
         lines = []
         for conn in connections:
-            label = conn["name"]
+            # L'alias è il nome da passare agli strumenti, il perimetro dice
+            # che cosa quell'alias può leggere.
+            label = conn.get("alias") or conn["name"]
             if conn.get("description"):
                 label += f" — {conn['description']}"
-            if conn.get("database_name"):
-                label += f" ({conn['database_name']})"
+            if conn.get("scope_label"):
+                inferred = ", inferred" if conn.get("scope_inferred") else ""
+                label += f" (scope {conn['scope_label']}{inferred})"
             lines.append(f"  - {label}")
         parts.append("\nConfigured database connections:\n" + "\n".join(lines))
     context_hints = _extract_context_hints(messages)
@@ -247,9 +250,10 @@ async def _get_database_schema(
     if not connection and not hint and not table:
         return [
             {
-                "connection": c["name"],
+                "connection": c.get("alias") or c["name"],
                 "engine": c["engine"],
-                "database": c.get("database_name"),
+                "scope": c.get("scope_label"),
+                "inferred": c.get("scope_inferred"),
                 "description": c.get("description"),
                 "status": c.get("status"),
             }
@@ -274,19 +278,21 @@ async def _get_database_schema(
                 hint or None,
                 context_hints=context_hints,
             )
-        connection_name = record["name"]
+        # L'alias identifica un solo perimetro anche quando il progetto collega
+        # la stessa connessione più volte; il nome no.
+        connection_name = record["alias"]
     except ConnectionAmbiguousError as e:
         connections = await service.list_connections(org.org_id, org.project_id)
-        return [{"error": str(e), "connections": [c["name"] for c in connections]}]
+        return [{"error": str(e), "connections": [c.get("alias") or c["name"] for c in connections]}]
     except ConnectionNotFoundError as e:
         connections = await service.list_connections(org.org_id, org.project_id)
-        return [{"error": str(e), "connections": [c["name"] for c in connections]}]
+        return [{"error": str(e), "connections": [c.get("alias") or c["name"] for c in connections]}]
 
     if not table:
         overview = await service.schema_overview(org.org_id, org.project_id, connection_name, schema=schema)
         return [
             {
-                "connection": connection_name,
+                "connection": overview["connection"],
                 "table": t["name"],
                 "description": t.get("description") or t.get("comment"),
                 "column_count": t["column_count"],
@@ -313,7 +319,7 @@ async def _query_database(
         raise ValueError("'sql' is required")
     if not connection and not hint:
         connections = await service.list_connections(org.org_id, org.project_id)
-        names = [c["name"] for c in connections]
+        names = [c.get("alias") or c["name"] for c in connections]
         raise ValueError(
             "Specify connection or hint. "
             + (f"Available: {', '.join(names)}" if names else "No connections configured.")
@@ -330,7 +336,9 @@ async def _query_database(
             record = await service.resolve_connection(
                 org.org_id, org.project_id, hint, context_hints=context_hints
             )
-        connection_name = record["name"]
+        # L'alias identifica un solo perimetro anche quando il progetto collega
+        # la stessa connessione più volte; il nome no.
+        connection_name = record["alias"]
     except (ConnectionAmbiguousError, ConnectionNotFoundError) as e:
         raise ValueError(str(e)) from e
     result = await service.run_query(
@@ -481,13 +489,16 @@ _OPENAI_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "connection": {"type": "string", "description": "Exact connection name"},
+                    "connection": {"type": "string", "description": "Connection alias, as listed"},
                     "hint": {
                         "type": "string",
                         "description": "Project/repo topic to match a connection (e.g. context-forge)",
                     },
                     "table": {"type": "string", "description": "Table to describe in depth"},
-                    "schema": {"type": "string", "description": "Schema name (optional)"},
+                    "schema": {
+                        "type": "string",
+                        "description": "Schema (optional; a confirmed scope accepts only its own schema)",
+                    },
                 },
                 "required": [],
             },
@@ -506,7 +517,7 @@ _OPENAI_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "connection": {"type": "string", "description": "Exact connection name"},
+                    "connection": {"type": "string", "description": "Connection alias, as listed"},
                     "hint": {
                         "type": "string",
                         "description": "Project/repo topic to match a connection",
@@ -712,6 +723,9 @@ async def _run_tool(
     *,
     context_hints: list[str] | None = None,
 ) -> ToolCallTrace:
+    from ...datasources.scopes import ScopeViolationError
+    from ...datasources.validator import QueryValidationError
+
     handler, source = _TOOL_HANDLERS[name]
     query = _trace_query(name, args)
     try:
@@ -722,6 +736,14 @@ async def _run_tool(
         return ToolCallTrace(
             tool=name, source=source, query=query,
             result_count=len(results), results=results,
+        )
+    except (ScopeViolationError, QueryValidationError) as e:
+        # Un perimetro fuori portata o una query rifiutata sono rifiuti normali
+        # e ben formati, come sulle superfici MCP: il modello riceve il
+        # messaggio e il log non registra un incidente.
+        return ToolCallTrace(
+            tool=name, source=source, query=query,
+            result_count=0, results=[], error=str(e),
         )
     except Exception as e:  # noqa: BLE001
         logger.error("chat tool %s failed: %s", name, e)

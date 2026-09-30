@@ -1,10 +1,8 @@
-"""REST API per le sorgenti filesystem SSH (scoped per progetto)."""
+"""REST API delle cartelle SSH selezionate dal progetto attivo (sola lettura, più scrittura file dell'owner)."""
 from __future__ import annotations
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from ...ssh_sources import service
 from ..deps import ActiveProject, get_active_project, require_project_role
@@ -17,68 +15,9 @@ class WriteFileRequest(BaseModel):
     content: str
 
 
-class SSHSourceRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
-    host: str = Field(min_length=1)
-    port: Optional[int] = 22
-    username: str = Field(min_length=1)
-    auth_method: str = "password"  # 'key' | 'password'
-    # Write-only; empty on update means "keep the stored secret".
-    password: Optional[str] = None
-    private_key: Optional[str] = None
-    root_path: str = Field(min_length=1)
-    include_globs: Optional[str] = None
-    exclude_globs: Optional[str] = None
-    description: Optional[str] = None
-
-
 @router.get("")
 async def list_sources(org: ActiveProject = Depends(get_active_project)):
     return {"sources": await service.list_sources(org.org_id, org.project_id)}
-
-
-@router.post("")
-async def create_source(
-    req: SSHSourceRequest, org: ActiveProject = Depends(require_project_role("member"))
-):
-    try:
-        source = await service.create_source(org.org_id, org.project_id, req.model_dump())
-    except Exception as e:  # noqa: BLE001
-        if "ssh_sources_project_name_key" in str(e):
-            raise HTTPException(status_code=400, detail=f"Source '{req.name}' already exists")
-        raise HTTPException(status_code=500, detail=str(e))
-    return {"status": "ok", "source": source}
-
-
-@router.put("/{source_id}")
-async def update_source(
-    source_id: int,
-    req: SSHSourceRequest,
-    org: ActiveProject = Depends(require_project_role("member")),
-):
-    source = await service.update_source(org.org_id, org.project_id, source_id, req.model_dump())
-    if source is None:
-        raise HTTPException(status_code=404, detail="Source not found")
-    return {"status": "ok", "source": source}
-
-
-@router.delete("/{source_id}")
-async def delete_source(
-    source_id: int, org: ActiveProject = Depends(require_project_role("member"))
-):
-    if not await service.delete_source(org.org_id, org.project_id, source_id):
-        raise HTTPException(status_code=404, detail="Source not found")
-    return {"status": "ok"}
-
-
-@router.post("/{source_id}/test")
-async def test_source(
-    source_id: int, org: ActiveProject = Depends(require_project_role("member"))
-):
-    try:
-        return await service.test_source(org.org_id, org.project_id, source_id)
-    except service.SSHSourceNotFoundError:
-        raise HTTPException(status_code=404, detail="Source not found")
 
 
 @router.get("/{source_id}/files")

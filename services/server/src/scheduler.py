@@ -7,9 +7,10 @@ import logging
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from .catalog import repos as repo_catalog
 from .db import get_pool
 from .indexer.git_manager import pull_all_repos
-from .indexer.indexer import run_index_repo, run_pending_index_requests, sync_repos_config
+from .indexer.indexer import run_index_repo, run_pending_index_requests
 from .mcp.audit import purge_old_calls as purge_old_tool_calls, start_audit_writer
 from .mcp.jobs import run_claimed_job
 from .mcp.oauth_bridge import purge_expired_flows
@@ -26,13 +27,14 @@ _JOB_PREFIX = "refresh_org_"
 
 
 async def _scheduled_refresh_org(org_id: int) -> None:
-    """Pull latest changes and re-index a single organization's repos."""
+    """Pull and re-index the organization's repos that at least one project selected."""
     cfg = await get_org_config(org_id)
     if not cfg.indexing.auto:
         return
-    logger.info("Scheduled refresh: org=%s repos=%d", org_id, len(cfg.repos))
-    await pull_all_repos(cfg.repos, org_id)
-    for repo in cfg.repos:
+    repos = await repo_catalog.selected_records(org_id)
+    logger.info("Scheduled refresh: org=%s repos=%d", org_id, len(repos))
+    await pull_all_repos(repos, org_id)
+    for repo in repos:
         await run_index_repo(org_id, repo, cfg.indexing)
 
 
@@ -300,27 +302,11 @@ async def stop_scheduler() -> None:
 
 
 async def initial_index() -> None:
-    """On startup: sync per-org config to DB, clone remotes, index pending repos."""
-    await sync_repos_config()
-
-    from .db import get_pool
-
-    pool = await get_pool()
+    """On startup: index the catalog repositories still waiting for their first index."""
     for org_id, cfg in await iter_org_configs():
         if not cfg.indexing.auto:
             logger.info("Auto-indexing disabled for org=%s, skipping", org_id)
             continue
-
-        await pull_all_repos(cfg.repos, org_id)
-
-        async with pool.acquire() as conn:
-            pending = await conn.fetch(
-                "SELECT name FROM repos WHERE org_id=$1 AND status='pending'", org_id
-            )
-
-        config_repos = {r.name: r for r in cfg.repos}
-        for row in pending:
-            repo = config_repos.get(row["name"])
-            if repo:
-                logger.info("Initial index for org=%s repo=%s", org_id, repo.name)
-                await run_index_repo(org_id, repo, cfg.indexing)
+        for repo in await repo_catalog.pending_records(org_id):
+            logger.info("Initial index for org=%s repo=%s", org_id, repo.name)
+            await run_index_repo(org_id, repo, cfg.indexing)

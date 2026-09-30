@@ -13,7 +13,8 @@ import time
 from pathlib import Path
 from typing import Any, Iterator
 
-from ..config import IndexingConfig, RepoConfig
+from ..config import IndexingConfig, RepoRecord
+from ..catalog import repos as repo_catalog
 from ..db import get_pool
 from .embedder import embed_batch
 from .symbols import DEF_NODES
@@ -299,8 +300,7 @@ def collect_symbols_sync(
 async def _store_symbols(
     pool,
     org_id: int,
-    project_id: int,
-    repo_name: str,
+    repo_id: int,
     rows: list[dict],
     replace_paths: list[str] | None = None,
 ) -> None:
@@ -308,15 +308,11 @@ async def _store_symbols(
     async with pool.acquire() as conn:
         async with conn.transaction():
             if replace_paths is None:
-                await conn.execute(
-                    "DELETE FROM repo_symbols WHERE project_id=$1 AND repo_name=$2",
-                    project_id, repo_name,
-                )
+                await conn.execute("DELETE FROM repo_symbols WHERE repo_id=$1", repo_id)
             elif replace_paths:
                 await conn.execute(
-                    "DELETE FROM repo_symbols WHERE project_id=$1 AND repo_name=$2 "
-                    "AND file_path = ANY($3)",
-                    project_id, repo_name, replace_paths,
+                    "DELETE FROM repo_symbols WHERE repo_id=$1 AND file_path = ANY($2)",
+                    repo_id, replace_paths,
                 )
             if not rows:
                 return
@@ -325,19 +321,17 @@ async def _store_symbols(
                 await conn.executemany(
                     """
                     INSERT INTO repo_symbols
-                        (org_id, project_id, repo_name, file_path, name, kind,
-                         node_type, line, occurrences)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-                    ON CONFLICT (project_id, repo_name, file_path, name, kind)
+                        (org_id, repo_id, file_path, name, kind, node_type, line, occurrences)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                    ON CONFLICT (repo_id, file_path, name, kind)
                     DO UPDATE SET occurrences = EXCLUDED.occurrences,
                                   node_type   = EXCLUDED.node_type,
                                   line        = EXCLUDED.line
                     """,
                     [
                         (
-                            org_id, project_id, repo_name, r["file_path"], r["name"],
-                            r["kind"], r.get("node_type"), r.get("line"),
-                            r.get("occurrences", 1),
+                            org_id, repo_id, r["file_path"], r["name"], r["kind"],
+                            r.get("node_type"), r.get("line"), r.get("occurrences", 1),
                         )
                         for r in rows[start : start + batch]
                     ],
@@ -347,7 +341,7 @@ async def _store_symbols(
 async def _index_symbols(
     pool,
     org_id: int,
-    project_id: int,
+    repo_id: int,
     repo_name: str,
     local_path: str,
     indexing_cfg: "IndexingConfig",
@@ -370,8 +364,7 @@ async def _index_symbols(
         if only_if_missing:
             async with pool.acquire() as conn:
                 existing = await conn.fetchval(
-                    "SELECT 1 FROM repo_symbols WHERE project_id=$1 AND repo_name=$2 LIMIT 1",
-                    project_id, repo_name,
+                    "SELECT 1 FROM repo_symbols WHERE repo_id=$1 LIMIT 1", repo_id
                 )
             if existing:
                 return
@@ -380,7 +373,7 @@ async def _index_symbols(
             None, collect_symbols_sync, local_path, indexing_cfg, language, changed_paths
         )
         await _store_symbols(
-            pool, org_id, project_id, repo_name, rows,
+            pool, org_id, repo_id, rows,
             replace_paths=None if changed_paths is None else (stale_paths or changed_paths),
         )
         logger.info("Symbol graph for %s: %d rows", repo_name, len(rows))
@@ -601,12 +594,12 @@ async def _embed_chunks(
 
 
 def _chunk_rows(
-    org_id: int, project_id: int, chunks: list[dict], embeddings: list[str]
+    org_id: int, repo_id: int, chunks: list[dict], embeddings: list[str]
 ) -> list[tuple]:
     """Build asyncpg parameter tuples for a batch of chunks."""
     return [
         (
-            org_id, project_id, c["repo_name"], c["file_path"], c["chunk_index"],
+            org_id, repo_id, c["file_path"], c["chunk_index"],
             c["chunk_type"], c["content"], c["metadata"], embeddings[idx],
         )
         for idx, c in enumerate(chunks)
@@ -614,27 +607,27 @@ def _chunk_rows(
 
 
 _INSERT_CHUNK_SQL = """
-INSERT INTO repo_chunks (org_id, project_id, repo_name, file_path, chunk_index, chunk_type, content, metadata, embedding)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::vector)
-ON CONFLICT (org_id, repo_name, file_path, chunk_index) DO UPDATE
+INSERT INTO repo_chunks (org_id, repo_id, file_path, chunk_index, chunk_type, content, metadata, embedding)
+VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::vector)
+ON CONFLICT (repo_id, file_path, chunk_index) DO UPDATE
 SET content=EXCLUDED.content, metadata=EXCLUDED.metadata,
-    project_id=EXCLUDED.project_id, embedding=EXCLUDED.embedding, indexed_at=NOW()
+    embedding=EXCLUDED.embedding, indexed_at=NOW()
 """
 
-# Registry of in-flight indexing tasks, keyed by (org_id, repo_name). Both API
+# Registry of in-flight indexing tasks, keyed by (org_id, repo_id). Both API
 # servers and the scheduler share one event loop, so a cancel request from the
 # REST API can cancel a task started by the scheduler.
-_running_index_tasks: dict[tuple[int, str], asyncio.Task] = {}
+_running_index_tasks: dict[tuple[int, int], asyncio.Task] = {}
 
 
-def is_index_running(org_id: int, repo_name: str) -> bool:
-    task = _running_index_tasks.get((org_id, repo_name))
+def is_index_running(org_id: int, repo_id: int) -> bool:
+    task = _running_index_tasks.get((org_id, repo_id))
     return task is not None and not task.done()
 
 
-def cancel_index_task(org_id: int, repo_name: str) -> bool:
+def cancel_index_task(org_id: int, repo_id: int) -> bool:
     """Request cancellation of a running index task. Returns True if one was running."""
-    task = _running_index_tasks.get((org_id, repo_name))
+    task = _running_index_tasks.get((org_id, repo_id))
     if task and not task.done():
         task.cancel()
         return True
@@ -643,7 +636,7 @@ def cancel_index_task(org_id: int, repo_name: str) -> bool:
 
 async def run_index_repo(
     org_id: int,
-    repo: RepoConfig,
+    repo: RepoRecord,
     indexing_cfg: IndexingConfig | None = None,
     *,
     force_full: bool = False,
@@ -654,8 +647,8 @@ async def run_index_repo(
     and manual triggers can't stack concurrent runs of the same repo. Returns
     False when the run was cancelled, True otherwise.
     """
-    key = (org_id, repo.name)
-    if is_index_running(org_id, repo.name):
+    key = (org_id, repo.id)
+    if is_index_running(org_id, repo.id):
         logger.info("Indexing already running for org=%s repo=%s; skipping", org_id, repo.name)
         return False
 
@@ -693,17 +686,18 @@ async def reset_stale_indexing() -> None:
 
 async def index_repo(
     org_id: int,
-    repo: RepoConfig,
+    repo: RepoRecord,
     indexing_cfg: IndexingConfig | None = None,
     *,
     force_full: bool = False,
 ) -> None:
-    """Index a repository for an organization: parse, embed, store chunks.
+    """Index a catalog repository: parse, embed, store chunks under its id.
 
-    When the repo is a git checkout that was previously indexed at a known
-    commit, only the files changed since then are re-processed (incremental).
-    Otherwise — first index, non-git repo, unavailable base commit, or
-    ``force_full`` — the whole tree is re-indexed.
+    The index is shared by every project that selected the repository. When the
+    repo is a git checkout previously indexed at a known commit, only the files
+    changed since then are re-processed (incremental). Otherwise — first index,
+    non-git repo, unavailable base commit, or ``force_full`` — the whole tree is
+    re-indexed.
     """
     pool = await get_pool()
     if indexing_cfg is None:
@@ -713,21 +707,9 @@ async def index_repo(
 
     async with pool.acquire() as conn:
         prev = await conn.fetchrow(
-            "SELECT status, indexed_commit, total_chunks, project_id FROM repos WHERE org_id=$1 AND name=$2",
-            org_id, repo.name,
+            "SELECT status, indexed_commit, total_chunks FROM repos WHERE id=$1", repo.id
         )
-        await conn.execute(
-            "UPDATE repos SET status='indexing', error_message=NULL WHERE org_id=$1 AND name=$2",
-            org_id, repo.name,
-        )
-
-    # Chunks inherit the repo's project; pre-existing repos without an
-    # assignment fall back to the organization's default project.
-    project_id = prev["project_id"] if prev is not None else None
-    if project_id is None:
-        from ..projects import get_default_project_id
-
-        project_id = await get_default_project_id(org_id)
+        await conn.execute("UPDATE repos SET status='indexing', error_message=NULL WHERE id=$1", repo.id)
 
     try:
         # Ensure repo is available locally (this pulls remotes to the latest commit).
@@ -756,7 +738,7 @@ async def index_repo(
 
         if can_incremental:
             handled = await _index_repo_incremental(
-                pool, org_id, project_id, repo, indexing_cfg, language,
+                pool, org_id, repo, indexing_cfg, language,
                 local_path, prev["indexed_commit"], new_commit,
             )
             if handled:
@@ -764,7 +746,7 @@ async def index_repo(
             logger.info("Incremental indexing unavailable for %s; running full index", repo.name)
 
         await _index_repo_full(
-            pool, org_id, project_id, repo, indexing_cfg, language, local_path, new_commit,
+            pool, org_id, repo, indexing_cfg, language, local_path, new_commit,
             reuse_embeddings=not force_full,
         )
 
@@ -772,16 +754,14 @@ async def index_repo(
         logger.error("Indexing failed for %s: %s", repo.name, e)
         async with pool.acquire() as conn:
             await conn.execute(
-                "UPDATE repos SET status='error', error_message=$3 WHERE org_id=$1 AND name=$2",
-                org_id, repo.name, str(e),
+                "UPDATE repos SET status='error', error_message=$2 WHERE id=$1", repo.id, str(e)
             )
 
 
 async def _index_repo_full(
     pool,
     org_id: int,
-    project_id: int,
-    repo: RepoConfig,
+    repo: RepoRecord,
     indexing_cfg: IndexingConfig,
     language: str | None,
     local_path: str,
@@ -801,8 +781,8 @@ async def _index_repo_full(
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE repos SET status='indexed', last_indexed_at=NOW(), total_chunks=0, "
-                "indexed_commit=$3 WHERE org_id=$1 AND name=$2",
-                org_id, repo.name, new_commit,
+                "indexed_commit=$2 WHERE id=$1",
+                repo.id, new_commit,
             )
         return
 
@@ -810,37 +790,32 @@ async def _index_repo_full(
     embeddings = await _embed_chunks(org_id, all_chunks, repo.name, reuse=reuse_embeddings)
 
     async with pool.acquire() as conn:
-        await conn.execute(
-            "DELETE FROM repo_chunks WHERE org_id=$1 AND repo_name=$2", org_id, repo.name
-        )
+        await conn.execute("DELETE FROM repo_chunks WHERE repo_id=$1", repo.id)
         insert_batch_size = 500
         for start in range(0, len(all_chunks), insert_batch_size):
             end = min(start + insert_batch_size, len(all_chunks))
             await conn.executemany(
                 _INSERT_CHUNK_SQL,
-                _chunk_rows(org_id, project_id, all_chunks[start:end], embeddings[start:end]),
+                _chunk_rows(org_id, repo.id, all_chunks[start:end], embeddings[start:end]),
             )
             logger.info("DB write progress for %s: inserted=%d/%d", repo.name, end, len(all_chunks))
         await conn.execute(
             """
             UPDATE repos
-            SET status='indexed', last_indexed_at=NOW(), total_chunks=$3,
-                indexed_commit=$4, error_message=NULL
-            WHERE org_id=$1 AND name=$2
+            SET status='indexed', last_indexed_at=NOW(), total_chunks=$2,
+                indexed_commit=$3, error_message=NULL
+            WHERE id=$1
             """,
-            org_id, repo.name, len(all_chunks), new_commit,
+            repo.id, len(all_chunks), new_commit,
         )
     logger.info("Indexed %d chunks for %s (full)", len(all_chunks), repo.name)
-    await _index_symbols(
-        pool, org_id, project_id, repo.name, local_path, indexing_cfg, language
-    )
+    await _index_symbols(pool, org_id, repo.id, repo.name, local_path, indexing_cfg, language)
 
 
 async def _index_repo_incremental(
     pool,
     org_id: int,
-    project_id: int,
-    repo: RepoConfig,
+    repo: RepoRecord,
     indexing_cfg: IndexingConfig,
     language: str | None,
     local_path: str,
@@ -867,13 +842,13 @@ async def _index_repo_incremental(
         async with pool.acquire() as conn:
             await conn.execute(
                 "UPDATE repos SET status='indexed', last_indexed_at=NOW(), "
-                "indexed_commit=$3, error_message=NULL WHERE org_id=$1 AND name=$2",
-                org_id, repo.name, new_commit,
+                "indexed_commit=$2, error_message=NULL WHERE id=$1",
+                repo.id, new_commit,
             )
         # Repository gia' allineato: l'unica cosa che puo' mancare e' il grafo
         # dei simboli, se e' stato indicizzato prima che il grafo esistesse.
         await _index_symbols(
-            pool, org_id, project_id, repo.name, local_path, indexing_cfg, language,
+            pool, org_id, repo.id, repo.name, local_path, indexing_cfg, language,
             only_if_missing=True,
         )
         logger.info("No changes for %s since %s; index up to date", repo.name, old_commit[:8])
@@ -890,31 +865,28 @@ async def _index_repo_incremental(
         async with conn.transaction():
             if stale_paths:
                 await conn.execute(
-                    "DELETE FROM repo_chunks WHERE org_id=$1 AND repo_name=$2 AND file_path = ANY($3)",
-                    org_id, repo.name, stale_paths,
+                    "DELETE FROM repo_chunks WHERE repo_id=$1 AND file_path = ANY($2)",
+                    repo.id, stale_paths,
                 )
             insert_batch_size = 500
             for start in range(0, len(chunks), insert_batch_size):
                 end = min(start + insert_batch_size, len(chunks))
                 await conn.executemany(
                     _INSERT_CHUNK_SQL,
-                    _chunk_rows(org_id, project_id, chunks[start:end], embeddings[start:end]),
+                    _chunk_rows(org_id, repo.id, chunks[start:end], embeddings[start:end]),
                 )
-            total = await conn.fetchval(
-                "SELECT count(*) FROM repo_chunks WHERE org_id=$1 AND repo_name=$2",
-                org_id, repo.name,
-            )
+            total = await conn.fetchval("SELECT count(*) FROM repo_chunks WHERE repo_id=$1", repo.id)
             await conn.execute(
                 """
                 UPDATE repos
-                SET status='indexed', last_indexed_at=NOW(), total_chunks=$3,
-                    indexed_commit=$4, error_message=NULL
-                WHERE org_id=$1 AND name=$2
+                SET status='indexed', last_indexed_at=NOW(), total_chunks=$2,
+                    indexed_commit=$3, error_message=NULL
+                WHERE id=$1
                 """,
-                org_id, repo.name, total, new_commit,
+                repo.id, total, new_commit,
             )
     await _index_symbols(
-        pool, org_id, project_id, repo.name, local_path, indexing_cfg, language,
+        pool, org_id, repo.id, repo.name, local_path, indexing_cfg, language,
         changed_paths=sorted(changed), stale_paths=stale_paths,
     )
     logger.info(
@@ -924,84 +896,35 @@ async def _index_repo_incremental(
     return True
 
 
-async def sync_repos_config(org_id: int | None = None) -> None:
-    """Sync repos from per-org config into the DB repos table.
-
-    Config entries are org-level bootstrap: rows created here land in the
-    organization's default project, while an explicit project assignment
-    made afterward — regardless of its origin — is preserved on subsequent
-    syncs.
-    """
-    from ..org_config import get_org_config, iter_org_configs
-    from ..projects import get_default_project_id
-
-    if org_id is not None:
-        configs = [(org_id, await get_org_config(org_id))]
-    else:
-        configs = await iter_org_configs()
-
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        for oid, cfg in configs:
-            default_project_id = await get_default_project_id(oid)
-            for repo in cfg.repos:
-                await conn.execute(
-                    """
-                    INSERT INTO repos (org_id, project_id, name, type, url, path, branch, language, status)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending')
-                    ON CONFLICT (org_id, name) DO UPDATE
-                    SET type=EXCLUDED.type, url=EXCLUDED.url, path=EXCLUDED.path,
-                        branch=EXCLUDED.branch, language=EXCLUDED.language,
-                        project_id=COALESCE(repos.project_id, EXCLUDED.project_id)
-                    """,
-                    oid,
-                    default_project_id,
-                    repo.name,
-                    repo.type,
-                    repo.url,
-                    repo.path,
-                    repo.branch,
-                    repo.language,
-                )
-
-
 async def run_pending_index_requests() -> None:
-    """Process index requests queued via the API or repo_index MCP tool."""
+    """Process index requests queued via the API, the webhook or the repo_index MCP tool.
+
+    A request names one repository, or (with ``repo_id`` NULL) every repository
+    selected by the requesting project.
+    """
     from ..org_config import get_org_config
 
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT id, org_id, repo_name FROM index_requests "
+            "SELECT id, org_id, project_id, repo_id FROM index_requests "
             "WHERE processed_at IS NULL ORDER BY requested_at LIMIT 10"
         )
 
-    if not rows:
-        return
-
     for row in rows:
         oid = row["org_id"]
-        repo_name = row["repo_name"]
-        if oid is None:
-            # Legacy request with no org context — skip safely.
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE index_requests SET processed_at=NOW() WHERE id=$1", row["id"]
-                )
-            continue
-
-        cfg = await get_org_config(oid)
-        if repo_name:
-            repos_to_index = [r for r in cfg.repos if r.name == repo_name]
-        else:
-            repos_to_index = cfg.repos
-
-        for repo in repos_to_index:
-            logger.info("Processing index request for org=%s repo=%s", oid, repo.name)
-            await run_index_repo(oid, repo, cfg.indexing)
+        if oid is not None:
+            if row["repo_id"] is not None:
+                record = await repo_catalog.get_record(oid, row["repo_id"])
+                repos_to_index = [record] if record is not None else []
+            elif row["project_id"] is not None:
+                repos_to_index = await repo_catalog.project_records(oid, row["project_id"])
+            else:
+                repos_to_index = []
+            indexing_cfg = (await get_org_config(oid)).indexing
+            for repo in repos_to_index:
+                logger.info("Processing index request for org=%s repo=%s", oid, repo.name)
+                await run_index_repo(oid, repo, indexing_cfg)
 
         async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE index_requests SET processed_at=NOW() WHERE id=$1",
-                row["id"],
-            )
+            await conn.execute("UPDATE index_requests SET processed_at=NOW() WHERE id=$1", row["id"])

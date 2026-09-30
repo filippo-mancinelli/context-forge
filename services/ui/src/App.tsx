@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Link, NavLink, Navigate, Route, Routes } from 'react-router-dom'
-import { GitBranch, Brain, Wrench, SlidersHorizontal, Menu, X, Building2, Library, MessagesSquare, Database, Braces, Globe, Server, Boxes, ChevronDown, LogOut, TerminalSquare, UserRound, ShieldCheck } from 'lucide-react'
+import { GitBranch, Brain, Wrench, SlidersHorizontal, Menu, X, Building2, Library, MessagesSquare, Database, Braces, Globe, Server, Boxes, ChevronDown, LogOut, TerminalSquare, UserRound, ShieldCheck, Layers } from 'lucide-react'
 import Repos from './pages/Repos'
 import Chat from './pages/Chat'
 import DataSources from './pages/DataSources'
@@ -18,6 +18,7 @@ import Search from './pages/Search'
 import RepoDetail from './pages/RepoDetail'
 import Settings from './pages/Settings'
 import Organization from './pages/Organization'
+import Catalog from './pages/Catalog'
 import Setup from './pages/Setup'
 import Login from './pages/Login'
 import SharedChat from './pages/SharedChat'
@@ -28,20 +29,31 @@ import { Logo } from './components/Logo'
 import { Button, Dialog, DialogFooter, Input, useToast } from './components/ui'
 import NewProjectDialog from './components/NewProjectDialog'
 
-const navLinks: { to: string; icon: typeof GitBranch; label: string; adminOnly?: boolean }[] = [
+type NavLinkItem = { to: string; icon: typeof GitBranch; label: string; adminOnly?: boolean }
+
+const projectLinks: NavLinkItem[] = [
   { to: '/chat', icon: MessagesSquare, label: 'Agent Chat' },
   { to: '/repos', icon: GitBranch, label: 'Repositories' },
   { to: '/datasources', icon: Database, label: 'Data Sources' },
   { to: '/ssh-sources', icon: TerminalSquare, label: 'SSH Files' },
-  { to: '/approvals', icon: ShieldCheck, label: 'Approvals', adminOnly: true },
   { to: '/contracts', icon: Braces, label: 'API Contracts' },
   { to: '/knowledge', icon: Library, label: 'Knowledge Base' },
   { to: '/web', icon: Globe, label: 'Web Pages' },
   { to: '/memory', icon: Brain, label: 'Memory' },
+]
+
+const orgLinks: NavLinkItem[] = [
+  { to: '/catalog', icon: Layers, label: 'Catalog' },
+  { to: '/approvals', icon: ShieldCheck, label: 'Approvals', adminOnly: true },
   { to: '/environments', icon: Server, label: 'Environments' },
   { to: '/settings', icon: SlidersHorizontal, label: 'Settings' },
   { to: '/tools', icon: Wrench, label: 'MCP Tools' },
   //{ to: '/jobs', icon: Activity, label: 'Async Jobs' },
+]
+
+const navGroups = [
+  { label: 'Project', links: projectLinks },
+  { label: 'Organization', links: orgLinks },
 ]
 
 function NewOrgDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -252,31 +264,38 @@ function NavItems({ onNavigate, showLogout = false }: { onNavigate?: () => void;
   return (
     <>
       <nav className="flex-1 py-2 px-2 overflow-y-auto scrollbar-thin">
-        {navLinks
-          .filter((link) => !link.adminOnly || isOrgAdmin)
-          .map(({ to, icon: Icon, label }) => (
-            <NavLink
-              key={to}
-              to={to}
-              onClick={onNavigate}
-              className={({ isActive }) =>
-                [
-                  'flex items-center gap-2.5 px-3 h-10 my-0.5 text-sm rounded border transition-colors',
-                  isActive
-                    ? 'text-white border-primary bg-[rgba(124,201,242,0.12)]'
-                    : 'text-sidebar-text border-transparent hover:text-white',
-                ].join(' ')
-              }
-            >
-              <Icon className="w-3.5 h-3.5 flex-shrink-0" />
-              <span className="flex-1">{label}</span>
-              {to === '/approvals' && badge && (
-                <span className="px-1.5 py-0.5 text-xs font-medium rounded bg-primary text-on-primary">
-                  {badge}
-                </span>
-              )}
-            </NavLink>
-          ))}
+        {navGroups.map((group) => (
+          <div key={group.label} className="mb-2">
+            <p className="px-3 pt-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-[var(--sidebar-text-muted)]">
+              {group.label}
+            </p>
+            {group.links
+              .filter((link) => !link.adminOnly || isOrgAdmin)
+              .map(({ to, icon: Icon, label }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  onClick={onNavigate}
+                  className={({ isActive }) =>
+                    [
+                      'flex items-center gap-2.5 px-3 h-10 my-0.5 text-sm rounded border transition-colors',
+                      isActive
+                        ? 'text-white border-primary bg-[rgba(124,201,242,0.12)]'
+                        : 'text-sidebar-text border-transparent hover:text-white',
+                    ].join(' ')
+                  }
+                >
+                  <Icon className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span className="flex-1">{label}</span>
+                  {to === '/approvals' && badge && (
+                    <span className="px-1.5 py-0.5 text-xs font-medium rounded bg-primary text-on-primary">
+                      {badge}
+                    </span>
+                  )}
+                </NavLink>
+              ))}
+          </div>
+        ))}
       </nav>
       {showLogout && (
         <div className="px-4 py-3 border-t border-[var(--sidebar-border)]">
@@ -422,7 +441,7 @@ export default function App() {
                 <Route path="/repos" element={<Repos />} />
                 <Route path="/repos/:repoName" element={<RepoDetail />} />
                 <Route path="/datasources" element={<DataSources />} />
-                <Route path="/datasources/:connectionId" element={<DataSourceDetail />} />
+                <Route path="/datasources/:scopeId" element={<DataSourceDetail />} />
                 <Route path="/ssh-sources" element={<SshSources />} />
                 <Route path="/approvals" element={<Approvals />} />
                 <Route path="/contracts" element={<ApiContracts />} />
@@ -430,6 +449,7 @@ export default function App() {
                 <Route path="/web" element={<WebPages />} />
                 <Route path="/memory" element={<Memory />} />
                 <Route path="/environments" element={<Environments />} />
+                <Route path="/catalog" element={<Catalog />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/organization" element={<Organization />} />
                 <Route path="/tools" element={<Tools />} />

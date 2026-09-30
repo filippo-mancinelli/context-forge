@@ -48,12 +48,14 @@ def _redact(text: str, token: str | None = None) -> str:
 def _workspace_path(org_id: int, repo_name: str) -> str:
     """Resolve the per-org workspace directory for ``repo_name``.
 
-    ``repo_name`` is member-settable (``POST /repos``, no character
-    validation) and may legitimately contain subpaths — e.g. a GitHub
-    ``owner/repo`` style name — so slashes are allowed. Only escaping the
-    per-org workspace directory itself (via ``..`` or an absolute name) is
-    rejected, checked after resolving ``.``/``..``/symlinks via realpath so
-    it can't be bypassed the way a plain string check could.
+    ``repo_name`` comes from the organization catalog (no character
+    validation), registered by an organization admin through the REST catalog
+    or by an agent through the MCP ``repo_add`` tool, and may legitimately
+    contain subpaths — e.g. a GitHub ``owner/repo`` style name — so slashes
+    are allowed. Only escaping the per-org workspace directory itself (via
+    ``..`` or an absolute name) is rejected, checked after resolving
+    ``.``/``..``/symlinks via realpath so it can't be bypassed the way a plain
+    string check could.
     """
     base = os.path.join(get_settings().agent_workspaces_dir, f"org_{org_id}")
     base_real = os.path.realpath(base)

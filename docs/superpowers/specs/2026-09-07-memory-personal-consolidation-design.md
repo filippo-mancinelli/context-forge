@@ -33,7 +33,7 @@ Restore and Delete actions.
 
 ### Usage tracking
 
-Migration `0005_memory_stats`:
+Migration `0008_memory_stats`:
 
 ```sql
 CREATE TABLE memory_stats (

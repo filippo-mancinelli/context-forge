@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 async def ci_runs(repo: str, limit: int = 10) -> dict:
     """List recent CI runs (GitHub Actions workflow runs / GitLab CI pipelines) for a repository.
 
-    The repository must be a configured github/gitlab repo (see repo_list).
+    The repository must be a github/gitlab repo selected by the project (see repo_list).
     Runs are fetched live from the provider using the configured token.
 
     Args:
@@ -27,11 +27,12 @@ async def ci_runs(repo: str, limit: int = 10) -> dict:
     """
     from ..ci import service
     from ..ci.service import CiError
-    from .context import resolve_org_id
+    from .context import require_project_id, resolve_org_id
 
     org_id = await resolve_org_id()
+    project_id = await require_project_id()
     try:
-        runs = await service.recent_runs(org_id, repo, limit=limit)
+        runs = await service.recent_runs(org_id, project_id, repo, limit=limit)
     except CiError as e:
         return {"status": "error", "error": str(e)}
     except Exception as e:  # noqa: BLE001
@@ -58,11 +59,12 @@ async def ci_failure(repo: str, run_id: Optional[int] = None, max_log_chars: int
     """
     from ..ci import service
     from ..ci.service import CiError
-    from .context import resolve_org_id
+    from .context import require_project_id, resolve_org_id
 
     org_id = await resolve_org_id()
+    project_id = await require_project_id()
     try:
-        detail = await service.failure_detail(org_id, repo, run_id=run_id, max_log_chars=max_log_chars)
+        detail = await service.failure_detail(org_id, project_id, repo, run_id=run_id, max_log_chars=max_log_chars)
     except CiError as e:
         return {"status": "error", "error": str(e)}
     except Exception as e:  # noqa: BLE001

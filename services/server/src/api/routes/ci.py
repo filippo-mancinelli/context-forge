@@ -7,15 +7,15 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ...ci import service
 from ...ci.service import CiError
-from ..deps import ActiveOrg, get_active_org
+from ..deps import ActiveProject, get_active_project
 
 router = APIRouter(prefix="/ci", tags=["ci"])
 
 
 @router.get("/{repo_name}/runs")
-async def recent_runs(repo_name: str, limit: int = 10, org: ActiveOrg = Depends(get_active_org)):
+async def recent_runs(repo_name: str, limit: int = 10, project: ActiveProject = Depends(get_active_project)):
     try:
-        runs = await service.recent_runs(org.org_id, repo_name, limit=limit)
+        runs = await service.recent_runs(project.org_id, project.project_id, repo_name, limit=limit)
     except CiError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001
@@ -25,10 +25,10 @@ async def recent_runs(repo_name: str, limit: int = 10, org: ActiveOrg = Depends(
 
 @router.get("/{repo_name}/failure")
 async def failure_detail(
-    repo_name: str, run_id: Optional[int] = None, org: ActiveOrg = Depends(get_active_org)
+    repo_name: str, run_id: Optional[int] = None, project: ActiveProject = Depends(get_active_project)
 ):
     try:
-        return await service.failure_detail(org.org_id, repo_name, run_id=run_id)
+        return await service.failure_detail(project.org_id, project.project_id, repo_name, run_id=run_id)
     except CiError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001

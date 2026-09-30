@@ -49,10 +49,10 @@ def test_empty_project_returns_no_entries(monkeypatch):
 
 
 def test_only_non_zero_resources_are_reported(monkeypatch):
-    conn = FakeConn({"repos": 2, "ssh_sources": 1})
+    conn = FakeConn({"web_sites": 2, "kb_documents": 1})
     _patch(monkeypatch, conn)
     counts = asyncio.run(projects.count_project_resources(7))
-    assert counts == {"repos": 2, "ssh_sources": 1}
+    assert counts == {"web_sites": 2, "kb_documents": 1}
 
 
 def test_every_scoped_table_is_checked(monkeypatch):
@@ -61,15 +61,9 @@ def test_every_scoped_table_is_checked(monkeypatch):
     _patch(monkeypatch, conn)
     asyncio.run(projects.count_project_resources(7))
     joined = " ".join(conn.queries)
-    for table in (
-        "repos",
-        "kb_documents",
-        "web_sites",
-        "db_connections",
-        "api_contracts",
-        "ssh_sources",
-        "chat_sessions",
-        "jobs",
-        "mcp_api_keys",
-    ):
+    for table in ("kb_documents", "web_sites", "api_contracts", "chat_sessions", "jobs", "mcp_api_keys"):
         assert f"FROM {table} " in joined
+    # Cartelle SSH e database appartengono al catalogo: le selezioni cadono con il progetto.
+    assert "FROM ssh_sources " not in joined
+    assert "FROM db_connections " not in joined
+    assert "FROM repos " not in joined
