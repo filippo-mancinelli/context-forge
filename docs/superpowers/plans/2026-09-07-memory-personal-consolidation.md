@@ -38,7 +38,7 @@ Copied verbatim from `docs/superpowers/specs/2026-09-07-platform-improvements-ro
   installed in the local venv with `uv pip install --python .venv/Scripts/python.exe -e .`
   (run from `services/server`). No new system packages unless the Dockerfile
   is updated in the same task.
-- Naming: the product is `context-forge` / `ContextForge`. Never `aster`.
+- Naming: the product is `context-forge` / `ContextForge`. Never a downstream product name.
 - Code comments: max one line, only where needed. Commit titles 3–10 words,
   English, imperative; body optional, max 20 words.
 - README: each feature updates the sections it touches (features, tools,
@@ -3145,9 +3145,9 @@ Replace the Memory line under `## MCP tools` with:
 - [ ] **Step 5: Verify the README has no stale claims**
 
 Run: `grep -n "memory" README.md`
-Confirm nothing still describes memory as project-only, and that `aster` appears
-nowhere in the files you touched:
-Run: `grep -rn "aster" README.md .env.example docker-compose.yml`
+Confirm nothing still describes memory as project-only, and that no downstream product name
+appears in the files you touched:
+Run: `grep -rniE "<downstream product name>" README.md .env.example docker-compose.yml`
 Expected: no matches.
 
 - [ ] **Step 6: Run the full server suite**

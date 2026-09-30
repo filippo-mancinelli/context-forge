@@ -12,7 +12,7 @@
 
 ## Source repository and snapshots
 
-The downstream fork is checked out at `../aster-care` (sibling of this repository). It is read-only for this work: never commit, stage or edit anything there.
+The downstream fork is checked out in a sibling directory, referred to here as `<downstream>`. It is read-only for this work: never commit, stage or edit anything there.
 
 | Phase | Snapshot | Range to port | Content |
 |---|---|---|---|
@@ -20,14 +20,14 @@ The downstream fork is checked out at `../aster-care` (sibling of this repositor
 | B | `88e49a1` | `bd31b47..88e49a1` | repositories in the catalog |
 | C | `797d305` | `88e49a1..797d305` | database scopes, validator hardening, connection reset |
 
-Read a source file with `git -C ../aster-care show <snapshot>:<path>`. Read what a phase changed in a file with `git -C ../aster-care diff <range> -- <path>`. The per-phase file lists are in the SDD workspace: `phase-{A,B,C}-server.txt` and `phase-{A,B,C}-ui.txt`.
+Read a source file with `git -C <downstream> show <snapshot>:<path>`. Read what a phase changed in a file with `git -C <downstream> diff <range> -- <path>`. The per-phase file lists are in the SDD workspace: `phase-{A,B,C}-server.txt` and `phase-{A,B,C}-ui.txt`.
 
 ## Decisions
 
 - All three features are ported, with the validator hardening exactly as downstream, including the block on `information_schema` and `pg_*`.
 - Tests that need a real PostgreSQL are ported and are skipped when `TEST_DATABASE_URL` is unset. The default suite still needs no database.
 - Excluded: the downstream design kit (`design-kit/`, `components/shell/`, new kit components, fonts, favicon, login wallpaper, tokens), product connectors (`product_ops`, `ProductConnections*`), `OAuth.tsx`, `scripts/rollback_db_scope_release.sql`, kit-only UI tests.
-- No push and no merge: work stays on branch `feature/backport-aster-care-2`.
+- No push and no merge: work stays on its feature branch.
 
 ## Global Constraints
 
@@ -37,7 +37,7 @@ Read a source file with `git -C ../aster-care show <snapshot>:<path>`. Read what
 - MCP tools live in `src/mcp/*.py`, are imported on the single tool-import line of `src/main.py`, and are gated with `@requires_permission(...)` from `src/mcp/permissions.py`, which audits and rate-limits the call. A refusal raises `PermissionDenied`. Tools without a permission use `@audit_only`.
 - Tests without a database use `tests/fake_db.py` (`FakeConn`, `FakePool`) where they already do. Tests with a database use the `pg_database` fixture and `tests/pgutil.py`.
 - UI: React 18 + TypeScript in `services/ui/src`; kit in `components/ui` (context-forge's own kit, unchanged by this work); verify with `npx tsc --noEmit`, `npm run build`, `npx vitest run` from `services/ui`. UI copy is English.
-- Naming: the product is `context-forge` / `ContextForge`. Never `aster` outside test fixtures that are plain data. Apply the rename map to every file taken from a snapshot, in this order: `Aster Care`→`ContextForge`, `aster-care-ui`→`context-forge-ui`, `aster-care-server`→`context-forge-server`, `aster-care-api`→`context-forge-api`, `aster-care.yml`→`context-forge.yml`, `aster-care`→`context-forge`, `aster_care`→`context_forge`, `ASTER_CARE`→`CONTEXT_FORGE`, `asterchat-sql-agent validator`→`an internal SQL-agent validator`, `context-forge@example.org`→`context-forge@example.com`.
+- Naming: the product is `context-forge` / `ContextForge`. No downstream product or company name anywhere in the repository, test fixtures included. Apply the product rename map (downstream product name, package names, config file name, author address → their `context-forge` equivalents) to every file taken from a snapshot.
 - Code comments: short, one line where possible, only where needed. Comments copied from a snapshot may stay as they are.
 - Commit titles 3–10 words, English, imperative; body optional, max 20 words.
 - Git: stage explicit paths only; never `git add -A`/`.`; never `git reset`, `--amend`, `rebase`, `stash`, `checkout`; never `git push`. LF, UTF-8.
@@ -137,7 +137,7 @@ Files merged by hand, across all phases: `api/app.py`, `api/routes/settings.py`,
 - Merge by hand: `App.tsx`, `lib/api.ts`, `pages/Settings.tsx`
 - Not ported: the phase B changes to `index.css`, `pages/Knowledge.tsx`, `pages/Memory.tsx`, `pages/WebPages.tsx` unless they are functional; decide per file from the diff and list the decision in the report.
 
-- [ ] **Step 1:** New files and pages from the snapshot, rename map applied. Neutral placeholders: `asterchat-prod`→`billing-prod`, `/etc/aster`→`/etc/myapp`, `astercare@…`→`deploy@…`.
+- [ ] **Step 1:** New files and pages from the snapshot, rename map applied. Neutral placeholders in examples (`billing-prod`, `/etc/myapp`, `deploy@…`).
 - [ ] **Step 2: `App.tsx`.** Add the `/catalog` route and the Project/Organization nav groups. Keep the Approvals entry, the `adminOnly` filter and the pending badge.
 - [ ] **Step 3: `lib/api.ts`.** Add catalog types and clients; remove the clients of the REST routes the server no longer has; keep `writeRequests`, `toolCalls`, `mcpKeys.update`, `rate_limit_per_minute`.
 - [ ] **Step 4: `pages/Settings.tsx`.** Only remove `forge_config.repos`; keep the rate limit editor.
@@ -165,6 +165,6 @@ Downstream wrote this part on its own design kit. It is rewritten against the co
 - [ ] **Step 1: README.** Features: organization catalog, per-project selection, database scopes. MCP tools: `catalog_list`, `resource_select`, `resource_deselect`; changed parameters of `ssh_source_add`, `db_add`, and the `db_*` tools (alias or scope id). Permissions: `resource_select` uses `context-write`. Development: tests with `TEST_DATABASE_URL`; `migrate` runs version modules only, the data conversions run at server boot.
 - [ ] **Step 2: Upgrade notes.** The three conversions are one-way (they drop legacy columns and tables and move clone directories): back up the database and the repos cache before upgrading. Agents can no longer query `information_schema` or `pg_*`; use `db_schema` and `db_describe`. REST routes removed: writes on `/api/repos`, `/api/ssh-sources`, `/api/datasources`, `/api/{github,gitlab}/repos/add`.
 - [ ] **Step 3: Migration slots.** In the roadmap and the two plans, move `0005_memory_stats` to `0008_memory_stats` and `0006_eval` to `0009_eval`.
-- [ ] **Step 4: Grep gates.** `git grep -niE 'aster|larkin' -- ':!services/server/tests' ':!docs/superpowers' ':!services/ui/src/**/*.test.*'` returns nothing. `git grep -nE 'product_ops|ProductConnection|design-kit|ibm-plex|sync_repos_config|repo_registry'` returns nothing outside `docs/superpowers`.
+- [ ] **Step 4: Grep gates.** A case-insensitive `git grep` for the downstream product and company names over the whole repository returns nothing. `git grep -nE 'product_ops|ProductConnection|design-kit|ibm-plex|sync_repos_config|repo_registry'` returns nothing outside `docs/superpowers`.
 - [ ] **Step 5: Full verification.** Server suite without and with `TEST_DATABASE_URL`; UI checks. Report exact totals.
 - [ ] **Step 6: Commit.**
