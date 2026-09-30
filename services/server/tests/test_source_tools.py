@@ -774,3 +774,142 @@ def test_ssh_source_add_refuses_a_role_below_member(monkeypatch):
                     "chat-home", "/var/lib/asterchat", machine="astercare@192.168.0.206"
                 )
             )
+
+
+# ===== nuove risorse su credenziali già censite =====
+
+
+def _existing_machine_no_folder(monkeypatch, ssh_files, created):
+    async def by_name(org_id, name):
+        return {"id": 5, "name": name, "status": "ok"}
+
+    async def by_address(org_id, host, port, username):
+        return {"id": 5, "name": f"{username}@{host}", "status": "ok"}
+
+    async def must_not_create_machine(*args):
+        raise AssertionError("an existing machine must not be created again")
+
+    async def no_source(org_id, machine_id, root_path):
+        return None
+
+    async def fake_create_source(org_id, data):
+        created.append(data)
+        return {"id": 3, "name": data["name"], "machine_id": data["machine_id"]}
+
+    monkeypatch.setattr(ssh_files.machines, "get_machine_by_name", by_name)
+    monkeypatch.setattr(ssh_files.machines, "find_machine", by_address)
+    monkeypatch.setattr(ssh_files.machines, "create_machine", must_not_create_machine)
+    monkeypatch.setattr(ssh_files.ssh_service, "find_source", no_source)
+    monkeypatch.setattr(ssh_files.ssh_service, "create_source", fake_create_source)
+
+
+@pytest.mark.parametrize("where", [
+    {"machine": "deploy@10.0.0.6"},
+    {"host": "10.0.0.6", "username": "deploy"},
+], ids=["by-machine-name", "by-address"])
+def test_ssh_source_add_refuses_a_new_folder_on_an_existing_machine_to_a_non_admin(monkeypatch, where):
+    """The credential lives on the machine: a new folder there would be readable at once."""
+    from src.mcp import ssh_files
+
+    created, selected = [], []
+    _existing_machine_no_folder(monkeypatch, ssh_files, created)
+    _capture_selection(monkeypatch, ssh_files, selected)
+
+    with _SourceIdentity():
+        with pytest.raises(perms.PermissionDenied, match="organization admin must register"):
+            asyncio.run(_underlying(ssh_files.ssh_source_add)("etc", "/etc", **where))
+
+    assert created == [] and selected == []
+
+
+def test_ssh_source_add_lets_an_org_admin_register_a_folder_on_an_existing_machine(monkeypatch):
+    from src.mcp import ssh_files
+
+    created, selected = [], []
+    _existing_machine_no_folder(monkeypatch, ssh_files, created)
+    _capture_selection(monkeypatch, ssh_files, selected)
+    _roles(monkeypatch, "member", org_role="admin")
+
+    with _SourceIdentity(user_id=42):
+        result = asyncio.run(
+            _underlying(ssh_files.ssh_source_add)("etc", "/etc", machine="deploy@10.0.0.6")
+        )
+
+    assert result["status"] == "ok" and result["created"] is True
+    assert created[0]["machine_id"] == 5 and selected == [(1, 4, "folders", 3)]
+
+
+def test_ssh_source_add_refuses_a_project_member_who_is_not_an_org_admin(monkeypatch):
+    from src.mcp import ssh_files
+
+    created = []
+    _existing_machine_no_folder(monkeypatch, ssh_files, created)
+    _roles(monkeypatch, "member", org_role="member")
+
+    with _SourceIdentity(user_id=42):
+        with pytest.raises(perms.PermissionDenied, match="organization admin"):
+            asyncio.run(
+                _underlying(ssh_files.ssh_source_add)("etc", "/etc", machine="deploy@10.0.0.6")
+            )
+
+    assert created == []
+
+
+def _new_connection(monkeypatch, datasources, created):
+    async def fake_machine(org_id, name):
+        return {"id": 5, "name": name}
+
+    async def no_existing(org_id, machine_id, host, port, username, engine):
+        return None
+
+    async def fake_create(org_id, data):
+        created.append(data)
+        return {"id": 9, "name": data["name"], "engine": data["engine"], "status": "unknown"}
+
+    async def fake_mark(org_id, connection_id):
+        pass
+
+    monkeypatch.setattr(datasources.machines, "get_machine_by_name", fake_machine)
+    monkeypatch.setattr(datasources.service, "find_connection", no_existing)
+    monkeypatch.setattr(datasources.service, "create_connection", fake_create)
+    monkeypatch.setattr(datasources.service, "mark_pending_secret", fake_mark)
+
+
+@pytest.mark.parametrize("args", [
+    ("tunnelled", "postgresql"),
+    ("local-file", "sqlite"),
+], ids=["through-a-catalog-machine", "sqlite"])
+def test_db_add_refuses_a_new_connection_usable_without_a_password_to_a_non_admin(monkeypatch, args):
+    from src.mcp import datasources
+
+    created, scoped = [], []
+    _new_connection(monkeypatch, datasources, created)
+    _capture_scope(monkeypatch, datasources, scoped)
+    name, engine = args
+    kwargs = ({"host": "127.0.0.1", "port": 5432, "database_name": "app", "username": "app",
+               "ssh_machine": "deploy@10.0.0.6"} if engine == "postgresql"
+              else {"database_name": "/var/lib/app/app.db"})
+
+    with _SourceIdentity():
+        with pytest.raises(perms.PermissionDenied, match="organization admin must register"):
+            asyncio.run(_underlying(datasources.db_add)(name, engine, **kwargs))
+
+    assert created == [] and scoped == []
+
+
+def test_db_add_lets_an_org_admin_create_a_tunnelled_connection(monkeypatch):
+    from src.mcp import datasources
+
+    created, scoped = [], []
+    _new_connection(monkeypatch, datasources, created)
+    _capture_scope(monkeypatch, datasources, scoped)
+    _roles(monkeypatch, "member", org_role="admin")
+
+    with _SourceIdentity(user_id=42):
+        result = asyncio.run(_underlying(datasources.db_add)(
+            "tunnelled", "postgresql", host="127.0.0.1", port=5432, database_name="app",
+            username="app", ssh_machine="deploy@10.0.0.6",
+        ))
+
+    assert result["status"] == "ok" and result["created"] is True
+    assert created[0]["ssh_machine_id"] == 5

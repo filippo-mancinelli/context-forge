@@ -396,7 +396,8 @@ async def db_add(
     server already exists through the same route (machine, host, port, username
     and engine), it is reused and only the scope is linked, so a second database
     or schema of the same server does not create a second catalog entry. This
-    tool takes no credential.
+    tool takes no credential. Creating a new connection that tunnels through a
+    catalog machine, or a new SQLite connection, requires an organization admin.
 
     Args:
         name: connection name, unique in the organization (used when a new
@@ -434,6 +435,14 @@ async def db_add(
             org_id, machine_id, host, port, username, engine
         )
         created = connection is None
+        if created and not can_select_restricted and (machine_id is not None or engine == "sqlite"):
+            # Usabile senza che una persona aggiunga un segreto: il tunnel usa la
+            # credenziale della macchina, SQLite non ne chiede nessuna.
+            raise PermissionDenied(
+                "A new connection through a catalog machine, or on SQLite, is usable without a "
+                "password: an organization admin must register it in the catalog, then it can "
+                "be linked here"
+            )
         if created:
             connection = await service.create_connection(org_id, {
                 "name": name,
@@ -465,6 +474,8 @@ async def db_add(
             )
     except selections.RestrictedResourceError as exc:
         raise PermissionDenied(f"'{exc}' is restricted: only an organization admin can add it to a project")
+    except PermissionDenied:
+        raise
     except ValueError as exc:
         return {"status": "error", "error": str(exc)}
     except Exception as exc:  # noqa: BLE001 — vincoli di unicità, perimetro in conflitto, driver

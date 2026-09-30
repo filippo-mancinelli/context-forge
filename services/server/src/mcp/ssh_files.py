@@ -300,6 +300,7 @@ async def ssh_source_add(
     password or key from the Catalog page before files can be read. When the
     same machine and root are already registered, the existing folder is
     selected instead of creating a copy. This tool takes no credential.
+    Creating a new folder on a machine already in the catalog requires an organization admin.
 
     Args:
         name: folder name, unique in the organization.
@@ -322,6 +323,7 @@ async def ssh_source_add(
     can_select, can_select_restricted = await selection_rights(org_id, project_id)
     if not can_select:
         raise PermissionDenied("Adding a folder to this project requires the member role on this project")
+    new_machine = False
     try:
         if machine:
             target = await machines.get_machine_by_name(org_id, machine)
@@ -330,6 +332,7 @@ async def ssh_source_add(
         elif host and username:
             target = await machines.find_machine(org_id, host, port, username)
             if target is None:
+                new_machine = True
                 target = await machines.create_machine(org_id, {
                     "name": machine_name(username, host, port),
                     "host": host,
@@ -344,6 +347,13 @@ async def ssh_source_add(
 
         source = await ssh_service.find_source(org_id, target["id"], root_path)
         created = source is None
+        if created and not new_machine and not can_select_restricted:
+            # La credenziale sta sulla macchina: una cartella nuova su una macchina
+            # già censita sarebbe leggibile subito, senza che una persona la veda.
+            raise PermissionDenied(
+                f"Machine '{target['name']}' is already in the catalog: an organization admin "
+                "must register the new folder in the catalog, then it can be selected here"
+            )
         if created:
             source = await ssh_service.create_source(org_id, {
                 "name": name,
@@ -359,6 +369,8 @@ async def ssh_source_add(
         )
     except selections.RestrictedResourceError as exc:
         raise PermissionDenied(f"'{exc}' is restricted: only an organization admin can add it to a project")
+    except PermissionDenied:
+        raise
     except Exception as exc:  # noqa: BLE001 — vincoli di unicità e errori del driver
         return {"status": "error", "error": str(exc)}
 
