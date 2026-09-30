@@ -260,7 +260,16 @@ async def _propose_ssh_write(record: dict, path: str, content: str, reason: str)
         project_id=project_id,
         kind="ssh_write_file",
         target=f"{record['name']}:{path}",
-        payload={"source": record["name"], "path": path, "content": content},
+        # The folder is pinned: approval writes only if this same folder, with
+        # the same name, machine and root, is still selected by the project.
+        payload={
+            "source": record["name"],
+            "ssh_source_id": record["id"],
+            "machine_id": record["machine_id"],
+            "root_path": record["root_path"],
+            "path": path,
+            "content": content,
+        },
         preview=preview,
         reason=reason,
         requested_by_kind=kind,

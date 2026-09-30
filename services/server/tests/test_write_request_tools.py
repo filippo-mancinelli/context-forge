@@ -403,7 +403,10 @@ def test_ssh_write_file_without_ssh_write_creates_a_request(monkeypatch):
     assert out["message"].endswith("Poll with write_request_status(31).")
     assert created["kind"] == "ssh_write_file"
     assert created["target"] == "web1:app.yml"
-    assert created["payload"] == {"source": "web1", "path": "app.yml", "content": "key: value\n"}
+    # The proposal pins the previewed folder: id, machine and root travel with it.
+    assert created["payload"] == {"source": "web1", "ssh_source_id": 3, "machine_id": 5,
+                                  "root_path": "/etc/app", "path": "app.yml",
+                                  "content": "key: value\n"}
     assert created["org_id"] == 1 and created["project_id"] == 2
 
 

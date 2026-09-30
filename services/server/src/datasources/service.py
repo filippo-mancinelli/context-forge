@@ -87,6 +87,10 @@ class ConnectionNotSelectedError(ConnectionNotFoundError):
     """La connessione esiste nel catalogo ma il progetto non l'ha selezionata."""
 
 
+class ScopeChangedError(Exception):
+    """Il perimetro caricato per scrivere non è più quello verificato dal chiamante."""
+
+
 _LIST_SENTINELS = frozenset({"__list__", "__all__", "list", "all", "*"})
 
 
@@ -1081,12 +1085,22 @@ async def run_write(
     source: str = "mcp",
     *,
     by_scope_id: bool = False,
+    expected_scope: tuple[str, Optional[str], Optional[str]] | None = None,
 ) -> dict[str, Any]:
     # by_scope_id: ``ref`` is a scope id and nothing else (approved writes).
+    # expected_scope: (alias, database, schema) the caller already verified;
+    # the record loaded here must still match it, or nothing is validated or run.
     if by_scope_id:
         record = await get_scope_by_id(org_id, project_id, int(ref), include_secret=True)
     else:
         record = await get_scope(org_id, project_id, ref, include_secret=True)
+    if expected_scope is not None:
+        loaded = (record.get("alias"), *_effective_scope(record))
+        if loaded != tuple(expected_scope):
+            raise ScopeChangedError(
+                f"The data source '{expected_scope[0]}' changed while the write was being "
+                "approved: propose the change again."
+            )
     try:
         validated = validate_write_query(sql, allowed_schema=_effective_scope(record)[1])
     except ScopeReferenceError as e:

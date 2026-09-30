@@ -36,7 +36,8 @@ def _environment(monkeypatch):
 def executed(monkeypatch):
     calls = []
 
-    async def recorder(org_id, project_id, ref, sql, source="mcp", *, by_scope_id=False):
+    async def recorder(org_id, project_id, ref, sql, source="mcp", *, by_scope_id=False,
+                       expected_scope=None):
         calls.append((ref, sql, source, by_scope_id))
         return {"connection": str(ref), "sql": sql, "row_count": 1, "duration_ms": 1}
 
