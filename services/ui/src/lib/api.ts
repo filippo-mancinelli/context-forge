@@ -557,6 +557,16 @@ export interface CatalogProjectRef {
   slug: string
 }
 
+// A project scope on a catalog connection: the delete confirmation lists
+// project and scope, one per line.
+export interface CatalogDatabaseScopeRef {
+  project_id: number
+  project_name: string
+  scope_id: number
+  alias: string
+  scope_label: string
+}
+
 export interface ProjectResources {
   folders: SshSource[]
   databases: DbConnection[]
@@ -610,11 +620,23 @@ export interface DbConnection {
   created_at?: string
   updated_at?: string
   annotation_count?: number
-  project_count?: number
+  // Scopes that projects linked on this connection (catalog view)
+  scope_count?: number
+  // Scopes seen at the last successful check of the connection
+  available_scopes?: DbScopeOption[]
+  scopes_checked_at?: string | null
   // Tunnel SSH attraverso una macchina del catalogo (null = connessione diretta)
   ssh_machine_id?: number | null
   ssh_machine_name?: string | null
   ssh_enabled?: boolean
+  // Project link: present only in project views (/api/datasources).
+  scope_id?: number
+  alias?: string
+  scope_database?: string | null
+  scope_schema?: string | null
+  scope_label?: string
+  // Scope inferred from the connection and not yet confirmed by a person.
+  scope_inferred?: boolean
 }
 
 export interface DbConnectionRequest {
@@ -630,6 +652,28 @@ export interface DbConnectionRequest {
   description?: string
   ssh_machine_id?: number | null
   restricted?: boolean
+}
+
+// A scope seen on a connection: database and schema in the engine's form.
+export interface DbScopeOption {
+  database: string | null
+  schema: string | null
+  label: string
+}
+
+export interface DbAvailableScopes {
+  scopes: DbScopeOption[]
+  checked_at: string | null
+  // false: list saved at the last successful check, not read from the server now.
+  live: boolean
+  error: string | null
+}
+
+// Scope and alias of a project link; no alias when adding = proposed by the server.
+export interface DbProjectScopeRequest {
+  database: string | null
+  schema: string | null
+  alias?: string
 }
 
 export type EnvironmentKind = 'production' | 'staging' | 'development' | 'other'
@@ -675,6 +719,9 @@ export interface DbSchemaTable {
 export interface DbSchemaOverview {
   connection: string
   connection_id: number
+  alias?: string
+  scope_label?: string
+  scope_inferred?: boolean
   dialect: string
   default_schema?: string
   schema?: string
@@ -735,6 +782,8 @@ export interface DbQueryLogEntry {
   error_message?: string
   rows_returned: number
   duration_ms: number
+  // Schema the query ran on; empty for an inferred scope.
+  schema_name?: string | null
   created_at?: string
 }
 
@@ -1015,6 +1064,18 @@ export const api = {
       request<{ status: string }>(`/api/projects/${id}/resources/${kind}/${resourceId}`, {
         method: 'DELETE',
       }),
+    addDatabase: (id: number, connectionId: number, req: DbProjectScopeRequest) =>
+      request<{ status: string; scope: DbConnection }>(`/api/projects/${id}/databases`, {
+        method: 'POST',
+        body: JSON.stringify({ connection_id: connectionId, ...req }),
+      }),
+    updateDatabase: (id: number, scopeId: number, req: DbProjectScopeRequest) =>
+      request<{ status: string; scope: DbConnection }>(`/api/projects/${id}/databases/${scopeId}`, {
+        method: 'PUT',
+        body: JSON.stringify(req),
+      }),
+    removeDatabase: (id: number, scopeId: number) =>
+      request<{ status: string }>(`/api/projects/${id}/databases/${scopeId}`, { method: 'DELETE' }),
   },
   sshSources: {
     list: () => request<{ sources: SshSource[] }>('/api/ssh-sources'),
@@ -1093,7 +1154,9 @@ export const api = {
           { method: 'POST' }
         ),
       projects: (id: number) =>
-        request<{ projects: CatalogProjectRef[] }>(`/api/catalog/databases/${id}/projects`),
+        request<{ projects: CatalogDatabaseScopeRef[] }>(`/api/catalog/databases/${id}/projects`),
+      scopes: (id: number, refresh = false) =>
+        request<DbAvailableScopes>(`/api/catalog/databases/${id}/scopes${refresh ? '?refresh=true' : ''}`),
     },
     repos: {
       list: () => request<{ repos: Repo[] }>('/api/catalog/repos'),
@@ -1341,35 +1404,30 @@ export const api = {
     reembed: () =>
       request<{ status: string; job_id: string }>('/api/settings/reembed', { method: 'POST' }),
   },
+  // Detail routes take the scope id; the scope sets the schema.
   datasources: {
     list: () => request<{ connections: DbConnection[]; engines: DbEngine[] }>('/api/datasources'),
-    schema: (id: number, schema?: string) =>
-      request<DbSchemaOverview>(
-        `/api/datasources/${id}/schema${schema ? `?schema=${encodeURIComponent(schema)}` : ''}`
+    schema: (sourceId: number) => request<DbSchemaOverview>(`/api/datasources/${sourceId}/schema`),
+    table: (sourceId: number, table: string, opts?: { sampleRows?: number }) =>
+      request<DbTableDetail>(
+        `/api/datasources/${sourceId}/tables/${encodeURIComponent(table)}${
+          opts?.sampleRows ? `?sample_rows=${opts.sampleRows}` : ''
+        }`
       ),
-    table: (id: number, table: string, opts?: { schema?: string; sampleRows?: number }) => {
-      const params = new URLSearchParams()
-      if (opts?.schema) params.set('schema', opts.schema)
-      if (opts?.sampleRows) params.set('sample_rows', String(opts.sampleRows))
-      const qs = params.toString()
-      return request<DbTableDetail>(
-        `/api/datasources/${id}/tables/${encodeURIComponent(table)}${qs ? `?${qs}` : ''}`
-      )
-    },
-    annotations: (id: number) =>
-      request<{ annotations: DbAnnotation[]; count: number }>(`/api/datasources/${id}/annotations`),
-    saveAnnotations: (id: number, annotations: DbAnnotation[]) =>
-      request<{ status: string; written: number }>(`/api/datasources/${id}/annotations`, {
+    annotations: (sourceId: number) =>
+      request<{ annotations: DbAnnotation[]; count: number }>(`/api/datasources/${sourceId}/annotations`),
+    saveAnnotations: (sourceId: number, annotations: DbAnnotation[]) =>
+      request<{ status: string; written: number }>(`/api/datasources/${sourceId}/annotations`, {
         method: 'PUT',
         body: JSON.stringify({ annotations }),
       }),
-    query: (id: number, sql: string, maxRows = 100) =>
-      request<DbQueryResult>(`/api/datasources/${id}/query`, {
+    query: (sourceId: number, sql: string, maxRows = 100) =>
+      request<DbQueryResult>(`/api/datasources/${sourceId}/query`, {
         method: 'POST',
         body: JSON.stringify({ sql, max_rows: maxRows }),
       }),
-    log: (id: number, limit = 50) =>
-      request<{ log: DbQueryLogEntry[]; count: number }>(`/api/datasources/${id}/log?limit=${limit}`),
+    log: (sourceId: number, limit = 50) =>
+      request<{ log: DbQueryLogEntry[]; count: number }>(`/api/datasources/${sourceId}/log?limit=${limit}`),
   },
   environments: {
     list: () => request<Environment[]>('/api/environments'),

@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { api, type DbConnection, type DbConnectionRequest, type DbEngine, type Machine } from '../../lib/api'
-import { Button, Dialog, DialogFooter, Input, Select, useToast } from '../ui'
+import { Badge, Button, Dialog, DialogFooter, Input, Select, useToast } from '../ui'
 
 const ENGINE_OPTIONS: { value: DbEngine; label: string }[] = [
   { value: 'postgresql', label: 'PostgreSQL' },
@@ -8,6 +8,10 @@ const ENGINE_OPTIONS: { value: DbEngine; label: string }[] = [
   { value: 'mariadb', label: 'MariaDB' },
   { value: 'sqlite', label: 'SQLite' },
 ]
+
+// Engines that cannot open a connection without a database: PostgreSQL needs it in the
+// URL, and for SQLite the database is the file itself.
+const DEFAULT_DATABASE_REQUIRED: DbEngine[] = ['postgresql', 'sqlite']
 
 const DOCKER_HOST_ALIAS = 'host.docker.internal'
 const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '::1']
@@ -62,6 +66,12 @@ export default function DatabaseDialog({ open, editing, machines, onOpenChange, 
 
   const isSqlite = form.engine === 'sqlite'
   const viaMachine = !isSqlite && form.ssh_machine_id != null
+  const databaseRequired = DEFAULT_DATABASE_REQUIRED.includes(form.engine)
+  const databaseLabel = isSqlite ? 'Database file path' : 'Default database'
+  const databaseHint = isSqlite
+    ? 'Path of the database file inside the container.'
+    : 'Used to test the connection and to list the available scopes. Each project chooses its own database and schema when it adds this connection.'
+  const seenScopes = editing?.available_scopes ?? []
   const set = (patch: Partial<DbConnectionRequest>) => setForm((f) => ({ ...f, ...patch }))
 
   const submit = async (e: FormEvent) => {
@@ -96,7 +106,7 @@ export default function DatabaseDialog({ open, editing, machines, onOpenChange, 
       open={open}
       onOpenChange={onOpenChange}
       title={editing ? `Edit ${editing.name}` : 'New database connection'}
-      description="Credentials should belong to a read-only database user."
+      description="The connection is the database server. Credentials should belong to a read-only user: projects only read the scope they choose, and only the user's grants on the server truly keep them apart."
     >
       <form onSubmit={submit} className="space-y-3">
         {error && <p className="text-xs text-danger break-words">{error}</p>}
@@ -165,13 +175,6 @@ export default function DatabaseDialog({ open, editing, machines, onOpenChange, 
             )}
           </div>
         )}
-        <Input
-          label={isSqlite ? 'Database file path' : 'Database'}
-          value={form.database_name ?? ''}
-          onChange={(e) => set({ database_name: e.target.value })}
-          placeholder={isSqlite ? '/data/app.db (path inside the container)' : 'database name'}
-          required
-        />
         {!isSqlite && (
           <div className="grid grid-cols-2 gap-2">
             <Input
@@ -191,10 +194,19 @@ export default function DatabaseDialog({ open, editing, machines, onOpenChange, 
           </div>
         )}
         <Input
+          id="database-default-database"
+          label={databaseLabel}
+          value={form.database_name ?? ''}
+          onChange={(e) => set({ database_name: e.target.value })}
+          placeholder={isSqlite ? '/data/app.db' : databaseRequired ? 'database name' : 'optional'}
+          required={databaseRequired}
+          hint={databaseHint}
+        />
+        <Input
           label="Description"
           value={form.description ?? ''}
           onChange={(e) => set({ description: e.target.value })}
-          placeholder="What lives in this database (shown to agents)"
+          placeholder="What lives on this server (shown to agents)"
         />
         <label className="flex items-center gap-2 text-sm">
           <input
@@ -205,6 +217,35 @@ export default function DatabaseDialog({ open, editing, machines, onOpenChange, 
           />
           Restricted — only organization admins can add it to a project
         </label>
+        {editing && !isSqlite && (
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-muted">Scopes seen at last check</p>
+            {seenScopes.length > 0 ? (
+              <>
+                <div className="flex flex-wrap gap-1">
+                  {seenScopes.map((s) => (
+                    // The label is the only field every scope has, so it is also the key.
+                    <Badge key={s.label}>{s.label}</Badge>
+                  ))}
+                </div>
+                {editing.scopes_checked_at && (
+                  <p className="text-xs text-muted">
+                    Checked on {new Date(editing.scopes_checked_at).toLocaleString()}
+                  </p>
+                )}
+              </>
+            ) : editing.scopes_checked_at ? (
+              <p className="text-xs text-muted">
+                Checked on {new Date(editing.scopes_checked_at).toLocaleString()}: no scopes visible with these
+                credentials.
+              </p>
+            ) : (
+              <p className="text-xs text-muted">
+                No scopes seen yet. Test the connection to read them from the server.
+              </p>
+            )}
+          </div>
+        )}
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
             Cancel

@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Database, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
-import { api, type CatalogProjectRef, type DbConnection, type Machine } from '../../lib/api'
+import { api, type CatalogDatabaseScopeRef, type DbConnection, type Machine } from '../../lib/api'
 import { Button, Card, Table, Tbody, Td, Th, Thead, Tr, useConfirm, useToast } from '../ui'
+import { actionFailed } from '../../lib/messages'
 import DatabaseDialog from './DatabaseDialog'
 import RestrictedIcon from './RestrictedIcon'
 import StatusBadge from './StatusBadge'
 
 function target(c: DbConnection): string {
   if (c.engine === 'sqlite') return c.database_name ?? ''
-  return `${c.host ?? '?'}${c.port ? `:${c.port}` : ''}/${c.database_name ?? ''}`
+  // The default database is optional on MySQL and MariaDB: without it the endpoint is enough.
+  const endpoint = `${c.host ?? '?'}${c.port ? `:${c.port}` : ''}`
+  return c.database_name ? `${endpoint}/${c.database_name}` : endpoint
 }
 
 export default function DatabasesTab({ canManage }: { canManage: boolean }) {
@@ -92,11 +95,11 @@ export default function DatabasesTab({ canManage }: { canManage: boolean }) {
   }
 
   const remove = async (conn: DbConnection) => {
-    let projects: CatalogProjectRef[] = []
+    let scopes: CatalogDatabaseScopeRef[] = []
     try {
-      projects = (await api.catalog.databases.projects(conn.id)).projects
+      scopes = (await api.catalog.databases.projects(conn.id)).projects
     } catch (e) {
-      toast.error(String(e))
+      toast.error(actionFailed('load the project scopes on this database', e))
       return
     }
     const ok = await confirm({
@@ -104,12 +107,12 @@ export default function DatabasesTab({ canManage }: { canManage: boolean }) {
       message: (
         <>
           <p>Delete «{conn.name}»? Annotations and query log are deleted too.</p>
-          {projects.length > 0 && (
+          {scopes.length > 0 && (
             <>
-              <p className="mt-2">It is used by these projects and will be removed from them:</p>
+              <p className="mt-2">These project scopes use it and will be removed:</p>
               <ul className="list-disc pl-5 mt-2">
-                {projects.map((p) => (
-                  <li key={p.id}>{p.name}</li>
+                {scopes.map((s) => (
+                  <li key={s.scope_id}>{`${s.project_name} — ${s.alias} (${s.scope_label})`}</li>
                 ))}
               </ul>
             </>
@@ -158,7 +161,7 @@ export default function DatabasesTab({ canManage }: { canManage: boolean }) {
                 <Th>Engine</Th>
                 <Th>Target</Th>
                 <Th>Access</Th>
-                <Th>Projects</Th>
+                <Th>Project scopes</Th>
                 <Th>Status</Th>
                 {canManage && <Th className="w-32" />}
               </Tr>
@@ -174,7 +177,7 @@ export default function DatabasesTab({ canManage }: { canManage: boolean }) {
                   <Td className="text-xs font-mono">{c.engine}</Td>
                   <Td className="text-xs text-muted font-mono">{target(c)}</Td>
                   <Td className="text-xs">{c.ssh_machine_name ? `via ${c.ssh_machine_name}` : 'direct'}</Td>
-                  <Td className="text-xs text-muted">{c.project_count ?? 0}</Td>
+                  <Td className="text-xs text-muted">{c.scope_count ?? 0}</Td>
                   <Td>
                     <StatusBadge status={c.status} error={c.error_message} />
                     {c.status === 'error' && suggestions[c.id] && canManage && (

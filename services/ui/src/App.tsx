@@ -441,7 +441,7 @@ export default function App() {
                 <Route path="/repos" element={<Repos />} />
                 <Route path="/repos/:repoName" element={<RepoDetail />} />
                 <Route path="/datasources" element={<DataSources />} />
-                <Route path="/datasources/:connectionId" element={<DataSourceDetail />} />
+                <Route path="/datasources/:scopeId" element={<DataSourceDetail />} />
                 <Route path="/ssh-sources" element={<SshSources />} />
                 <Route path="/approvals" element={<Approvals />} />
                 <Route path="/contracts" element={<ApiContracts />} />

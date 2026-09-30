@@ -11,10 +11,10 @@ import {
 } from '../lib/api'
 import {
   Badge,
+  Banner,
   Button,
   Card,
   Input,
-  Select,
   Table,
   Tabs,
   TabsContent,
@@ -28,6 +28,9 @@ import {
   Tr,
   useToast,
 } from '../components/ui'
+import StatusBadge from '../components/catalog/StatusBadge'
+import { findDataSource } from '../lib/dataSources'
+import { actionFailedSentence } from '../lib/messages'
 
 function formatRows(n?: number | null): string {
   if (n === null || n === undefined) return '—'
@@ -37,17 +40,15 @@ function formatRows(n?: number | null): string {
 }
 
 // ---------------------------------------------------------------------------
-// Schema tab: table list + table detail with editable data dictionary
+// Schema tab: tables of the scope and table detail with the data dictionary
 // ---------------------------------------------------------------------------
 function TableDetailPanel({
-  connectionId,
+  sourceId,
   table,
-  schema,
   onSaved,
 }: {
-  connectionId: number
+  sourceId: number
   table: string
-  schema?: string
   onSaved: () => void
 }) {
   const toast = useToast()
@@ -63,14 +64,14 @@ function TableDetailPanel({
     setError(null)
     setEditing(false)
     try {
-      const d = await api.datasources.table(connectionId, table, { schema })
+      const d = await api.datasources.table(sourceId, table)
       setDetail(d)
       setTableDesc(d.description ?? '')
       setColDescs(Object.fromEntries(d.columns.map((c) => [c.name, c.description ?? ''])))
     } catch (e) {
-      setError(String(e))
+      setError(actionFailedSentence('load the table', e))
     }
-  }, [connectionId, table, schema])
+  }, [sourceId, table])
 
   useEffect(() => {
     load()
@@ -78,31 +79,38 @@ function TableDetailPanel({
 
   const save = async () => {
     if (!detail) return
+    // Descriptions are written on the table's schema, the scope's: annotations belong to the
+    // connection and an empty schema would show them to other scopes too, so without a known
+    // schema nothing is saved.
+    if (!detail.schema) {
+      setError('The schema of this scope is unknown; descriptions cannot be saved.')
+      return
+    }
     setSaving(true)
     try {
-      // schema_name '' means "any schema" so single-schema DBs stay simple.
+      const schemaName = detail.schema
       const annotations = [
-        { schema_name: '', table_name: table, column_name: '', description: tableDesc },
+        { schema_name: schemaName, table_name: table, column_name: '', description: tableDesc },
         ...detail.columns.map((c) => ({
-          schema_name: '',
+          schema_name: schemaName,
           table_name: table,
           column_name: c.name,
           description: colDescs[c.name] ?? '',
         })),
       ]
-      await api.datasources.saveAnnotations(connectionId, annotations)
+      await api.datasources.saveAnnotations(sourceId, annotations)
       toast.success('Descriptions saved')
       setEditing(false)
       await load()
       onSaved()
     } catch (e) {
-      setError(String(e))
+      setError(actionFailedSentence('save the descriptions', e))
     } finally {
       setSaving(false)
     }
   }
 
-  if (error) return <p className="text-sm text-danger break-words">{error}</p>
+  if (error) return <Banner variant="danger" className="break-words">{error}</Banner>
   if (!detail) return <p className="text-sm text-muted">Loading table…</p>
 
   const pk = new Set(detail.primary_key)
@@ -131,7 +139,7 @@ function TableDetailPanel({
               Cancel
             </Button>
             <Button size="sm" variant="primary" loading={saving} onClick={save}>
-              <Save className="w-3.5 h-3.5" /> Save
+              <Save className="w-3.5 h-3.5" /> Save descriptions
             </Button>
           </div>
         ) : (
@@ -194,6 +202,7 @@ function TableDetailPanel({
                 <Td className="text-xs">
                   {editing ? (
                     <Input
+                      aria-label={`Description of ${col.name}`}
                       value={colDescs[col.name] ?? ''}
                       onChange={(e) => setColDescs((m) => ({ ...m, [col.name]: e.target.value }))}
                       placeholder="e.g. status: O=Offline, A=Online…"
@@ -222,9 +231,8 @@ function TableDetailPanel({
   )
 }
 
-function SchemaTab({ connectionId }: { connectionId: number }) {
+function SchemaTab({ sourceId }: { sourceId: number }) {
   const [overview, setOverview] = useState<DbSchemaOverview | null>(null)
-  const [schema, setSchema] = useState<string | undefined>(undefined)
   const [selectedTable, setSelectedTable] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -232,38 +240,29 @@ function SchemaTab({ connectionId }: { connectionId: number }) {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await api.datasources.schema(connectionId, schema)
-      setOverview(data)
+      setOverview(await api.datasources.schema(sourceId))
       setError(null)
     } catch (e) {
-      setError(String(e))
+      setError(actionFailedSentence('load the schema', e))
     } finally {
       setLoading(false)
     }
-  }, [connectionId, schema])
+  }, [sourceId])
 
   useEffect(() => {
     load()
   }, [load])
 
   if (loading && !overview) return <p className="text-sm text-muted">Introspecting schema…</p>
-  if (error) return <p className="text-sm text-danger break-words">{error}</p>
+  if (error) return <Banner variant="danger" className="break-words">{error}</Banner>
   if (!overview) return null
 
   return (
     <div className="space-y-4">
-      {overview.schemas.length > 1 && (
-        <div className="max-w-xs">
-          <Select
-            label="Schema"
-            value={overview.schema ?? ''}
-            onValueChange={(v) => {
-              setSelectedTable(null)
-              setSchema(v)
-            }}
-            options={overview.schemas.map((s) => ({ value: s, label: s }))}
-          />
-        </div>
+      {overview.schema && (
+        <p className="text-xs text-muted">
+          Schema <span className="font-mono text-text">{overview.schema}</span>
+        </p>
       )}
       <div className="flex flex-col lg:flex-row gap-4">
         <div className="border border-border lg:w-72 flex-shrink-0 max-h-[32rem] overflow-y-auto">
@@ -296,12 +295,7 @@ function SchemaTab({ connectionId }: { connectionId: number }) {
         </div>
         <div className="flex-1 min-w-0">
           {selectedTable ? (
-            <TableDetailPanel
-              connectionId={connectionId}
-              table={selectedTable}
-              schema={overview.schema ?? undefined}
-              onSaved={load}
-            />
+            <TableDetailPanel sourceId={sourceId} table={selectedTable} onSaved={load} />
           ) : (
             <p className="text-sm text-muted">
               {overview.tables.length} tables in <code className="font-mono">{overview.schema}</code> —
@@ -315,9 +309,9 @@ function SchemaTab({ connectionId }: { connectionId: number }) {
 }
 
 // ---------------------------------------------------------------------------
-// SQL console tab
+// SQL console tab: scope errors come from the server
 // ---------------------------------------------------------------------------
-function ConsoleTab({ connectionId }: { connectionId: number }) {
+function ConsoleTab({ sourceId }: { sourceId: number }) {
   const [sql, setSql] = useState('')
   const [result, setResult] = useState<DbQueryResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -328,10 +322,10 @@ function ConsoleTab({ connectionId }: { connectionId: number }) {
     setRunning(true)
     setError(null)
     try {
-      setResult(await api.datasources.query(connectionId, sql))
+      setResult(await api.datasources.query(sourceId, sql))
     } catch (e) {
       setResult(null)
-      setError(String(e))
+      setError(actionFailedSentence('run the query', e))
     } finally {
       setRunning(false)
     }
@@ -360,7 +354,7 @@ function ConsoleTab({ connectionId }: { connectionId: number }) {
           </span>
         )}
       </div>
-      {error && <p className="text-sm text-danger break-words">{error}</p>}
+      {error && <Banner variant="danger" className="break-words">{error}</Banner>}
       {result && result.columns.length > 0 && (
         <Card className="overflow-x-auto max-h-[28rem] overflow-y-auto">
           <Table>
@@ -396,17 +390,17 @@ function ConsoleTab({ connectionId }: { connectionId: number }) {
 // ---------------------------------------------------------------------------
 // Query log tab
 // ---------------------------------------------------------------------------
-function LogTab({ connectionId }: { connectionId: number }) {
+function LogTab({ sourceId }: { sourceId: number }) {
   const [log, setLog] = useState<DbQueryLogEntry[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     api.datasources
-      .log(connectionId, 100)
+      .log(sourceId, 100)
       .then((d) => setLog(d.log))
       .catch(() => setLog([]))
       .finally(() => setLoading(false))
-  }, [connectionId])
+  }, [sourceId])
 
   if (loading) return <p className="text-sm text-muted">Loading…</p>
   if (log.length === 0) return <p className="text-sm text-muted">No queries executed yet.</p>
@@ -418,6 +412,7 @@ function LogTab({ connectionId }: { connectionId: number }) {
           <Tr>
             <Th>When</Th>
             <Th>Source</Th>
+            <Th>Schema</Th>
             <Th>SQL</Th>
             <Th>Result</Th>
           </Tr>
@@ -438,6 +433,7 @@ function LogTab({ connectionId }: { connectionId: number }) {
               <Td>
                 <Badge>{entry.source}</Badge>
               </Td>
+              <Td className="font-mono text-xs whitespace-nowrap">{entry.schema_name ?? '—'}</Td>
               <Td>
                 <code className="font-mono text-xs break-all">{entry.sql_text}</code>
               </Td>
@@ -464,21 +460,35 @@ function LogTab({ connectionId }: { connectionId: number }) {
 // Page
 // ---------------------------------------------------------------------------
 export default function DataSourceDetail() {
-  const { connectionId } = useParams<{ connectionId: string }>()
-  const id = useMemo(() => Number(connectionId), [connectionId])
-  const [connection, setConnection] = useState<DbConnection | null>(null)
+  const { scopeId } = useParams<{ scopeId: string }>()
+  const ref = useMemo(() => Number(scopeId), [scopeId])
+  // The state carries the resolved scope_id: detail routes are per scope, and a row without
+  // a scope_id must not be mistaken for the id of another connection.
+  const [source, setSource] = useState<(DbConnection & { scope_id: number }) | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     api.datasources
       .list()
       .then((d) => {
-        const found = d.connections.find((c) => c.id === id) ?? null
-        setConnection(found)
-        if (!found) setError('Connection not found')
+        const found = findDataSource(d.connections, ref)
+        if (found && found.scope_id !== undefined) {
+          setSource(found as DbConnection & { scope_id: number })
+          setError(null)
+        } else {
+          setSource(null)
+          setError('Data source not found.')
+        }
       })
-      .catch((e) => setError(String(e)))
-  }, [id])
+      .catch((e) => setError(actionFailedSentence('load the data source', e)))
+  }, [ref])
+
+  const sourceId = source?.scope_id
+  const server = !source
+    ? ''
+    : source.engine === 'sqlite'
+      ? source.database_name ?? ''
+      : `${source.host ?? '?'}${source.port ? `:${source.port}` : ''}`
 
   return (
     <div className="p-4 sm:p-8">
@@ -486,23 +496,64 @@ export default function DataSourceDetail() {
         <Link to="/datasources" className="inline-flex items-center gap-1 text-xs text-muted hover:text-text mb-3">
           <ArrowLeft className="w-3.5 h-3.5" /> Data Sources
         </Link>
-        {error && <p className="text-sm text-danger">{error}</p>}
-        {connection && (
+        {error && <Banner variant="danger" className="break-words">{error}</Banner>}
+        {!source && !error && <p className="text-sm text-muted">Loading…</p>}
+        {source && sourceId !== undefined && (
           <>
             <div className="mb-6">
               <h1 className="flex items-center gap-2">
-                {connection.name}
-                <Badge variant={connection.status === 'ok' ? 'success' : connection.status === 'error' ? 'danger' : 'default'}>
-                  {connection.status}
-                </Badge>
+                {source.alias}
+                <StatusBadge status={source.status} error={source.error_message} />
               </h1>
-              <p className="text-muted text-sm font-mono">
-                {connection.engine} ·{' '}
-                {connection.engine === 'sqlite'
-                  ? connection.database_name
-                  : `${connection.host ?? '?'}${connection.port ? `:${connection.port}` : ''}/${connection.database_name ?? ''}`}
-              </p>
-              {connection.description && <p className="text-sm text-muted mt-1">{connection.description}</p>}
+              {source.description && <p className="text-sm text-muted mt-1">{source.description}</p>}
+            </div>
+            <div className="grid gap-4 md:grid-cols-2 mb-6">
+              <Card className="p-4">
+                <h3 className="text-sm font-semibold mb-2">Connection</h3>
+                <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
+                  <dt className="text-muted">Name</dt>
+                  <dd>{source.name}</dd>
+                  <dt className="text-muted">Engine</dt>
+                  <dd>{source.engine}</dd>
+                  <dt className="text-muted">Server</dt>
+                  <dd className="font-mono break-all">{server}</dd>
+                  {source.engine !== 'sqlite' && source.database_name && (
+                    <>
+                      <dt className="text-muted">Default database</dt>
+                      <dd className="font-mono">{source.database_name}</dd>
+                    </>
+                  )}
+                  <dt className="text-muted">Access</dt>
+                  <dd>{source.ssh_machine_name ? `via ${source.ssh_machine_name}` : 'Direct'}</dd>
+                  {source.restricted !== undefined && (
+                    <>
+                      <dt className="text-muted">Restricted</dt>
+                      <dd>{source.restricted ? 'Yes' : 'No'}</dd>
+                    </>
+                  )}
+                </dl>
+              </Card>
+              <Card className="p-4">
+                <h3 className="text-sm font-semibold mb-2">Scope</h3>
+                <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-sm">
+                  <dt className="text-muted">Alias</dt>
+                  <dd className="font-mono">{source.alias}</dd>
+                  <dt className="text-muted">Scope</dt>
+                  <dd className="font-mono">{source.scope_label}</dd>
+                  <dt className="text-muted">State</dt>
+                  <dd>
+                    {source.scope_inferred ? (
+                      <span title="Verify the scope">
+                        <Badge variant="warning">Inferred</Badge>
+                      </span>
+                    ) : (
+                      <Badge variant="success">Confirmed</Badge>
+                    )}
+                  </dd>
+                  <dt className="text-muted">Annotations</dt>
+                  <dd>{source.annotation_count ?? 0}</dd>
+                </dl>
+              </Card>
             </div>
             <Tabs defaultValue="schema">
               <TabsList>
@@ -511,13 +562,13 @@ export default function DataSourceDetail() {
                 <TabsTrigger value="log">Query Log</TabsTrigger>
               </TabsList>
               <TabsContent value="schema">
-                <SchemaTab connectionId={id} />
+                <SchemaTab sourceId={sourceId} />
               </TabsContent>
               <TabsContent value="console">
-                <ConsoleTab connectionId={id} />
+                <ConsoleTab sourceId={sourceId} />
               </TabsContent>
               <TabsContent value="log">
-                <LogTab connectionId={id} />
+                <LogTab sourceId={sourceId} />
               </TabsContent>
             </Tabs>
           </>

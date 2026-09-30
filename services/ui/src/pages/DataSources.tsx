@@ -1,18 +1,26 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Database, Plus, Unlink } from 'lucide-react'
+import { Database, Pencil, Plus, Unlink } from 'lucide-react'
 import { api, type DbConnection } from '../lib/api'
 import { useAppStore } from '../store'
-import AddFromCatalogDialog from '../components/catalog/AddFromCatalogDialog'
+import ScopeDialog from '../components/datasources/ScopeDialog'
 import RestrictedIcon from '../components/catalog/RestrictedIcon'
 import StatusBadge from '../components/catalog/StatusBadge'
+import { dataSourcePath } from '../lib/dataSources'
 import { canSelectResources, canSelectRestricted } from '../lib/roles'
 import { useOrgRole, useProjectRole } from '../lib/useRoles'
-import { Banner, Button, Card, Table, Tbody, Td, Th, Thead, Tr, useConfirm, useToast } from '../components/ui'
+import { actionFailed, actionFailedSentence } from '../lib/messages'
+import { Badge, Banner, Button, Card, Table, Tbody, Td, Th, Thead, Tr, useConfirm, useToast } from '../components/ui'
 
+// Where the connection's server is: the Scope column says the database.
 function target(c: DbConnection): string {
   if (c.engine === 'sqlite') return c.database_name ?? ''
-  return `${c.host ?? '?'}${c.port ? `:${c.port}` : ''}/${c.database_name ?? ''}`
+  return `${c.host ?? '?'}${c.port ? `:${c.port}` : ''}`
+}
+
+interface DialogState {
+  open: boolean
+  editing: DbConnection | null
 }
 
 export default function DataSources() {
@@ -26,7 +34,7 @@ export default function DataSources() {
   const [catalog, setCatalog] = useState<DbConnection[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [addOpen, setAddOpen] = useState(false)
+  const [dialog, setDialog] = useState<DialogState>({ open: false, editing: null })
 
   const load = useCallback(async () => {
     try {
@@ -34,7 +42,7 @@ export default function DataSources() {
       setConnections(data.connections)
       setError(null)
     } catch (e) {
-      setError(String(e))
+      setError(actionFailedSentence('load the data sources', e))
     } finally {
       setLoading(false)
     }
@@ -47,34 +55,24 @@ export default function DataSources() {
   const openAdd = async () => {
     try {
       setCatalog((await api.catalog.databases.list()).connections)
-      setAddOpen(true)
+      setDialog({ open: true, editing: null })
     } catch (e) {
-      toast.error(String(e))
+      toast.error(actionFailed('load the catalog', e))
     }
   }
 
-  const options = useMemo(
-    () =>
-      catalog.map((c) => ({
-        id: c.id,
-        name: c.name,
-        detail: `${c.engine} ${target(c)}${c.ssh_machine_name ? ` via ${c.ssh_machine_name}` : ''}`,
-        restricted: c.restricted,
-      })),
-    [catalog]
-  )
-  const selectedIds = useMemo(() => new Set(connections.map((c) => c.id)), [connections])
-
   const removeFromProject = async (conn: DbConnection) => {
-    if (projectId == null) return
+    const scopeId = conn.scope_id
+    if (projectId == null || scopeId == null) return
+    const name = conn.alias ?? conn.name
     const ok = await confirm({
-      title: 'Remove from project',
-      message: `Remove «${conn.name}» from this project? It stays in the organization catalog, with its annotations.`,
-      confirmLabel: 'Remove',
-      onConfirm: () => api.projects.deselectResource(projectId, 'databases', conn.id),
+      title: 'Remove data source from project',
+      message: `Remove «${name}» from this project? The connection stays in the organization catalog, with its annotations.`,
+      confirmLabel: 'Remove data source',
+      onConfirm: () => api.projects.removeDatabase(projectId, scopeId),
     })
     if (ok) {
-      toast.success(`Connection "${conn.name}" removed from the project`)
+      toast.success(`Data source "${name}" removed from the project`)
       await load()
     }
   }
@@ -86,12 +84,13 @@ export default function DataSources() {
           <div>
             <h1>Data Sources</h1>
             <p className="text-muted text-sm">
-              Databases this project can query through the db_* MCP tools, chosen from the organization catalog.
+              Databases this project can query through the db_* MCP tools, each on the database and schema the
+              project chose.
             </p>
           </div>
           {canSelect && (
             <Button variant="primary" onClick={openAdd}>
-              <Plus className="w-3.5 h-3.5" /> Add from catalog
+              <Plus className="w-3.5 h-3.5" /> Add data source
             </Button>
           )}
         </div>
@@ -103,7 +102,7 @@ export default function DataSources() {
         ) : connections.length === 0 ? (
           <div className="border border-dashed border-border p-8 text-center text-sm text-muted">
             <Database className="w-6 h-6 mx-auto mb-2 opacity-50" />
-            No databases in this project yet. Add them from the organization catalog.
+            No databases in this project yet. Add one from the organization catalog and choose its scope.
           </div>
         ) : (
           <Card className="overflow-x-auto">
@@ -111,22 +110,34 @@ export default function DataSources() {
               <Thead>
                 <Tr>
                   <Th>Name</Th>
+                  <Th>Scope</Th>
                   <Th>Engine</Th>
                   <Th>Target</Th>
                   <Th>Status</Th>
                   <Th>Annotations</Th>
-                  {canSelect && <Th className="w-16" />}
+                  {canSelect && <Th className="w-24" />}
                 </Tr>
               </Thead>
               <Tbody>
                 {connections.map((c) => (
-                  <Tr key={c.id}>
+                  <Tr key={c.scope_id ?? c.id}>
                     <Td>
-                      <Link to={`/datasources/${c.id}`} className="text-accent hover:underline font-medium">
-                        {c.name}
+                      <Link to={dataSourcePath(c)} className="text-accent hover:underline font-medium">
+                        {c.alias ?? c.name}
                       </Link>
                       {c.restricted && <RestrictedIcon />}
+                      {c.alias && c.alias !== c.name && <p className="text-xs text-muted mt-0.5">{c.name}</p>}
                       {c.description && <p className="text-xs text-muted mt-0.5 max-w-xs truncate">{c.description}</p>}
+                    </Td>
+                    <Td>
+                      <span className="flex items-center gap-2">
+                        <span className="font-mono text-xs">{c.scope_label ?? ''}</span>
+                        {c.scope_inferred && (
+                          <span title="Verify the scope">
+                            <Badge variant="warning">Inferred</Badge>
+                          </span>
+                        )}
+                      </span>
                     </Td>
                     <Td className="text-xs font-mono">{c.engine}</Td>
                     <Td className="text-xs text-muted font-mono">
@@ -139,9 +150,26 @@ export default function DataSources() {
                     <Td className="text-xs text-muted">{c.annotation_count ?? 0}</Td>
                     {canSelect && (
                       <Td>
-                        <Button size="sm" variant="ghost" onClick={() => removeFromProject(c)} title="Remove from project" aria-label="Remove from project">
-                          <Unlink className="w-3.5 h-3.5" />
-                        </Button>
+                        <div className="flex items-center gap-1 justify-end">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setDialog({ open: true, editing: c })}
+                            title="Change scope"
+                            aria-label="Change scope"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => removeFromProject(c)}
+                            title="Remove data source from project"
+                            aria-label="Remove data source from project"
+                          >
+                            <Unlink className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
                       </Td>
                     )}
                   </Tr>
@@ -152,16 +180,15 @@ export default function DataSources() {
         )}
 
         {projectId != null && (
-          <AddFromCatalogDialog
-            open={addOpen}
-            title="Add databases"
-            kind="databases"
+          <ScopeDialog
+            open={dialog.open}
             projectId={projectId}
-            options={options}
-            selectedIds={selectedIds}
+            catalog={catalog}
+            projectScopes={connections}
+            editing={dialog.editing}
             allowRestricted={canSelectRestricted(orgRole)}
-            onClose={() => setAddOpen(false)}
-            onAdded={load}
+            onClose={() => setDialog({ open: false, editing: null })}
+            onSaved={load}
           />
         )}
       </div>
