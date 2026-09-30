@@ -113,8 +113,8 @@ def test_mark_pending_secret_updates_status(monkeypatch):
         return FakePool()
 
     monkeypatch.setattr(ds_service, "get_pool", fake_pool)
-    asyncio.run(ds_service.mark_pending_secret(1, 4, 9))
+    asyncio.run(ds_service.mark_pending_secret(1, 9))
 
     query, args = executed[0]
     assert "UPDATE db_connections" in query and "pending_secret" in query
-    assert args == (1, 4, 9)
+    assert args == (1, 9)

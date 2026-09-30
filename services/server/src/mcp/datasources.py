@@ -4,9 +4,11 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from ..catalog import machines, selections
 from ..datasources import service
 from .server import mcp
-from .permissions import requires_permission
+from .permissions import PermissionDenied, requires_permission
+from .project_access import selection_rights
 from .source_links import ui_link
 
 logger = logging.getLogger(__name__)
@@ -324,53 +326,76 @@ async def db_add(
     database_name: Optional[str] = None,
     username: Optional[str] = None,
     description: Optional[str] = None,
+    ssh_machine: Optional[str] = None,
 ) -> dict:
-    """Register a database connection for the active project, without its password.
+    """Register a database in the organization catalog and select it for the active project.
 
-    The connection is created in 'pending_secret' state: a person adds the
-    password from the web UI before it can be queried. This tool takes no
-    credential of any kind.
+    A new connection has no password ('pending_secret'): a person adds it from
+    the Catalog page before it can be queried. When the same database is
+    already registered through the same route (machine, host, port, database),
+    the existing connection is selected instead of creating a copy. This tool
+    takes no credential.
 
     Args:
-        name: unique connection name within the project.
-        engine: database engine, e.g. postgres or mysql.
-        host: database host as reachable from the server.
+        name: connection name, unique in the organization.
+        engine: database engine: postgresql, mysql, mariadb or sqlite.
+        host: database host as reachable from the server, or from the machine.
         port: database port.
         database_name: database (schema) to connect to.
         username: user the connection authenticates as.
         description: optional free-text description.
+        ssh_machine: name of a catalog machine to tunnel through.
 
     Returns:
-        dict with the created connection and where to add its password.
+        dict with the connection and whether it was created.
     """
-    from .context import require_project_id, resolve_org_id
+    from .context import get_current_user_id, require_project_id, resolve_org_id
 
     org_id = await resolve_org_id()
     project_id = await require_project_id()
-    data = {
-        "name": name,
-        "engine": engine,
-        "host": host,
-        "port": port,
-        "database_name": database_name,
-        "username": username,
-        "description": description,
-        "options": {},
-    }
+    # Registrare equivale a selezionare: valgono gli stessi diritti di resource_select.
+    can_select, can_select_restricted = await selection_rights(org_id, project_id)
+    if not can_select:
+        raise PermissionDenied("Adding a database to this project requires the member role on this project")
     try:
-        connection = await service.create_connection(org_id, project_id, data)
+        machine_id = None
+        if ssh_machine:
+            machine = await machines.get_machine_by_name(org_id, ssh_machine)
+            if machine is None:
+                return {"status": "error", "error": f"Machine '{ssh_machine}' is not in the catalog"}
+            machine_id = machine["id"]
+        connection = await service.find_connection(org_id, machine_id, host, port, database_name)
+        created = connection is None
+        if created:
+            connection = await service.create_connection(org_id, {
+                "name": name,
+                "engine": engine,
+                "host": host,
+                "port": port,
+                "database_name": database_name,
+                "username": username,
+                "description": description,
+                "options": {},
+                "ssh_machine_id": machine_id,
+            })
+            await service.mark_pending_secret(org_id, connection["id"])
+            connection = {**connection, "status": "pending_secret"}
+        await selections.select_resource(
+            org_id, project_id, "databases", connection["id"], get_current_user_id(),
+            can_select_restricted,
+        )
+    except selections.RestrictedResourceError as exc:
+        raise PermissionDenied(f"'{exc}' is restricted: only an organization admin can add it to a project")
     except ValueError as exc:
         return {"status": "error", "error": str(exc)}
     except Exception as exc:  # noqa: BLE001 — vincoli di unicità e errori del driver
         return {"status": "error", "error": str(exc)}
 
-    await service.mark_pending_secret(org_id, project_id, connection["id"])
-    return {
-        "status": "ok",
-        "connection": {**connection, "status": "pending_secret"},
-        "next_step": (
-            f"Connection '{name}' has no password yet. Add it from the Datasources "
-            "page in the web UI; queries fail until then."
-        ),
-        "ui_url": ui_link("/datasources"),
-    }
+    result = {"status": "ok", "created": created, "connection": connection}
+    if created:
+        result["next_step"] = (
+            f"Connection '{name}' has no password yet. Add it from the Catalog page "
+            "in the web UI; queries fail until then."
+        )
+        result["ui_url"] = ui_link("/catalog")
+    return result

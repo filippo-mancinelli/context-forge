@@ -4,7 +4,7 @@ from src.db import DDL
 CONTENT_TABLES = (
     "repos", "repo_chunks", "kb_documents", "kb_chunks",
     "web_sites", "web_pages", "web_chunks",
-    "db_connections", "db_query_log",
+    "db_query_log",
     "api_contracts", "api_endpoints",
     "chat_sessions", "jobs", "index_requests", "chunk_annotations",
     "mcp_api_keys",

@@ -1,10 +1,10 @@
 """REST API routes for external database connections (data sources)."""
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from ...datasources import service
 from ...datasources.engines import SUPPORTED_ENGINES
@@ -13,29 +13,6 @@ from ...datasources.validator import QueryValidationError
 from ..deps import ActiveProject, get_active_project, require_project_role
 
 router = APIRouter(prefix="/datasources", tags=["datasources"])
-
-
-class ConnectionRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
-    engine: str
-    host: Optional[str] = None
-    port: Optional[int] = None
-    database_name: Optional[str] = None
-    username: Optional[str] = None
-    # Write-only; empty on update means "keep the stored password".
-    password: Optional[str] = None
-    options: dict[str, Any] = Field(default_factory=dict)
-    description: Optional[str] = None
-    # Accesso via bastion SSH. host/port sopra sono l'indirizzo del DB come
-    # visto dal bastion. I segreti SSH sono write-only: vuoto in update =
-    # "mantieni quello memorizzato".
-    ssh_enabled: bool = False
-    ssh_host: Optional[str] = None
-    ssh_port: Optional[int] = 22
-    ssh_username: Optional[str] = None
-    ssh_auth_method: Optional[str] = None  # 'key' | 'password'
-    ssh_password: Optional[str] = None
-    ssh_private_key: Optional[str] = None
 
 
 class AnnotationItem(BaseModel):
@@ -62,60 +39,6 @@ class ExecuteRequest(BaseModel):
 async def list_connections(org: ActiveProject = Depends(get_active_project)):
     connections = await service.list_connections(org.org_id, org.project_id)
     return {"connections": connections, "engines": list(SUPPORTED_ENGINES)}
-
-
-@router.post("")
-async def create_connection(
-    req: ConnectionRequest, org: ActiveProject = Depends(require_project_role("member"))
-):
-    try:
-        connection = await service.create_connection(org.org_id, org.project_id, req.model_dump())
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:  # noqa: BLE001
-        if "db_connections_project_name_key" in str(e):
-            raise HTTPException(status_code=400, detail=f"Connection '{req.name}' already exists")
-        raise HTTPException(status_code=500, detail=str(e))
-    return {"status": "ok", "connection": connection}
-
-
-@router.put("/{connection_id}")
-async def update_connection(
-    connection_id: int,
-    req: ConnectionRequest,
-    org: ActiveProject = Depends(require_project_role("member")),
-):
-    try:
-        connection = await service.update_connection(
-            org.org_id, org.project_id, connection_id, req.model_dump()
-        )
-    except ConnectionNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"status": "ok", "connection": connection}
-
-
-@router.delete("/{connection_id}")
-async def delete_connection(
-    connection_id: int, org: ActiveProject = Depends(require_project_role("member"))
-):
-    try:
-        await service.delete_connection(org.org_id, org.project_id, connection_id)
-    except ConnectionNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    return {"status": "ok"}
-
-
-@router.post("/{connection_id}/test")
-async def test_connection(
-    connection_id: int, org: ActiveProject = Depends(require_project_role("member"))
-):
-    try:
-        result = await service.test_connection(org.org_id, org.project_id, connection_id)
-    except ConnectionNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    return result
 
 
 @router.get("/{connection_id}/schema")

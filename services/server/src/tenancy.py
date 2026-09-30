@@ -282,14 +282,17 @@ async def ensure_tenant_storage() -> Optional[int]:
 
     Idempotent. Returns the default organization id, or None pre-setup.
     """
-    default_org_id = await ensure_default_org()
-    if default_org_id is None:
-        return None
-    from .db import apply_project_migration, apply_settings_overrides_migration, apply_tenant_repo_migration
+    from .catalog.migration import apply_catalog_migration
 
-    await apply_tenant_repo_migration(default_org_id)
-    await apply_project_migration()
-    await apply_settings_overrides_migration()
+    default_org_id = await ensure_default_org()
+    if default_org_id is not None:
+        from .db import apply_project_migration, apply_settings_overrides_migration, apply_tenant_repo_migration
+
+        await apply_tenant_repo_migration(default_org_id)
+        await apply_project_migration()
+        await apply_settings_overrides_migration()
+    # The catalog conversion needs no org: it also runs before setup.
+    await apply_catalog_migration()
     return default_org_id
 
 

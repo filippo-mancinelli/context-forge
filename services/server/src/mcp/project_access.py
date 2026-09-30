@@ -1,8 +1,11 @@
-"""Risoluzione dei progetti accessibili all'identità MCP corrente.
+"""Risoluzione dei progetti accessibili all'identità MCP corrente e dei diritti
+che vi ha.
 
 Condiviso fra i tool di selezione (``project_tools``) e quelli di gestione
 (``project_admin``): entrambi devono partire dallo stesso elenco, altrimenti si
 potrebbe rinominare o cancellare un progetto che non si è autorizzati a vedere.
+Lo stesso vale per chi sceglie una risorsa del catalogo: i tool del catalogo e
+quelli che registrano una sorgente calcolano i diritti nello stesso modo.
 """
 from __future__ import annotations
 
@@ -11,6 +14,7 @@ from typing import Optional
 from .context import (
     get_current_allowed_projects,
     get_current_org_id,
+    get_current_principal,
     get_current_user_id,
 )
 
@@ -62,6 +66,27 @@ async def accessible_projects() -> list[dict]:
         if proj is not None and proj["org_id"] == org_id:
             out.append({**proj, "role": "api-key"})
     return out
+
+
+async def selection_rights(org_id: int, project_id: int) -> tuple[bool, bool]:
+    """(può selezionare, può selezionare risorse riservate) per l'identità corrente.
+
+    Una API key è già vincolata ai progetti su cui è stata emessa: seleziona le
+    risorse normali, mai quelle riservate, che richiedono una persona admin.
+    """
+    from ..projects import resolve_project_access
+    from ..tenancy import get_membership_role, role_at_least
+
+    principal = get_current_principal()
+    if principal.kind in ("api_key", "anonymous"):
+        # An API key is already bound to its projects; anonymous means auth is disabled.
+        return True, False
+    user_id = get_current_user_id()
+    if principal.kind != "user" or user_id is None:
+        return False, False
+    project_role = await resolve_project_access(org_id, user_id, project_id)
+    org_role = await get_membership_role(org_id, user_id)
+    return role_at_least(project_role, "member"), role_at_least(org_role, "admin")
 
 
 async def resolve_accessible(project: str) -> Optional[dict]:

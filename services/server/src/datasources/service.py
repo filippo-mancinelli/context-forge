@@ -32,10 +32,20 @@ QUERY_TIMEOUT_SECONDS = 15
 MAX_ROWS_HARD_CAP = 500
 MAX_CELL_CHARS = 2000
 
-_CONN_FIELDS = (
-    "id, org_id, project_id, name, engine, host, port, database_name, username, password_enc, "
-    "options, description, status, error_message, last_checked_at, created_at, updated_at, "
-    "ssh_enabled, ssh_host, ssh_port, ssh_username, ssh_auth_method, ssh_password_enc, ssh_private_key_enc"
+_CONN_SELECT = (
+    "SELECT c.id, c.org_id, c.name, c.engine, c.host, c.port, c.database_name, c.username, "
+    "c.password_enc, c.options, c.description, c.restricted, c.status, c.error_message, "
+    "c.last_checked_at, c.created_at, c.updated_at, c.ssh_machine_id, "
+    "(c.ssh_machine_id IS NOT NULL) AS ssh_enabled, m.name AS ssh_machine_name, "
+    "m.host AS ssh_host, m.port AS ssh_port, m.username AS ssh_username, "
+    "m.auth_method AS ssh_auth_method, m.password_enc AS ssh_password_enc, "
+    "m.private_key_enc AS ssh_private_key_enc "
+    "FROM db_connections c LEFT JOIN machines m ON m.id = c.ssh_machine_id"
+)
+# Vista del progetto: $1 = org, $2 = progetto.
+_PROJECT_SELECT = (
+    f"{_CONN_SELECT} JOIN project_db_connections pdc "
+    "ON pdc.db_connection_id = c.id AND pdc.project_id = $2"
 )
 
 
@@ -45,6 +55,10 @@ class ConnectionNotFoundError(Exception):
 
 class ConnectionAmbiguousError(Exception):
     pass
+
+
+class ConnectionNotSelectedError(ConnectionNotFoundError):
+    """La connessione esiste nel catalogo ma il progetto non l'ha selezionata."""
 
 
 _LIST_SENTINELS = frozenset({"__list__", "__all__", "list", "all", "*"})
@@ -99,23 +113,27 @@ async def resolve_connection(
     min_score: float = 35.0,
 ) -> dict[str, Any]:
     """Pick the best-matching connection for a hint and optional conversation context."""
-    connections = await list_connections(org_id, project_id)
-    if not connections:
-        raise ConnectionNotFoundError("No database connections configured")
-
     hints = [h.strip() for h in ([hint] if hint else []) + (context_hints or []) if h and h.strip()]
-    if not hints:
-        raise ConnectionNotFoundError(
-            "No connection specified. Call db_list() or get_database_schema with no arguments."
-        )
 
+    # Un nome esatto del catalogo non selezionato dal progetto va segnalato come
+    # tale prima di qualsiasi ricerca approssimata.
     for h in hints:
         if is_list_sentinel(h):
             continue
         try:
             return await get_connection(org_id, project_id, h)
+        except ConnectionNotSelectedError:
+            raise
         except ConnectionNotFoundError:
             pass
+
+    connections = await list_connections(org_id, project_id)
+    if not connections:
+        raise ConnectionNotFoundError("No database connections configured")
+    if not hints:
+        raise ConnectionNotFoundError(
+            "No connection specified. Call db_list() or get_database_schema with no arguments."
+        )
 
     scored: list[tuple[float, dict[str, Any]]] = []
     for conn in connections:
@@ -157,25 +175,18 @@ def _record_to_dict(row: Any, include_secret: bool = False) -> dict[str, Any]:
 
 
 async def list_connections(org_id: int, project_id: int) -> list[dict[str, Any]]:
+    """Connessioni selezionate dal progetto."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            f"SELECT {_CONN_FIELDS} FROM db_connections WHERE org_id=$1 AND project_id=$2 ORDER BY name",
-            org_id,
-            project_id,
+            f"{_PROJECT_SELECT} WHERE c.org_id = $1 ORDER BY lower(c.name)", org_id, project_id
         )
         counts = await conn.fetch(
-            """
-            SELECT c.id, count(a.id) AS annotation_count
-            FROM db_connections c
-            LEFT JOIN db_annotations a ON a.connection_id = c.id
-            WHERE c.org_id = $1 AND c.project_id = $2
-            GROUP BY c.id
-            """,
-            org_id,
-            project_id,
+            "SELECT connection_id, count(*) AS annotation_count FROM db_annotations "
+            "WHERE connection_id = ANY($1::bigint[]) GROUP BY connection_id",
+            [r["id"] for r in rows],
         )
-    count_map = {r["id"]: r["annotation_count"] for r in counts}
+    count_map = {r["connection_id"]: r["annotation_count"] for r in counts}
     out = []
     for r in rows:
         d = _record_to_dict(r)
@@ -187,50 +198,104 @@ async def list_connections(org_id: int, project_id: int) -> list[dict[str, Any]]
 async def get_connection(
     org_id: int, project_id: int, ref: int | str, include_secret: bool = False
 ) -> dict[str, Any]:
-    """Fetch a connection by id (int) or name (str) within the organization's project."""
+    """Connessione selezionata dal progetto, per id o per nome."""
+    by_id = isinstance(ref, int) or (isinstance(ref, str) and ref.isdigit())
+    column = "c.id" if by_id else "c.name"
+    value: Any = int(ref) if by_id else ref
     pool = await get_pool()
     async with pool.acquire() as conn:
-        if isinstance(ref, int) or (isinstance(ref, str) and ref.isdigit()):
-            row = await conn.fetchrow(
-                f"SELECT {_CONN_FIELDS} FROM db_connections WHERE org_id=$1 AND project_id=$2 AND id=$3",
-                org_id,
-                project_id,
-                int(ref),
+        row = await conn.fetchrow(
+            f"{_PROJECT_SELECT} WHERE c.org_id = $1 AND {column} = $3", org_id, project_id, value
+        )
+        in_catalog = None
+        if row is None:
+            in_catalog = await conn.fetchval(
+                f"SELECT 1 FROM db_connections c WHERE c.org_id = $1 AND {column} = $2", org_id, value
             )
-        else:
-            row = await conn.fetchrow(
-                f"SELECT {_CONN_FIELDS} FROM db_connections WHERE org_id=$1 AND project_id=$2 AND name=$3",
-                org_id,
-                project_id,
-                ref,
-            )
+    if row is not None:
+        return _record_to_dict(row, include_secret=include_secret)
+    if in_catalog:
+        raise ConnectionNotSelectedError(
+            f"Database connection '{ref}' is not available in this project. "
+            "Select it from the catalog first (catalog_list, resource_select)."
+        )
+    connections = await list_connections(org_id, project_id)
+    raise ConnectionNotFoundError(_connection_not_found_message(ref, connections))
+
+
+async def list_catalog_connections(org_id: int) -> list[dict[str, Any]]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"SELECT q.*, (SELECT count(*) FROM project_db_connections p WHERE p.db_connection_id = q.id) "
+            f"AS project_count FROM ({_CONN_SELECT} WHERE c.org_id = $1) q ORDER BY lower(q.name)",
+            org_id,
+        )
+    return [_record_to_dict(r) for r in rows]
+
+
+async def get_catalog_connection(
+    org_id: int, connection_id: int, include_secret: bool = False
+) -> dict[str, Any]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"{_CONN_SELECT} WHERE c.org_id = $1 AND c.id = $2", org_id, connection_id
+        )
     if row is None:
-        connections = await list_connections(org_id, project_id)
-        raise ConnectionNotFoundError(_connection_not_found_message(ref, connections))
+        raise ConnectionNotFoundError(f"Database connection '{connection_id}' not found")
     return _record_to_dict(row, include_secret=include_secret)
 
 
-async def create_connection(org_id: int, project_id: int, data: dict[str, Any]) -> dict[str, Any]:
+async def find_connection(
+    org_id: int,
+    ssh_machine_id: Optional[int],
+    host: Optional[str],
+    port: Optional[int],
+    database_name: Optional[str],
+) -> Optional[dict[str, Any]]:
+    """Connessione già censita verso lo stesso database attraverso la stessa via."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"""{_CONN_SELECT}
+             WHERE c.org_id = $1
+               AND c.ssh_machine_id IS NOT DISTINCT FROM $2
+               AND c.host IS NOT DISTINCT FROM $3
+               AND c.port IS NOT DISTINCT FROM $4
+               AND c.database_name IS NOT DISTINCT FROM $5
+             ORDER BY c.id LIMIT 1""",
+            org_id, ssh_machine_id, host, port, database_name,
+        )
+    return _record_to_dict(row) if row else None
+
+
+async def _check_payload(conn, org_id: int, data: dict[str, Any]) -> None:
     if data.get("engine") not in engines.SUPPORTED_ENGINES:
         raise ValueError(
             f"Unsupported engine '{data.get('engine')}'. "
             f"Supported: {', '.join(engines.SUPPORTED_ENGINES)}"
         )
+    machine_id = data.get("ssh_machine_id")
+    if machine_id is not None and not await conn.fetchval(
+        "SELECT 1 FROM machines WHERE id = $1 AND org_id = $2", machine_id, org_id
+    ):
+        raise ValueError("Machine not found in this organization")
+
+
+async def create_connection(org_id: int, data: dict[str, Any]) -> dict[str, Any]:
     pool = await get_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            f"""
+        await _check_payload(conn, org_id, data)
+        connection_id = await conn.fetchval(
+            """
             INSERT INTO db_connections
-                (org_id, project_id, name, engine, host, port, database_name, username,
-                 password_enc, options, description,
-                 ssh_enabled, ssh_host, ssh_port, ssh_username, ssh_auth_method,
-                 ssh_password_enc, ssh_private_key_enc)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11,
-                    $12, $13, $14, $15, $16, $17, $18)
-            RETURNING {_CONN_FIELDS}
+                (org_id, name, engine, host, port, database_name, username, password_enc,
+                 options, description, ssh_machine_id, restricted)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12)
+            RETURNING id
             """,
             org_id,
-            project_id,
             data["name"],
             data["engine"],
             data.get("host"),
@@ -240,53 +305,30 @@ async def create_connection(org_id: int, project_id: int, data: dict[str, Any]) 
             encrypt_secret(data.get("password") or ""),
             json.dumps(data.get("options") or {}),
             data.get("description"),
-            bool(data.get("ssh_enabled")),
-            data.get("ssh_host"),
-            data.get("ssh_port") or 22,
-            data.get("ssh_username"),
-            data.get("ssh_auth_method"),
-            encrypt_secret(data.get("ssh_password") or ""),
-            encrypt_secret(data.get("ssh_private_key") or ""),
+            data.get("ssh_machine_id"),
+            bool(data.get("restricted")),
         )
-    return _record_to_dict(row)
+    return await get_catalog_connection(org_id, connection_id)
 
 
-async def update_connection(
-    org_id: int, project_id: int, connection_id: int, data: dict[str, Any]
-) -> dict[str, Any]:
-    existing = await get_connection(org_id, project_id, connection_id, include_secret=True)
-    if data.get("engine") not in engines.SUPPORTED_ENGINES:
-        raise ValueError(f"Unsupported engine '{data.get('engine')}'")
-
-    # Empty secret in the payload means "keep the stored one".
-    if data.get("password"):
-        password_enc = encrypt_secret(data["password"])
-    else:
-        password_enc = existing.get("password_enc") or ""
-    if data.get("ssh_password"):
-        ssh_password_enc = encrypt_secret(data["ssh_password"])
-    else:
-        ssh_password_enc = existing.get("ssh_password_enc") or ""
-    if data.get("ssh_private_key"):
-        ssh_private_key_enc = encrypt_secret(data["ssh_private_key"])
-    else:
-        ssh_private_key_enc = existing.get("ssh_private_key_enc") or ""
-
+async def update_connection(org_id: int, connection_id: int, data: dict[str, Any]) -> dict[str, Any]:
+    existing = await get_catalog_connection(org_id, connection_id, include_secret=True)
+    # Password vuota nel payload = mantieni quella memorizzata.
+    password_enc = encrypt_secret(data["password"]) if data.get("password") else existing.get("password_enc") or ""
     pool = await get_pool()
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            f"""
+        await _check_payload(conn, org_id, data)
+        updated = await conn.fetchval(
+            """
             UPDATE db_connections
-            SET name=$4, engine=$5, host=$6, port=$7, database_name=$8, username=$9,
-                password_enc=$10, options=$11::jsonb, description=$12,
-                ssh_enabled=$13, ssh_host=$14, ssh_port=$15, ssh_username=$16,
-                ssh_auth_method=$17, ssh_password_enc=$18, ssh_private_key_enc=$19,
-                status='unknown', error_message=NULL, updated_at=NOW()
-            WHERE org_id=$1 AND project_id=$2 AND id=$3
-            RETURNING {_CONN_FIELDS}
+               SET name = $3, engine = $4, host = $5, port = $6, database_name = $7, username = $8,
+                   password_enc = $9, options = $10::jsonb, description = $11,
+                   ssh_machine_id = $12, restricted = $13,
+                   status = 'unknown', error_message = NULL, updated_at = NOW()
+             WHERE org_id = $1 AND id = $2
+            RETURNING id
             """,
             org_id,
-            project_id,
             connection_id,
             data["name"],
             data["engine"],
@@ -297,28 +339,20 @@ async def update_connection(
             password_enc,
             json.dumps(data.get("options") or {}),
             data.get("description"),
-            bool(data.get("ssh_enabled")),
-            data.get("ssh_host"),
-            data.get("ssh_port") or 22,
-            data.get("ssh_username"),
-            data.get("ssh_auth_method"),
-            ssh_password_enc,
-            ssh_private_key_enc,
+            data.get("ssh_machine_id"),
+            bool(data.get("restricted")),
         )
-    if row is None:
+    if updated is None:
         raise ConnectionNotFoundError(f"Database connection '{connection_id}' not found")
     engines.dispose_engine(connection_id)
-    return _record_to_dict(row)
+    return await get_catalog_connection(org_id, connection_id)
 
 
-async def delete_connection(org_id: int, project_id: int, connection_id: int) -> None:
+async def delete_connection(org_id: int, connection_id: int) -> None:
     pool = await get_pool()
     async with pool.acquire() as conn:
         deleted = await conn.fetchval(
-            "DELETE FROM db_connections WHERE org_id=$1 AND project_id=$2 AND id=$3 RETURNING id",
-            org_id,
-            project_id,
-            connection_id,
+            "DELETE FROM db_connections WHERE org_id = $1 AND id = $2 RETURNING id", org_id, connection_id
         )
     if deleted is None:
         raise ConnectionNotFoundError(f"Database connection '{connection_id}' not found")
@@ -383,14 +417,14 @@ async def _probe_alternate_host(record: dict[str, Any], host: str) -> bool:
         return False
 
 
-async def test_connection(org_id: int, project_id: int, connection_id: int) -> dict[str, Any]:
+async def test_connection(org_id: int, connection_id: int) -> dict[str, Any]:
     """Try to connect; persist the resulting status on the connection row.
 
     When the server runs inside a container and a loopback host fails, it also
     probes ``host.docker.internal`` (the host machine, where sibling containers
     publish their ports) and returns it as ``suggested_host`` if reachable.
     """
-    record = await get_connection(org_id, project_id, connection_id, include_secret=True)
+    record = await get_catalog_connection(org_id, connection_id, include_secret=True)
     status, error, suggested_host = "ok", None, None
     try:
         engine = await _resolve_engine(record)
@@ -399,7 +433,7 @@ async def test_connection(org_id: int, project_id: int, connection_id: int) -> d
         status, error = "error", str(e)
 
     host = (record.get("host") or "").strip().lower()
-    if status == "error" and host in _LOOPBACK_HOSTS and _running_in_container():
+    if status == "error" and host in _LOOPBACK_HOSTS and _running_in_container() and not record.get("ssh_enabled"):
         if await _probe_alternate_host(record, _DOCKER_HOST_ALIAS):
             suggested_host = _DOCKER_HOST_ALIAS
             error = (
@@ -411,13 +445,9 @@ async def test_connection(org_id: int, project_id: int, connection_id: int) -> d
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE db_connections SET status=$4, error_message=$5, last_checked_at=NOW() "
-            "WHERE org_id=$1 AND project_id=$2 AND id=$3",
-            org_id,
-            project_id,
-            connection_id,
-            status,
-            error,
+            "UPDATE db_connections SET status = $3, error_message = $4, last_checked_at = NOW() "
+            "WHERE org_id = $1 AND id = $2",
+            org_id, connection_id, status, error,
         )
     return {"status": status, "error": error, "suggested_host": suggested_host}
 
@@ -738,19 +768,18 @@ async def query_log(
     return out
 
 
-async def mark_pending_secret(org_id: int, project_id: int, connection_id: int) -> None:
-    """Segna la connessione come creata ma priva di credenziale."""
+async def mark_pending_secret(org_id: int, connection_id: int) -> None:
+    """Segna la connessione come censita ma priva di credenziale."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         await conn.execute(
             """
             UPDATE db_connections
-               SET status='pending_secret',
-                   error_message='Credential not set: add the password from the UI',
-                   updated_at=NOW()
-             WHERE org_id=$1 AND project_id=$2 AND id=$3
+               SET status = 'pending_secret',
+                   error_message = 'Credential not set: add the password from the Catalog page',
+                   updated_at = NOW()
+             WHERE org_id = $1 AND id = $2
             """,
             org_id,
-            project_id,
             connection_id,
         )

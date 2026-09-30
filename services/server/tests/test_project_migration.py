@@ -37,3 +37,10 @@ def test_mcp_api_keys_project_id_stays_nullable():
         "mcp_api_keys non deve stare in content_tables: il backfill e lo "
         "SET NOT NULL clobbererebbero le key org-wide (project_id NULL)"
     )
+
+
+def test_ensure_tenant_storage_runs_the_catalog_migration_after_projects():
+    from src import tenancy
+
+    source = inspect.getsource(tenancy.ensure_tenant_storage)
+    assert source.index("apply_project_migration()") < source.index("apply_catalog_migration()")

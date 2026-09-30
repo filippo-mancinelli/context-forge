@@ -774,7 +774,7 @@ async def apply_project_migration() -> None:
     content_tables = (
         "repos", "repo_chunks", "kb_documents", "kb_chunks",
         "web_sites", "web_pages", "web_chunks",
-        "db_connections", "db_query_log",
+        "db_query_log",
         "api_contracts", "api_endpoints",
         "chat_sessions", "jobs", "index_requests", "chunk_annotations",
     )
@@ -851,22 +851,6 @@ async def apply_project_migration() -> None:
                         ALTER TABLE web_sites DROP CONSTRAINT IF EXISTS web_sites_org_id_root_url_key;
                         ALTER TABLE web_sites
                             ADD CONSTRAINT web_sites_project_root_url_key UNIQUE (project_id, root_url);
-                    END IF;
-                END $$;
-                """
-            )
-            # Same swap for managed database connections: a connection name can
-            # be reused across projects of the same organization.
-            await conn.execute(
-                """
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM pg_constraint WHERE conname = 'db_connections_project_name_key'
-                    ) THEN
-                        ALTER TABLE db_connections DROP CONSTRAINT IF EXISTS db_connections_org_id_name_key;
-                        ALTER TABLE db_connections
-                            ADD CONSTRAINT db_connections_project_name_key UNIQUE (project_id, name);
                     END IF;
                 END $$;
                 """

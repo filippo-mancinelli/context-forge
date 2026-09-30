@@ -31,6 +31,8 @@ from .routes import ci as ci_routes
 from .routes import telegram as telegram_routes
 from .routes import environments as environments_routes
 from .routes import projects as projects_routes
+from .routes import catalog as catalog_routes
+from .routes import project_resources as project_resources_routes
 from .routes import health as health_routes
 
 api = FastAPI(
@@ -100,6 +102,8 @@ api.include_router(ci_routes.router, prefix="/api")
 api.include_router(telegram_routes.router, prefix="/api")
 api.include_router(environments_routes.router, prefix="/api")
 api.include_router(projects_routes.router, prefix="/api")
+api.include_router(catalog_routes.router, prefix="/api")
+api.include_router(project_resources_routes.router, prefix="/api")
 api.include_router(health_routes.router, prefix="/api")
 
 

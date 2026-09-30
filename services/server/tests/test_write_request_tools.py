@@ -190,10 +190,11 @@ def test_db_execute_proposal_scrubs_the_explain_error(monkeypatch):
 # ===== ssh_write_file =====
 
 def _source_record():
-    return {"id": 3, "org_id": 1, "project_id": 2, "name": "web1",
+    # Catalog shape: the folder belongs to the org, the project comes from the MCP context.
+    return {"id": 3, "org_id": 1, "name": "web1", "machine_id": 5, "machine_name": "u@h",
             "root_path": "/etc/app", "host": "h", "port": 22, "username": "u",
             "auth_method": "password", "password_enc": "", "private_key_enc": "",
-            "include_globs": None, "exclude_globs": None}
+            "include_globs": None, "exclude_globs": None, "restricted": False}
 
 
 def test_ssh_write_file_direct_path_is_unchanged(monkeypatch):
@@ -243,6 +244,8 @@ def test_ssh_write_file_without_ssh_write_creates_a_request(monkeypatch):
     monkeypatch.setattr(client, "write_file", no_write)
     monkeypatch.setattr(write_previews, "file_preview", fake_file_preview)
     monkeypatch.setattr(wr_service, "create", fake_create)
+    set_current_org_id(1)
+    set_current_project_id(2)
     set_current_permissions(frozenset({"context-write"}))
 
     out = asyncio.run(_underlying(mcp_ssh.ssh_write_file)(
@@ -310,6 +313,8 @@ def test_ssh_write_file_proposal_scrubs_the_read_error(monkeypatch):
     monkeypatch.setattr(mcp_ssh, "_resolve", fake_resolve)
     monkeypatch.setattr(write_previews, "file_preview", fake_file_preview)
     monkeypatch.setattr(wr_service, "create", fake_create)
+    set_current_org_id(1)
+    set_current_project_id(2)
     set_current_permissions(frozenset({"context-write"}))
 
     out = asyncio.run(_underlying(mcp_ssh.ssh_write_file)(

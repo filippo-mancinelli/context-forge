@@ -45,7 +45,47 @@ def run_db(fn: Callable[[], Awaitable[T]]) -> T:
 
 async def prepare_schema() -> None:
     """Full application schema on an empty database."""
+    from src.catalog.migration import apply_catalog_migration
+
     await db.init_db()
+    await apply_catalog_migration()
+
+
+async def make_legacy_schema() -> None:
+    """Bring SSH folders and databases back to the project-owned shape.
+
+    Used to exercise the conversion on a database created with the current schema.
+    """
+    await execute("DROP INDEX IF EXISTS ssh_sources_org_lower_name_idx")
+    await execute("DROP INDEX IF EXISTS db_connections_org_lower_name_idx")
+    await execute(
+        """
+        ALTER TABLE ssh_sources
+            ALTER COLUMN machine_id DROP NOT NULL,
+            ADD COLUMN project_id BIGINT REFERENCES projects(id) ON DELETE CASCADE,
+            ADD COLUMN host TEXT,
+            ADD COLUMN port INT DEFAULT 22,
+            ADD COLUMN username TEXT,
+            ADD COLUMN auth_method TEXT DEFAULT 'password',
+            ADD COLUMN password_enc TEXT,
+            ADD COLUMN private_key_enc TEXT,
+            ADD CONSTRAINT ssh_sources_project_id_name_key UNIQUE (project_id, name)
+        """
+    )
+    await execute(
+        """
+        ALTER TABLE db_connections
+            ADD COLUMN project_id BIGINT,
+            ADD COLUMN ssh_enabled BOOLEAN NOT NULL DEFAULT false,
+            ADD COLUMN ssh_host TEXT,
+            ADD COLUMN ssh_port INT DEFAULT 22,
+            ADD COLUMN ssh_username TEXT,
+            ADD COLUMN ssh_auth_method TEXT,
+            ADD COLUMN ssh_password_enc TEXT,
+            ADD COLUMN ssh_private_key_enc TEXT,
+            ADD CONSTRAINT db_connections_project_name_key UNIQUE (project_id, name)
+        """
+    )
 
 
 async def fetch(query: str, *args: Any) -> list[dict]:
