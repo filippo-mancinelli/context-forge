@@ -8,7 +8,7 @@ from src.catalog.names import normalize_repo_url, repo_name_for, repo_url_name
     "http://git.example.org/aster/aster-desk",
     "https://git.example.org/aster/aster-desk.git",
     "https://git.example.org/aster/aster-desk/",
-    "https://GIT.example.org/aster/aster-desk.git/",
+    "https://GIT.Example.ORG/aster/aster-desk.git/",
     "https://oauth2:secret@git.example.org/aster/aster-desk.git",
     "  https://git.example.org/aster/aster-desk  ",
 ])
