@@ -9,7 +9,7 @@ measures whether retrieval got better. A reranker would be a blind bet.
 
 ### Storage
 
-Migration `0006_eval`:
+Migration `0009_eval`:
 
 ```sql
 CREATE TABLE eval_queries (
