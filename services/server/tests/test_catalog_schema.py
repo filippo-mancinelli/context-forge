@@ -6,6 +6,8 @@ from src.migrations.runner import discover_versions
 # The inline DDL is frozen: the catalog schema lives in migration 0005.
 ORG_CATALOG = next(m for m in discover_versions() if m.NAME == "org_catalog")
 DDL = ORG_CATALOG.SQL
+# Database links carry a scope since migration 0007.
+DB_SCOPES = next(m for m in discover_versions() if m.NAME == "db_scopes")
 
 
 def test_org_catalog_migration_is_version_5_and_transactional():
@@ -21,7 +23,9 @@ def test_machines_table_is_created_before_the_tables_that_reference_it():
 
 def test_selection_tables_are_created():
     assert "CREATE TABLE IF NOT EXISTS project_ssh_sources" in DDL
-    assert "CREATE TABLE IF NOT EXISTS project_db_connections" in DDL
+    assert "CREATE TABLE IF NOT EXISTS project_db_scopes" in DB_SCOPES.SQL
+    # Database links live only in scopes: 0007 never creates the legacy table.
+    assert "project_db_connections" not in DB_SCOPES.SQL
 
 
 def test_ddl_does_not_recreate_project_scoped_columns():
