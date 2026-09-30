@@ -321,8 +321,8 @@ async def _propose_db_execute(
     """Store the statement as a pending write request instead of running it.
 
     The scope is resolved first, as on the direct path, and the statement is
-    validated against its schema; the request targets the scope alias, so the
-    approved write runs on the scope it was proposed for.
+    validated against its schema. The request targets the scope alias and pins
+    the scope id, database and schema that were previewed.
     """
     from .. import write_previews, write_requests
     from ..datasources.validator import (
@@ -342,7 +342,8 @@ async def _propose_db_execute(
         logger.error("db_execute proposal failed: %s", e)
         return {"status": "error", "error": str(e)}
     try:
-        validated = validate_write_query(sql, allowed_schema=service._effective_scope(record)[1])
+        scope_database, scope_schema = service.effective_scope(record)
+        validated = validate_write_query(sql, allowed_schema=scope_schema)
     except ScopeReferenceError as e:
         refused = await service._scope_violation(org_id, project_id, record, str(e))
         return {"status": "error", "error": str(refused)}
@@ -363,7 +364,9 @@ async def _propose_db_execute(
         kind="db_execute",
         # The alias is the project's unique handle for the scope.
         target=record["alias"],
-        payload={"sql": validated},
+        # The previewed scope: approval refuses to run if it changed meanwhile.
+        payload={"sql": validated, "scope_id": record["scope_id"],
+                 "database": scope_database, "schema": scope_schema},
         preview=preview,
         reason=reason,
         requested_by_kind=kind,

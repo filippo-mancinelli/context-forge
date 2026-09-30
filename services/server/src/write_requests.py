@@ -179,12 +179,53 @@ async def _require_approver(record: dict[str, Any], user_id: int) -> None:
         )
 
 
+def _scope_text(database: Optional[str], schema: Optional[str]) -> str:
+    return ".".join(part for part in (database, schema) if part) or "(connection default)"
+
+
+async def _pinned_scope(record: dict[str, Any]) -> dict[str, Any]:
+    """The scope the statement was proposed and previewed on, unchanged since.
+
+    Raises WriteRequestError when the request predates scopes, or the scope
+    was removed, renamed or re-pointed: the write never runs elsewhere.
+    """
+    from .datasources import service
+
+    payload, target = record["payload"], record["target"]
+    scope_id = payload.get("scope_id")
+    if scope_id is None:
+        raise WriteRequestError(
+            f"This request on '{target}' was proposed before database scopes existed: "
+            "propose the change again."
+        )
+    try:
+        scope = await service.get_scope_by_id(record["org_id"], record["project_id"], scope_id)
+    except service.ConnectionNotFoundError:
+        raise WriteRequestError(
+            f"The data source '{target}' is no longer in this project: propose the change again."
+        ) from None
+    if scope["alias"] != target:
+        raise WriteRequestError(
+            f"The data source '{target}' was renamed to '{scope['alias']}' after the proposal: "
+            "propose the change again."
+        )
+    proposed = (payload.get("database"), payload.get("schema"))
+    current = service.effective_scope(scope)
+    if current != proposed:
+        raise WriteRequestError(
+            f"The scope of '{target}' changed from '{_scope_text(*proposed)}' to "
+            f"'{_scope_text(*current)}' after the proposal: propose the change again."
+        )
+    return scope
+
+
 async def _run_db_execute(record: dict[str, Any]) -> dict[str, Any]:
     from .datasources import service
 
+    scope = await _pinned_scope(record)
     return await service.run_write(
-        record["org_id"], record["project_id"], record["target"],
-        record["payload"]["sql"], source="approval",
+        record["org_id"], record["project_id"], scope["scope_id"],
+        record["payload"]["sql"], source="approval", by_scope_id=True,
     )
 
 

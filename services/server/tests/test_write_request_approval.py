@@ -80,30 +80,74 @@ def test_approve_executes_and_records_the_result(monkeypatch):
 
 
 
-def test_approve_runs_the_write_on_the_alias_stored_at_proposal_time(monkeypatch):
-    """The request target is the scope alias: the approved write resolves it
-    again, so it runs on the scope the statement was proposed for."""
+_PINNED = {"sql": "UPDATE t SET a=1 WHERE id=1", "scope_id": 31,
+           "database": "app", "schema": "vendite"}
+
+
+def _pinned_scope(**over):
+    """Scope 31 as service.get_scope_by_id returns it at approval time."""
+    scope = {"id": 4, "name": "erp", "engine": "postgresql", "database_name": "app",
+             "scope_id": 31, "alias": "erp-vendite", "scope_database": "app",
+             "scope_schema": "vendite", "scope_inferred": False}
+    scope.update(over)
+    return scope
+
+
+def _approve_pinned(monkeypatch, scope, payload=_PINNED):
+    """Approve a db_execute request on 'erp-vendite'; returns (outcome, run_write calls)."""
     from src.datasources import service
 
     _patch_role(monkeypatch, "owner")
-    calls = []
+    calls, loaded = [], []
 
-    async def fake_run_write(org_id, project_id, ref, sql, source="mcp"):
-        calls.append((org_id, project_id, ref, sql, source))
-        return {"connection": ref, "sql": sql, "row_count": 1, "duration_ms": 2}
+    async def fake_scope_by_id(org_id, project_id, scope_id, include_secret=False):
+        loaded.append((org_id, project_id, scope_id))
+        if scope is None:
+            raise service.ConnectionNotFoundError(f"Data source #{scope_id} is not in this project")
+        return scope
 
+    async def fake_run_write(org_id, project_id, ref, sql, source="mcp", *, by_scope_id=False):
+        calls.append((org_id, project_id, ref, sql, source, by_scope_id))
+        return {"connection": "erp-vendite", "sql": sql, "row_count": 1, "duration_ms": 2}
+
+    monkeypatch.setattr(service, "get_scope_by_id", fake_scope_by_id)
     monkeypatch.setattr(service, "run_write", fake_run_write)
+    fields = {"target": "erp-vendite", "payload": json.dumps(payload)}
     conn = FakeConn(fetchrow_results=[
-        _row(target="erp-vendite"),
-        _row(status="approved", target="erp-vendite"),
-        _row(status="executed", target="erp-vendite", result=json.dumps({"row_count": 1})),
+        _row(**fields),
+        _row(status="approved", **fields),
+        _row(status="finished", **fields),  # _finish: the status sent is read from its args
     ])
     _patch_pool(monkeypatch, conn)
+    asyncio.run(write_requests.approve(12, user_id=9))
+    _finish_sql, finish_args = conn.executed[2]
+    if payload.get("scope_id") is not None:
+        assert loaded == [(1, 2, payload["scope_id"])]
+    return finish_args[1], finish_args[3], calls
 
-    out = asyncio.run(write_requests.approve(12, user_id=9))
 
-    assert out["status"] == "executed"
-    assert calls == [(1, 2, "erp-vendite", "UPDATE t SET a=1 WHERE id=1", "approval")]
+def test_approve_runs_the_write_on_the_pinned_scope_id(monkeypatch):
+    status, error, calls = _approve_pinned(monkeypatch, _pinned_scope())
+
+    assert status == "executed" and error is None
+    # The scope id is the reference: no alias or name lookup at approval.
+    assert calls == [(1, 2, 31, "UPDATE t SET a=1 WHERE id=1", "approval", True)]
+
+
+@pytest.mark.parametrize("scope, payload, text", [
+    (_pinned_scope(), {"sql": "UPDATE t SET a=1 WHERE id=1"}, "before database scopes existed"),
+    (None, _PINNED, "no longer in this project"),
+    (_pinned_scope(alias="erp-archive"), _PINNED, "renamed to 'erp-archive'"),
+    (_pinned_scope(scope_schema="acquisti"), _PINNED, "from 'app.vendite' to 'app.acquisti'"),
+    (_pinned_scope(scope_database="archive"), _PINNED, "from 'app.vendite' to 'archive.vendite'"),
+], ids=["no-scope-id", "scope-gone", "alias-changed", "schema-changed", "database-changed"])
+def test_approve_refuses_when_the_pinned_scope_changed(monkeypatch, scope, payload, text):
+    status, error, calls = _approve_pinned(monkeypatch, scope, payload)
+
+    assert status == "failed"
+    assert text in error and "propose the change again" in error
+    assert calls == []
+
 
 def test_approve_records_a_failed_execution(monkeypatch):
     _patch_role(monkeypatch, "owner")

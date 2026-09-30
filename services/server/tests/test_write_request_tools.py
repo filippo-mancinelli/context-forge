@@ -150,7 +150,9 @@ def test_db_execute_without_db_write_creates_a_request(monkeypatch):
     }
     assert created["kind"] == "db_execute"
     assert created["target"] == "erp"
-    assert created["payload"] == {"sql": "UPDATE t SET a=1 WHERE id=1"}
+    # The previewed scope is pinned next to the statement.
+    assert created["payload"] == {"sql": "UPDATE t SET a=1 WHERE id=1", "scope_id": 31,
+                                  "database": "app", "schema": "public"}
     assert created["reason"] == "fix a bad row"
     assert created["requested_by_kind"] == "api_key"
     assert created["requested_by_id"] == 5
@@ -234,7 +236,7 @@ def test_db_execute_proposal_targets_the_scope_alias(monkeypatch):
         created.update(kwargs)
         return {"id": 14}
 
-    _patch_scopes(monkeypatch, _scope(), _scope(alias="erp-vendite", schema="vendite"))
+    _patch_scopes(monkeypatch, _scope(), {**_scope(alias="erp-vendite", schema="vendite"), "scope_id": 32})
     monkeypatch.setattr(write_previews, "sql_preview", fake_sql_preview)
     monkeypatch.setattr(wr_service, "create", fake_create)
     set_current_org_id(1)
@@ -247,7 +249,8 @@ def test_db_execute_proposal_targets_the_scope_alias(monkeypatch):
     assert out["status"] == "pending_approval" and out["request_id"] == 14
     assert created["target"] == "erp-vendite"
     assert previewed == ["erp-vendite"]
-    assert created["payload"] == {"sql": "UPDATE vendite.t SET a=1 WHERE id=1"}
+    assert created["payload"] == {"sql": "UPDATE vendite.t SET a=1 WHERE id=1", "scope_id": 32,
+                                  "database": "app", "schema": "vendite"}
 
 
 def test_db_execute_proposal_outside_the_scope_schema_is_refused(monkeypatch):

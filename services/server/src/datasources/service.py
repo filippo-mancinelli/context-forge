@@ -322,6 +322,21 @@ async def get_connection(
     return await get_scope(org_id, project_id, ref, include_secret=include_secret)
 
 
+async def get_scope_by_id(
+    org_id: int, project_id: int, scope_id: int, include_secret: bool = False
+) -> dict[str, Any]:
+    """The project's scope with exactly this id: no alias, name or connection-id fallback."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            f"{_PROJECT_SELECT} WHERE c.org_id = $1 AND pds.id = $3",
+            org_id, project_id, int(scope_id),
+        )
+    if row is None:
+        raise ConnectionNotFoundError(f"Data source #{scope_id} is not in this project")
+    return _record_to_dict(row, include_secret=include_secret)
+
+
 async def list_catalog_connections(org_id: int) -> list[dict[str, Any]]:
     """Connessioni del catalogo, ciascuna con il numero di perimetri che i
     progetti ne hanno collegato."""
@@ -547,6 +562,11 @@ def _effective_scope(record: dict[str, Any]) -> tuple[Optional[str], Optional[st
         url_database(engine, record.get("database_name"), scope_database),
         introspection_schema(engine, scope_database, record.get("scope_schema")),
     )
+
+
+def effective_scope(record: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    """Public form of ``_effective_scope``: (database, schema) the scope applies."""
+    return _effective_scope(record)
 
 
 def _scope_key(record: dict[str, Any]) -> tuple:
@@ -1059,8 +1079,14 @@ async def run_write(
     ref: int | str,
     sql: str,
     source: str = "mcp",
+    *,
+    by_scope_id: bool = False,
 ) -> dict[str, Any]:
-    record = await get_scope(org_id, project_id, ref, include_secret=True)
+    # by_scope_id: ``ref`` is a scope id and nothing else (approved writes).
+    if by_scope_id:
+        record = await get_scope_by_id(org_id, project_id, int(ref), include_secret=True)
+    else:
+        record = await get_scope(org_id, project_id, ref, include_secret=True)
     try:
         validated = validate_write_query(sql, allowed_schema=_effective_scope(record)[1])
     except ScopeReferenceError as e:
