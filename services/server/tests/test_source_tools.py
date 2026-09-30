@@ -822,6 +822,26 @@ def test_ssh_source_add_refuses_a_new_folder_on_an_existing_machine_to_a_non_adm
     assert created == [] and selected == []
 
 
+def test_ssh_source_add_refuses_an_anonymous_caller_when_mcp_auth_is_off(monkeypatch):
+    """With MCP auth disabled the caller is anonymous, never an organization admin."""
+    from src.mcp import ssh_files
+
+    created, selected = [], []
+    _existing_machine_no_folder(monkeypatch, ssh_files, created)
+    _capture_selection(monkeypatch, ssh_files, selected)
+    mcp_context.set_current_org_id(1)
+    mcp_context.set_current_project_id(4)
+    try:
+        assert mcp_context.get_current_principal().kind == "anonymous"
+        with pytest.raises(perms.PermissionDenied, match="organization admin must register"):
+            asyncio.run(_underlying(ssh_files.ssh_source_add)("etc", "/etc", machine="deploy@10.0.0.6"))
+    finally:
+        mcp_context.set_current_org_id(None)
+        mcp_context.set_current_project_id(None)
+
+    assert created == [] and selected == []
+
+
 def test_ssh_source_add_lets_an_org_admin_register_a_folder_on_an_existing_machine(monkeypatch):
     from src.mcp import ssh_files
 
